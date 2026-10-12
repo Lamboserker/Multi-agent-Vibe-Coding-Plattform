@@ -1,0 +1,359 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  created
+  analyzed
+  planned
+  running
+  completed
+  failed
+  needs_review
+}
+
+enum SubtaskStatus {
+  planned
+  running
+  completed
+  failed
+  skipped
+}
+
+enum ModelClass {
+  no_llm
+  local_llm
+  free_llm
+  cheap_api_llm
+  premium_llm
+}
+
+enum ProviderType {
+  ollama
+  openai_compatible
+  gemini_cli
+  manual
+}
+
+enum Complexity {
+  trivial
+  small
+  medium
+  complex
+  critical
+}
+
+enum TaskType {
+  frontend
+  backend
+  database
+  fullstack
+  devops
+  test
+  refactor
+  documentation
+  unknown
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+  critical
+}
+
+enum ContextNeed {
+  low
+  medium
+  high
+}
+
+enum CostTier {
+  free
+  low
+  medium
+  premium
+}
+
+enum RunStatus {
+  queued
+  running
+  simulated
+  completed
+  failed
+  blocked
+}
+
+enum ValidationStatus {
+  not_run
+  passed
+  failed
+  unavailable
+}
+
+enum ReviewVerdict {
+  approved
+  needs_changes
+  escalate
+  blocked
+}
+
+enum ChatMessageRole {
+  user
+  assistant
+  agent
+  system
+}
+
+model Project {
+  id             String            @id @default(cuid())
+  name           String
+  repoPath       String
+  defaultBranch  String?           @default("main")
+  techStack      Json              @default("{}")
+  packageManager String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  tasks          Task[]
+  contexts       ContextSnapshot[]
+  chatMessages   ChatMessage[]
+
+  @@index([repoPath])
+}
+
+model AuthUser {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  sessions     AuthSession[]
+}
+
+model AuthSession {
+  id           String   @id @default(cuid())
+  userId       String
+  user         AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([userId, expiresAt])
+  @@index([lastActiveAt])
+}
+
+model Task {
+  id                String            @id @default(cuid())
+  projectId         String
+  project           Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userPrompt        String
+  normalizedGoal    String?
+  status            TaskStatus        @default(created)
+  complexity        Complexity?
+  taskType          TaskType?
+  riskLevel         RiskLevel?
+  contextNeed       ContextNeed?
+  securitySensitive Boolean           @default(false)
+  estimatedCostTier CostTier?
+  maxCostEuro       Decimal?          @db.Decimal(10, 4)
+  mode              String            @default("balanced")
+  premiumAllowed    Boolean           @default(false)
+  currentStep       String            @default("draft")
+  lastRunId         String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  subtasks          Subtask[]
+  runs              AgentRun[]
+  contexts          ContextSnapshot[]
+  feedback          RunFeedback[]
+  creditLedger      CreditLedger[]
+  chatMessages      ChatMessage[]
+  plans             TaskPlan[]
+
+  @@index([projectId, createdAt])
+}
+
+model Subtask {
+  id                 String        @id @default(cuid())
+  taskId             String
+  task               Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title              String
+  goal               String
+  status             SubtaskStatus @default(planned)
+  assignedAgentType  String
+  selectedModelClass ModelClass
+  selectedProviderId String?
+  selectedModelName  String?
+  modelReason        String?
+  skippedModels      String[]      @default([])
+  estimatedCostEuro  Decimal       @default(0) @db.Decimal(10, 6)
+  allowedFiles       String[]      @default([])
+  deniedFiles        String[]      @default([])
+  expectedChange     String
+  validationCommands String[]      @default([])
+  budgetLimitEuro    Decimal       @default(0) @db.Decimal(10, 4)
+  dependsOn          String[]      @default([])
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  runs               AgentRun[]
+
+  @@index([taskId])
+}
+
+model ModelProvider {
+  id                       String       @id @default(cuid())
+  name                     String
+  providerType             ProviderType
+  modelClass               ModelClass
+  baseUrl                  String?
+  apiKeyEnvName            String?
+  enabled                  Boolean      @default(true)
+  supportsStreaming        Boolean      @default(false)
+  supportsToolUse          Boolean      @default(false)
+  supportsStructuredOutput Boolean      @default(false)
+  contextWindow            Int?
+  costInputPerMillion      Decimal?     @db.Decimal(12, 6)
+  costOutputPerMillion     Decimal?     @db.Decimal(12, 6)
+  freeQuotaDaily           Int?
+  notes                    String?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+  runs                     AgentRun[]
+
+  @@index([modelClass, enabled])
+}
+
+model AgentRun {
+  id                  String           @id @default(cuid())
+  taskId              String
+  task                Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subtaskId           String?
+  subtask             Subtask?         @relation(fields: [subtaskId], references: [id], onDelete: SetNull)
+  agentName           String
+  selectedModelClass  ModelClass
+  providerId          String?
+  provider            ModelProvider?   @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  selectedModelName   String?
+  status              RunStatus        @default(queued)
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  logs                Json             @default("[]")
+  currentStep         String           @default("queued")
+  promptSummary       String
+  inputTokenEstimate  Int              @default(0)
+  outputTokenEstimate Int              @default(0)
+  estimatedCostEuro   Decimal          @default(0) @db.Decimal(10, 6)
+  actualCostEuro      Decimal?         @db.Decimal(10, 6)
+  diffSummary         String?
+  validationStatus    ValidationStatus @default(not_run)
+  validationResults   Json             @default("[]")
+  patchText           String?
+  patchStatus         String           @default("no_patch_artifact")
+  score               Int?
+  errorMessage        String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  reviews             Review[]
+}
+
+model Review {
+  id                    String        @id @default(cuid())
+  agentRunId            String
+  agentRun              AgentRun      @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  verdict               ReviewVerdict
+  score                 Int
+  issues                Json          @default("[]")
+  requiresHumanApproval Boolean       @default(false)
+  recommendedAction     String
+  createdAt             DateTime      @default(now())
+}
+
+model ChatMessage {
+  id        String          @id @default(cuid())
+  taskId    String?
+  task      Task?           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  role      ChatMessageRole
+  content   String
+  metadata  Json            @default("{}")
+  createdAt DateTime        @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([projectId, createdAt])
+}
+
+model TaskPlan {
+  id                 String   @id @default(cuid())
+  taskId             String
+  task               Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  summary            String
+  classification     Json     @default("{}")
+  modelAssignments   Json     @default("[]")
+  estimatedCostEuro  Decimal  @default(0) @db.Decimal(10, 6)
+  requiresApproval   Boolean  @default(true)
+  nextAction         String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([taskId, createdAt])
+}
+
+model ContextSnapshot {
+  id            String   @id @default(cuid())
+  taskId        String
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summary       String
+  relevantFiles String[] @default([])
+  tokenEstimate Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
+
+model RunFeedback {
+  id              String   @id @default(cuid())
+  taskId          String
+  task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  runId           String?
+  userFeedback    String
+  requestedAction String?
+  createdAt       DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([runId])
+}
+
+model PaymentAccount {
+  id                         String         @id @default(cuid())
+  userId                     String         @unique
+  creditBalance              Decimal        @default(0) @db.Decimal(12, 4)
+  plan                       String         @default("free")
+  appleOriginalTransactionId String?
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  ledger                     CreditLedger[]
+}
+
+model CreditLedger {
+  id          String          @id @default(cuid())
+  userId      String
+  account     PaymentAccount? @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  taskId      String?
+  task        Task?           @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  amount      Decimal         @db.Decimal(12, 4)
+  reason      String
+  provider    String?
+  createdAt   DateTime        @default(now())
+
+  @@index([userId, createdAt])
+}

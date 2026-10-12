@@ -1,0 +1,146 @@
+name: mapf
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mapf-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: multi_ai_coder
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator -d multi_ai_coder"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: mapf-redis
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: veluna/mapf:latest
+    container_name: mapf-migrate
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/multi_ai_coder?schema=public
+    command: ["pnpm", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  api:
+    image: veluna/mapf:latest
+    container_name: mapf-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      API_PORT: "4000"
+      DATABASE_URL: postgresql://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/multi_ai_coder?schema=public
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    command: ["pnpm", "--filter", "@multi-ai-coder/api", "start"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "4000"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('node:net').connect(4000, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  worker:
+    image: veluna/mapf:latest
+    container_name: mapf-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://orchestrator:${POSTGRES_PASSWORD}@postgres:5432/multi_ai_coder?schema=public
+      REDIS_URL: redis://redis:6379
+    command: ["pnpm", "--filter", "@multi-ai-coder/worker", "start"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
+  web:
+    image: veluna/mapf:latest
+    container_name: mapf-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      BACKEND_API_URL: http://api:4000
+      NEXT_TELEMETRY_DISABLED: "1"
+    command: ["pnpm", "--filter", "@multi-ai-coder/web", "start"]
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "3000"
+    networks:
+      - internal
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.mapf.rule=Host(`mapf.veluna-labs.de`)"
+      - "traefik.http.routers.mapf.entrypoints=websecure"
+      - "traefik.http.routers.mapf.tls=true"
+      - "traefik.http.routers.mapf.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mapf.loadbalancer.server.port=3000"
+      - "traefik.http.routers.mapf-http.rule=Host(`mapf.veluna-labs.de`)"
+      - "traefik.http.routers.mapf-http.entrypoints=web"
+      - "traefik.http.routers.mapf-http.middlewares=mapf-https-redirect"
+      - "traefik.http.middlewares.mapf-https-redirect.redirectscheme.scheme=https"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000 >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  postgres-data:
+
+networks:
+  internal:
+    internal: true
+  traefik:
+    external: true

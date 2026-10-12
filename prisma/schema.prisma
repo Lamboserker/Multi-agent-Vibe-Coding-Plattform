@@ -1,0 +1,600 @@
+// Multi-AI Coder – local desktop database (SQLite).
+// The former PostgreSQL schema and migrations are archived in prisma/legacy-postgres.
+// String lists are stored as Json arrays because SQLite has no scalar list type.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  created
+  analyzed
+  planned
+  running
+  completed
+  failed
+  needs_review
+  cancelled
+}
+
+enum SubtaskStatus {
+  planned
+  queued
+  running
+  validating
+  repairing
+  completed
+  failed
+  skipped
+  cancelled
+  blocked
+}
+
+enum ModelClass {
+  no_llm
+  local_llm
+  free_llm
+  cheap_api_llm
+  premium_llm
+}
+
+enum ProviderType {
+  ollama
+  openai_compatible
+  gemini_cli
+  claude_code
+  codex
+  manual
+}
+
+enum Complexity {
+  trivial
+  small
+  medium
+  complex
+  critical
+}
+
+enum TaskType {
+  frontend
+  backend
+  database
+  fullstack
+  devops
+  test
+  refactor
+  documentation
+  unknown
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+  critical
+}
+
+enum ContextNeed {
+  low
+  medium
+  high
+}
+
+enum CostTier {
+  free
+  low
+  medium
+  premium
+}
+
+enum RunStatus {
+  queued
+  running
+  simulated
+  completed
+  failed
+  blocked
+  cancelled
+  interrupted
+}
+
+enum ValidationStatus {
+  not_run
+  passed
+  failed
+  unavailable
+}
+
+enum ReviewVerdict {
+  approved
+  needs_changes
+  escalate
+  blocked
+}
+
+enum ChatMessageRole {
+  user
+  assistant
+  agent
+  system
+}
+
+enum ExecutionStatus {
+  pending
+  planning
+  awaiting_plan_approval
+  running
+  paused
+  integrating
+  awaiting_approval
+  applied
+  completed
+  failed
+  cancelled
+  interrupted
+}
+
+enum JobStatus {
+  queued
+  running
+  done
+  failed
+  cancelled
+}
+
+model Project {
+  id             String            @id @default(cuid())
+  name           String
+  repoPath       String
+  defaultBranch  String?           @default("main")
+  techStack      Json              @default("{}")
+  packageManager String?
+  /// Project-scoped settings (enabled skills, agent assignments …); global settings live in AppSetting.
+  settings       Json              @default("{}")
+  lastOpenedAt   DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  tasks          Task[]
+  contexts       ContextSnapshot[]
+  chatMessages   ChatMessage[]
+  executions     ExecutionRun[]
+  sessions       ChatSession[]
+
+  @@index([repoPath])
+}
+
+// A conversation with the orchestrator. Owns its messages and tasks; its lifetime is independent of
+// any UI view. `status` is derived from tasks/runs/jobs by SessionsService and stored for listing.
+model ChatSession {
+  id                String        @id @default(cuid())
+  projectId         String
+  project           Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title             String        @default("Neue Sitzung")
+  /// active | idle | running | paused | interrupted | completed | failed | archived
+  status            String        @default("active")
+  /// Orchestrator that owns the external CLI session (claude-code | codex).
+  provider          String?
+  /// Session/thread id reported by the orchestrator CLI (used for --resume).
+  externalSessionId String?
+  pinned            Boolean       @default(false)
+  archivedAt        DateTime?
+  lastActivityAt    DateTime      @default(now())
+  /// Task currently shown in this session (the latest one by default).
+  activeTaskId      String?
+  /// Recovery metadata: pending ask job, interrupted plan, last known run …
+  recovery          Json          @default("{}")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  messages          ChatMessage[]
+  tasks             Task[]
+
+  @@index([projectId, lastActivityAt])
+}
+
+model AuthUser {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  sessions     AuthSession[]
+}
+
+model AuthSession {
+  id           String   @id @default(cuid())
+  userId       String
+  user         AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([userId, expiresAt])
+  @@index([lastActiveAt])
+}
+
+model Task {
+  id                String            @id @default(cuid())
+  projectId         String
+  project           Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userPrompt        String
+  normalizedGoal    String?
+  status            TaskStatus        @default(created)
+  complexity        Complexity?
+  taskType          TaskType?
+  riskLevel         RiskLevel?
+  contextNeed       ContextNeed?
+  securitySensitive Boolean           @default(false)
+  estimatedCostTier CostTier?
+  maxCostEuro       Decimal?
+  mode              String            @default("balanced")
+  premiumAllowed    Boolean           @default(false)
+  currentStep       String            @default("draft")
+  lastRunId         String?
+  sessionId         String?
+  session           ChatSession?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  subtasks          Subtask[]
+  runs              AgentRun[]
+  contexts          ContextSnapshot[]
+  feedback          RunFeedback[]
+  creditLedger      CreditLedger[]
+  chatMessages      ChatMessage[]
+  plans             TaskPlan[]
+  executions        ExecutionRun[]
+
+  @@index([projectId, createdAt])
+  @@index([sessionId])
+}
+
+// A node of the execution DAG. Planned by the orchestrator (or the deterministic fallback planner).
+model Subtask {
+  id                  String        @id @default(cuid())
+  taskId              String
+  task                Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  key                 String        @default("")
+  title               String
+  goal                String
+  status              SubtaskStatus @default(planned)
+  assignedAgentType   String
+  selectedModelClass  ModelClass
+  selectedProviderId  String?
+  selectedModelName   String?
+  modelReason         String?
+  skippedModels       Json          @default("[]")
+  estimatedCostEuro   Decimal       @default(0)
+  allowedFiles        Json          @default("[]")
+  newFiles            Json          @default("[]")
+  suggestedExecutor   String        @default("local")
+  deniedFiles         Json          @default("[]")
+  expectedChange      String
+  validationCommands  Json          @default("[]")
+  budgetLimitEuro     Decimal       @default(0)
+  dependsOn           Json          @default("[]")
+  category            String        @default("general")
+  complexityScore     Int           @default(2)
+  riskScore           Int           @default(1)
+  capabilities        Json          @default("[]")
+  acceptanceCriteria  Json          @default("[]")
+  testStrategy        String?
+  expectedInputTokens Int           @default(0)
+  priority            Int           @default(0)
+  attempts            Int           @default(0)
+  manualModel         String?
+  worktreePath        String?
+  branchName          String?
+  commitSha           String?
+  patchText           String?
+  patchStats          Json          @default("{}")
+  validation          Json          @default("{}")
+  errorMessage        String?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  runs                AgentRun[]
+
+  @@index([taskId])
+}
+
+model ModelProvider {
+  id                       String       @id @default(cuid())
+  name                     String
+  providerType             ProviderType
+  modelClass               ModelClass
+  baseUrl                  String?
+  apiKeyEnvName            String?
+  enabled                  Boolean      @default(true)
+  supportsStreaming        Boolean      @default(false)
+  supportsToolUse          Boolean      @default(false)
+  supportsStructuredOutput Boolean      @default(false)
+  contextWindow            Int?
+  costInputPerMillion      Decimal?
+  costOutputPerMillion     Decimal?
+  freeQuotaDaily           Int?
+  notes                    String?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+  runs                     AgentRun[]
+
+  @@index([modelClass, enabled])
+}
+
+// One execution attempt of a subtask by one agent/model (including repair rounds).
+model AgentRun {
+  id                  String           @id @default(cuid())
+  taskId              String
+  task                Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subtaskId           String?
+  subtask             Subtask?         @relation(fields: [subtaskId], references: [id], onDelete: SetNull)
+  executionId         String?
+  execution           ExecutionRun?    @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  agentName           String
+  selectedModelClass  ModelClass
+  providerId          String?
+  provider            ModelProvider?   @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  selectedModelName   String?
+  runtime             String?
+  category            String?
+  repairRound         Int              @default(0)
+  escalated           Boolean          @default(false)
+  outcome             String?
+  status              RunStatus        @default(queued)
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  durationMs          Int?
+  logs                Json             @default("[]")
+  currentStep         String           @default("queued")
+  promptSummary       String
+  inputTokenEstimate  Int              @default(0)
+  outputTokenEstimate Int              @default(0)
+  inputTokens         Int?
+  outputTokens        Int?
+  tokensMeasured      Boolean          @default(false)
+  estimatedCostEuro   Decimal          @default(0)
+  actualCostEuro      Decimal?
+  diffSummary         String?
+  validationStatus    ValidationStatus @default(not_run)
+  validationResults   Json             @default("[]")
+  patchText           String?
+  patchStatus         String           @default("no_patch_artifact")
+  score               Int?
+  errorMessage        String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  reviews             Review[]
+
+  @@index([executionId])
+  @@index([selectedModelName, category])
+}
+
+model Review {
+  id                    String        @id @default(cuid())
+  agentRunId            String
+  agentRun              AgentRun      @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  verdict               ReviewVerdict
+  score                 Int
+  issues                Json          @default("[]")
+  requiresHumanApproval Boolean       @default(false)
+  recommendedAction     String
+  reviewer              String        @default("deterministic")
+  createdAt             DateTime      @default(now())
+}
+
+model ChatMessage {
+  id        String          @id @default(cuid())
+  taskId    String?
+  task      Task?           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId String?
+  session   ChatSession?    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// Idempotency key generated by the client: re-sending the same message never creates a duplicate.
+  clientId  String?         @unique
+  role      ChatMessageRole
+  content   String
+  metadata  Json            @default("{}")
+  createdAt DateTime        @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([sessionId, createdAt])
+}
+
+model TaskPlan {
+  id                String   @id @default(cuid())
+  taskId            String
+  task              Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  summary           String
+  classification    Json     @default("{}")
+  modelAssignments  Json     @default("[]")
+  estimatedCostEuro Decimal  @default(0)
+  requiresApproval  Boolean  @default(true)
+  nextAction        String
+  source            String   @default("deterministic")
+  dag               Json     @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([taskId, createdAt])
+}
+
+model ContextSnapshot {
+  id            String   @id @default(cuid())
+  taskId        String
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summary       String
+  relevantFiles Json     @default("[]")
+  tokenEstimate Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
+
+model RunFeedback {
+  id              String   @id @default(cuid())
+  taskId          String
+  task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  runId           String?
+  userFeedback    String
+  requestedAction String?
+  createdAt       DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([runId])
+}
+
+model PaymentAccount {
+  id                         String         @id @default(cuid())
+  userId                     String         @unique
+  creditBalance              Decimal        @default(0)
+  plan                       String         @default("free")
+  appleOriginalTransactionId String?
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  ledger                     CreditLedger[]
+}
+
+model CreditLedger {
+  id        String          @id @default(cuid())
+  userId    String
+  account   PaymentAccount? @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  taskId    String?
+  task      Task?           @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  amount    Decimal
+  reason    String
+  provider  String?
+  createdAt DateTime        @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Desktop execution engine
+// ---------------------------------------------------------------------------
+
+// One orchestrated execution of a task's plan: worktrees, integration and approval.
+model ExecutionRun {
+  id                  String          @id @default(cuid())
+  taskId              String
+  task                Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId           String
+  project             Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status              ExecutionStatus @default(pending)
+  orchestrator        String?
+  costMode            String          @default("balanced")
+  approvalMode        String          @default("manual")
+  premiumAllowed      Boolean         @default(true)
+  baseCommit          String?
+  baseBranch          String?
+  integrationBranch   String?
+  integrationWorktree String?
+  integrationCommit   String?
+  finalDiff           String?
+  finalValidation     Json            @default("{}")
+  review              Json            @default("{}")
+  summary             String?
+  errorMessage        String?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  agentRuns           AgentRun[]
+  events              RunEvent[]
+  modelCalls          ModelCall[]
+  applyRecords        ApplyRecord[]
+
+  @@index([taskId, createdAt])
+  @@index([status])
+}
+
+model RunEvent {
+  id          String       @id @default(cuid())
+  executionId String
+  execution   ExecutionRun @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  subtaskId   String?
+  level       String       @default("info")
+  type        String
+  message     String
+  data        Json         @default("{}")
+  createdAt   DateTime     @default(now())
+
+  @@index([executionId, createdAt])
+}
+
+// Every model invocation (premium orchestrator or local model) with measured or estimated usage.
+model ModelCall {
+  id                String        @id @default(cuid())
+  executionId       String?
+  execution         ExecutionRun? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  subtaskId         String?
+  kind              String
+  provider          String
+  model             String
+  purpose           String
+  status            String        @default("ok")
+  errorClass        String?
+  sessionId         String?
+  durationMs        Int           @default(0)
+  inputTokens       Int           @default(0)
+  outputTokens      Int           @default(0)
+  cachedInputTokens Int           @default(0)
+  tokensMeasured    Boolean       @default(false)
+  actualApiCostUsd  Decimal?
+  apiEquivalentUsd  Decimal?
+  billing           String        @default("subscription")
+  peakMemoryMb      Int?
+  createdAt         DateTime      @default(now())
+
+  @@index([executionId])
+  @@index([kind, createdAt])
+}
+
+model ApplyRecord {
+  id           String       @id @default(cuid())
+  executionId  String
+  execution    ExecutionRun @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  mode         String
+  patch        String
+  files        Json         @default("[]")
+  targetBranch String?
+  beforeHead   String?
+  afterHead    String?
+  status       String       @default("applied")
+  message      String?
+  createdAt    DateTime     @default(now())
+  revertedAt   DateTime?
+}
+
+// Persistent local job queue (replaces Redis/BullMQ for the desktop runtime).
+model Job {
+  id          String    @id @default(cuid())
+  type        String
+  payload     Json      @default("{}")
+  status      JobStatus @default(queued)
+  priority    Int       @default(0)
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  runAfter    DateTime  @default(now())
+  lockedAt    DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, runAfter])
+}
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

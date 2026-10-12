@@ -1,0 +1,20 @@
+{
+  "name": "@multi-ai-coder/agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests src"
+  },
+  "dependencies": {
+    "@multi-ai-coder/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.15"
+  }
+}

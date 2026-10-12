@@ -1,0 +1,25 @@
+node_modules
+.next
+dist
+coverage
+.turbo
+.env
+.env.*
+!.env.example
+*.log
+tmp
+.codex
+*.tsbuildinfo
+.DS_Store
+
+# build caches / packaging output
+.cache
+apps/desktop/release-app
+apps/desktop/release
+prisma/*.db
+prisma/*.db-*
+*.db
+*.db-*
+test-results/
+apps/desktop/e2e/results
+apps/desktop/dist

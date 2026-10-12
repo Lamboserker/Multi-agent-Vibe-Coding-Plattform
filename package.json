@@ -1,0 +1,39 @@
+{
+  "name": "multi-ai-coder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop multi-agent coding IDE: premium orchestrator + local coding models.",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --filter @multi-ai-coder/desktop dev",
+    "dev:api": "pnpm --filter @multi-ai-coder/api dev",
+    "dev:web": "pnpm --parallel --filter @multi-ai-coder/api --filter @multi-ai-coder/web dev",
+    "build": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" build",
+    "lint": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/agents build && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" lint",
+    "typecheck": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/agents build && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" typecheck",
+    "test": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" test",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "dev:desktop": "pnpm --filter @multi-ai-coder/desktop dev",
+    "package:desktop": "pnpm --filter @multi-ai-coder/desktop package",
+    "dev:legacy-worker": "pnpm --filter @multi-ai-coder/worker dev"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "prisma": "6.19.3",
+    "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "electron"
+    ]
+  }
+}

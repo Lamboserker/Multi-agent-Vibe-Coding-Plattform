@@ -1,0 +1,47 @@
+# Packages the staged app (apps/desktop/release-app, created by scripts/stage.mjs).
+appId: dev.multi-ai-coder.desktop
+productName: Multi-AI Coder
+copyright: Copyright © 2026 Multi-AI Coder
+electronVersion: 44.5.1
+directories:
+  app: release-app
+  output: release
+  buildResources: build
+# The Prisma query engine and node-pty ship native .node binaries and the runtime is started as a
+# utility process from a plain file path, so the app is packaged without an asar archive.
+asar: false
+npmRebuild: false
+nodeGypRebuild: false
+files:
+  - '**/*'
+# electron-builder always drops dot-directories inside node_modules; the generated Prisma client
+# (with the query engine) lives in node_modules/.prisma, so it is copied explicitly.
+extraResources:
+  - from: release-app/node_modules/.prisma
+    to: app/node_modules/.prisma
+    filter: ['**/*']
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  hardenedRuntime: true
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  icon: build/icon.png
