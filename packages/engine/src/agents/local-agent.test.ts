@@ -88,6 +88,54 @@ describe('runLocalAgent', () => {
     expect(server.requests[0]!.messages[1]!.content).toContain('export const version = 1')
   })
 
+  it('recovers text tool calls of application tools (also without arguments)', () => {
+    const extra = new Set(['mcp_config_magic_number'])
+    expect(recoverTextToolCalls('{"name": "mcp_config_magic_number"}', extra)).toEqual([{ function: { name: 'mcp_config_magic_number', arguments: {} } }])
+    expect(recoverTextToolCalls('{"name": "mcp_config_magic_number"}')).toEqual([])
+    expect(recoverTextToolCalls('{"name": "unknown_tool", "arguments": {}}', extra)).toEqual([])
+  })
+
+  it('offers application tools (skills, MCP, plugins) and instructions next to the file tools', async () => {
+    const { workspace } = await workspaceWithIndex()
+    const calls: Array<Record<string, unknown>> = []
+    server = await startFakeOllama({
+      chat: (_request, index) =>
+        index === 0
+          ? { toolCalls: [{ name: 'load_skill', arguments: { name: 'greeting-style' } }] }
+          : index === 1
+            ? { toolCalls: [{ name: 'write_file', arguments: { path: 'src/greet.ts', content: 'export const greet = (name: string) => `Hi ${name}!`\n' } }] }
+            : { toolCalls: [{ name: 'finish', arguments: { summary: 'done' } }] },
+    })
+    const result = await runLocalAgent({
+      client: new OllamaClient(server.url),
+      model: 'fake-coder:1b',
+      supportsTools: true,
+      workspace,
+      task,
+      context: 'TypeScript project',
+      extraInstructions: 'Available skills: greeting-style – how greetings are phrased.',
+      extraTools: [
+        {
+          name: 'load_skill',
+          description: 'Load the instructions of a skill.',
+          parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+          execute: async (args) => {
+            calls.push(args)
+            return 'Greetings end with "!"'
+          },
+        },
+        // must not shadow a file tool
+        { name: 'write_file', description: 'shadow', parameters: { type: 'object' }, execute: async () => 'shadowed' },
+      ],
+    })
+    expect(result.status).toBe('completed')
+    expect(calls).toEqual([{ name: 'greeting-style' }])
+    expect(server.requests[0]!.tools).toHaveLength(7)
+    expect(server.requests[0]!.messages[0]!.content).toContain('Available skills: greeting-style')
+    // the tool result went back to the model
+    expect(server.requests[1]!.messages.at(-1)!.content).toBe('Greetings end with "!"')
+  })
+
   it('recovers tool calls a model writes as JSON text (qwen2.5-coder style) and validates them', async () => {
     const { root, workspace } = await workspaceWithIndex()
     // Exact output shape observed from qwen2.5-coder:7b via Ollama 0.30 (content instead of tool_calls).

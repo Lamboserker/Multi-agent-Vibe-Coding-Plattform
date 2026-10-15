@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, OnApplicationShutdown, OnModuleInit, Optional } from '@nestjs/common'
+import { PluginsService } from '../plugins/plugins.service.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
@@ -10,11 +11,13 @@ import {
   diskInfo,
   lookupRegistryModel,
   OllamaClient,
+  OllamaError,
   recoverTextToolCalls,
   ollamaInstallPlan,
   recommendModels,
   runOllamaInstall,
   startOllamaServer,
+  stopOwnedOllamaServers,
   usableVramMb,
   type HardwareProfile,
   type LocalModelRuntime,
@@ -43,7 +46,7 @@ export interface InstalledModel {
 const MODEL_NAME = /^[a-z0-9][a-z0-9._/-]{0,80}(:[a-z0-9._-]{1,60})?$/i
 
 @Injectable()
-export class LocalModelsService implements OnModuleInit {
+export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger('LocalModels')
   private hardwareCache?: HardwareProfile
   private registryCache?: { at: number; data: RegistryModelInfo[] }
@@ -53,6 +56,7 @@ export class LocalModelsService implements OnModuleInit {
     private readonly settings: SettingsService,
     private readonly events: EventBusService,
     private readonly jobs: JobQueueService,
+    @Optional() private readonly plugins?: PluginsService,
   ) {}
 
   onModuleInit() {
@@ -60,13 +64,45 @@ export class LocalModelsService implements OnModuleInit {
     this.jobs.register('ollama.install', (_payload, ctx) => this.runInstall(ctx.signal), { concurrency: 1, onRecover: 'interrupt' })
   }
 
+  async onApplicationShutdown() { await stopOwnedOllamaServers() }
+
   async client(): Promise<OllamaClient> {
     return new OllamaClient((await this.settings.get()).ollamaBaseUrl)
   }
 
+  private hardwareRefresh?: Promise<HardwareProfile>
+
+  /**
+   * Hardware profile. Detection takes seconds on Windows (CIM/nvidia-smi), so the last profile is kept
+   * on disk: it is returned immediately and refreshed in the background when older than an hour.
+   */
   async hardware(refresh = false): Promise<HardwareProfile> {
     const settings = await this.settings.get()
-    if (!this.hardwareCache || refresh) this.hardwareCache = await detectHardware({ appDataDir: runtimeConfig().dataDir, ollamaModelsDir: settings.ollamaModelsDir ?? undefined })
+    const cacheFile = path.join(runtimeConfig().cacheDir, 'hardware.json')
+    const detect = () => {
+      this.hardwareRefresh ??= detectHardware({ appDataDir: runtimeConfig().dataDir, ollamaModelsDir: settings.ollamaModelsDir ?? undefined })
+        .then(async (profile) => {
+          this.hardwareCache = profile
+          await fs.writeFile(cacheFile, JSON.stringify({ modelsDir: settings.ollamaModelsDir, profile })).catch(() => undefined)
+          return profile
+        })
+        .finally(() => {
+          this.hardwareRefresh = undefined
+        })
+      return this.hardwareRefresh
+    }
+    if (refresh) return detect()
+    if (!this.hardwareCache) {
+      try {
+        const cached = JSON.parse(await fs.readFile(cacheFile, 'utf8')) as { modelsDir: string | null; profile: HardwareProfile }
+        // the disk part of the profile depends on the configured model folder
+        if (cached.modelsDir === settings.ollamaModelsDir) this.hardwareCache = cached.profile
+      } catch {
+        // no cached profile yet
+      }
+    }
+    if (!this.hardwareCache) return detect()
+    if (Date.now() - new Date(this.hardwareCache.detectedAt).getTime() > 3600_000) void detect().catch(() => undefined)
     return this.hardwareCache
   }
 
@@ -98,22 +134,53 @@ export class LocalModelsService implements OnModuleInit {
     if (!result.ok) throw new Error(`Ollama installation failed (exit ${result.exitCode}).`)
   }
 
+  /**
+   * Installed models with capabilities and load state. One submitted task asks for this 4-5 times
+   * within seconds (planning, warmups, routing, run start): concurrent and immediately following
+   * callers share one Ollama round trip. Changes made through this service invalidate it.
+   */
   async installed(): Promise<InstalledModel[]> {
+    let cached = this.installedCache
+    if (!cached || Date.now() - cached.at >= LocalModelsService.INSTALLED_TTL_MS) {
+      const value = this.loadInstalled()
+      cached = { at: Date.now(), value }
+      this.installedCache = cached
+      value.catch(() => {
+        if (this.installedCache?.value === value) this.installedCache = undefined
+      })
+    }
+    // roles and self-test results come from the settings and are never served from the cache
+    const [models, settings] = await Promise.all([cached.value, this.settings.get()])
+    return models.map((model) => ({ ...model, roles: (['fast', 'balanced', 'advanced'] as LocalRole[]).filter((role) => settings.modelRoles[role] === model.name), selfTest: settings.modelSelfTests[model.name] }))
+  }
+
+  private installedCache?: { at: number; value: Promise<Array<Omit<InstalledModel, 'roles' | 'selfTest'>>> }
+  private static readonly INSTALLED_TTL_MS = 2000
+
+  private invalidateInstalled() {
+    this.installedCache = undefined
+  }
+
+  private async loadInstalled(): Promise<Array<Omit<InstalledModel, 'roles' | 'selfTest'>>> {
     const client = await this.client()
-    const settings = await this.settings.get()
     const [models, running] = await Promise.all([client.list(), client.running().catch(() => [])])
-    const result: InstalledModel[] = []
+    // details of new/changed models are fetched concurrently (cached by digest)
+    await Promise.all(
+      models
+        .filter((model) => this.showCache.get(model.name)?.digest !== model.digest)
+        .map(async (model) => {
+          try {
+            const details = await client.show(model.name)
+            this.showCache.set(model.name, { capabilities: details.capabilities ?? [], contextLength: contextLengthFromShow(details), digest: model.digest })
+          } catch {
+            // not cached: retried on the next call
+          }
+        }),
+    )
+    const result: Array<Omit<InstalledModel, 'roles' | 'selfTest'>> = []
     for (const model of models) {
-      let show = this.showCache.get(model.name)
-      if (!show || show.digest !== model.digest) {
-        try {
-          const details = await client.show(model.name)
-          show = { capabilities: details.capabilities ?? [], contextLength: contextLengthFromShow(details), digest: model.digest }
-          this.showCache.set(model.name, show)
-        } catch {
-          show = { capabilities: [], digest: model.digest }
-        }
-      }
+      const cachedShow = this.showCache.get(model.name)
+      const show = cachedShow && cachedShow.digest === model.digest ? cachedShow : { capabilities: [] as string[], contextLength: undefined, digest: model.digest }
       const loaded = running.find((entry) => entry.name === model.name)
       result.push({
         name: model.name,
@@ -125,8 +192,6 @@ export class LocalModelsService implements OnModuleInit {
         contextLength: show.contextLength,
         loaded: Boolean(loaded),
         vramBytes: loaded?.size_vram,
-        roles: (['fast', 'balanced', 'advanced'] as LocalRole[]).filter((role) => settings.modelRoles[role] === model.name),
-        selfTest: settings.modelSelfTests[model.name],
       })
     }
     return result
@@ -137,6 +202,18 @@ export class LocalModelsService implements OnModuleInit {
       return this.registryCache.data
     }
     const cacheFile = path.join(runtimeConfig().cacheDir, 'registry.json')
+    if (!refresh && !this.registryCache) {
+      // A recent lookup from a previous app start is used as is (registry data changes rarely).
+      try {
+        const cached = JSON.parse(await fs.readFile(cacheFile, 'utf8')) as { at: number; data: RegistryModelInfo[] }
+        if (Date.now() - cached.at < 6 * 3600_000 && extra.every((model) => cached.data.some((entry) => entry.model === model))) {
+          this.registryCache = cached
+          return cached.data
+        }
+      } catch {
+        // no cache yet
+      }
+    }
     const names = [...new Set([...candidateModelNames(), ...extra])]
     const data: RegistryModelInfo[] = []
     for (let index = 0; index < names.length; index += 6) {
@@ -213,6 +290,7 @@ export class LocalModelsService implements OnModuleInit {
       signal,
     )
     this.showCache.delete(model)
+    this.invalidateInstalled()
     this.events.publish('models', 'pull_finished', { model }, model)
   }
 
@@ -223,6 +301,7 @@ export class LocalModelsService implements OnModuleInit {
     const cleared: Partial<AppSettings['modelRoles']> = {}
     for (const role of ['fast', 'balanced', 'advanced'] as const) if (settings.modelRoles[role] === model) cleared[role] = null
     await this.settings.update({ modelRoles: cleared as AppSettings['modelRoles'], modelSelfTests: { [model]: null } as unknown as AppSettings['modelSelfTests'] })
+    this.invalidateInstalled()
     this.events.publish('models', 'deleted', { model }, model)
     return { ok: true }
   }
@@ -230,12 +309,14 @@ export class LocalModelsService implements OnModuleInit {
   async load(model: string) {
     const settings = await this.settings.get()
     await (await this.client()).load(model, '15m', settings.numCtx)
+    this.invalidateInstalled()
     this.events.publish('models', 'loaded', { model }, model)
     return { ok: true }
   }
 
   async unload(model: string) {
     await (await this.client()).unload(model)
+    this.invalidateInstalled()
     this.events.publish('models', 'unloaded', { model }, model)
     return { ok: true }
   }
@@ -318,9 +399,65 @@ export class LocalModelsService implements OnModuleInit {
     return result
   }
 
+  private readonly warming = new Map<string, Promise<void>>()
+  /** Model load times measured by warm-ups (diagnostics). */
+  readonly warmups: Array<{ model: string; reason: string; loadMs?: number; skipped?: string; at: string }> = []
+
+  /**
+   * Loads local models in the background so the first agent call does not wait for the model load
+   * (~16 s for a 7B model from disk). Only models that fit into the remaining VRAM next to the models
+   * already loaded are warmed (without a reliable VRAM figure: only if free RAM is ample), and the
+   * context size equals the one the agent uses – a different num_ctx would make Ollama reload.
+   */
+  async warmup(models: Array<string | null | undefined>, reason: string): Promise<string[]> {
+    const settings = await this.settings.get()
+    const wanted = [...new Set(models.filter((model): model is string => Boolean(model)))]
+    if (!settings.modelWarmup || !wanted.length) return []
+    const client = await this.client()
+    if (!(await client.isReachable().catch(() => false))) return []
+    const [running, profiles, installed, hardware] = await Promise.all([client.running().catch(() => []), this.engineProfiles(), this.installed().catch(() => [] as InstalledModel[]), this.hardware()])
+    const vramMb = usableVramMb(hardware)
+    let usedMb = running.reduce((sum, entry) => sum + (entry.size_vram ?? 0), 0) / 1024 / 1024
+    const started: string[] = []
+    for (const model of wanted) {
+      if (running.some((entry) => entry.name === model) || this.warming.has(model)) continue
+      const sizeMb = (installed.find((entry) => entry.name === model)?.sizeBytes ?? 0) / 1024 / 1024
+      if (!sizeMb) continue
+      const needMb = sizeMb * 1.2
+      const fits = vramMb ? usedMb + needMb <= vramMb * 0.85 : hardware.memory.freeBytes / 1024 / 1024 > needMb + 4096
+      if (!fits) {
+        this.events.publish('models', 'warmup_skipped', { model, reason, cause: 'memory' }, model)
+        this.warmups.push({ model, reason, skipped: 'memory', at: new Date().toISOString() })
+        continue
+      }
+      usedMb += needMb
+      const numCtx = profiles.find((profile) => profile.model === model)?.contextWindow ?? settings.numCtx
+      const begin = Date.now()
+      this.events.publish('models', 'warmup_started', { model, reason }, model)
+      const promise = client
+        .load(model, `${settings.keepAliveMinutes}m`, numCtx)
+        .then(() => {
+          this.warmups.push({ model, reason, loadMs: Date.now() - begin, at: new Date().toISOString() })
+          if (this.warmups.length > 50) this.warmups.shift()
+          this.events.publish('models', 'warmup_finished', { model, reason, loadMs: Date.now() - begin }, model)
+        })
+        .catch((error: unknown) => this.events.publish('models', 'warmup_failed', { model, reason, error: error instanceof Error ? error.message : String(error) }, model))
+        .finally(() => this.warming.delete(model))
+      this.warming.set(model, promise)
+      started.push(model)
+    }
+    return started
+  }
+
   /** Local model profiles for the execution engine (roles, verified tool calling, context). */
   async engineProfiles(): Promise<LocalModelRuntime[]> {
     const settings = await this.settings.get()
+    const provider = await this.plugins?.selectedExtension('modelProviders')
+    if (provider) {
+      const models = await this.plugins!.invokeExtension<Array<{ id: string; contextTokens: number; toolCalling: boolean }>>(provider.plugin, 'modelProviders', provider.id, 'models', {})
+      if (!Array.isArray(models) || models.some((model) => typeof model.id !== 'string' || !Number.isSafeInteger(model.contextTokens) || model.contextTokens < 1024)) throw new BadRequestException('Model provider returned an invalid model catalog.')
+      return models.map((model) => ({ model: `plugin:${provider.plugin}:${provider.id}:${model.id}`, roles: ['balanced'], toolCalling: false, contextWindow: model.contextTokens, available: true }))
+    }
     let installed: InstalledModel[] = []
     try {
       installed = await this.installed()
@@ -349,6 +486,24 @@ export class LocalModelsService implements OnModuleInit {
       })
     }
     return [...byModel.values()]
+  }
+
+  clientFor(model: string, fallback: OllamaClient): Pick<OllamaClient, 'chat'> {
+    if (!model.startsWith('plugin:')) return fallback
+    const [, plugin, id, ...modelParts] = model.split(':')
+    return { chat: async (request, options = {}) => {
+      if (options.signal?.aborted) throw new OllamaError('Model call cancelled.', 'aborted')
+      const started = Date.now()
+      const result = await this.plugins!.invokeExtension<{ text: string; inputTokens?: number; outputTokens?: number }>(plugin!, 'modelProviders', id!, 'generate', { model: modelParts.join(':'), messages: request.messages, contextTokens: request.options?.num_ctx, maxTokens: request.options?.num_predict, format: request.format }, { signal: options.signal, timeoutMs: options.timeoutMs }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new OllamaError(message, options.signal?.aborted ? 'aborted' : /Kontextlimit|Ausgabelimit|token limit/.test(message) ? 'resource_limit' : /timed out|did not answer/.test(message) ? 'timeout' : 'invalid_response')
+      })
+      if (typeof result.text !== 'string') throw new OllamaError('Model provider returned an invalid completion.', 'invalid_response')
+      // This provider returns a complete response, not a token stream. Do not report it as TTFT.
+      if (request.options?.num_ctx && (!Number.isSafeInteger(result.inputTokens) || result.inputTokens! < 0 || result.inputTokens! > request.options.num_ctx)) throw new OllamaError('Plugin provider could not verify the context token limit or exceeded it.', 'resource_limit')
+      if (request.options?.num_predict && (!Number.isSafeInteger(result.outputTokens) || result.outputTokens! < 0 || result.outputTokens! > request.options.num_predict)) throw new OllamaError('Plugin provider could not verify the output token limit or exceeded it.', 'resource_limit')
+      return { message: { role: 'assistant', content: result.text }, promptTokens: result.inputTokens ?? 0, completionTokens: result.outputTokens ?? 0, totalDurationMs: Date.now() - started, loadDurationMs: 0 }
+    } }
   }
 
   /** Parallel local inference slots: >1 only when all role models fit into VRAM together. */

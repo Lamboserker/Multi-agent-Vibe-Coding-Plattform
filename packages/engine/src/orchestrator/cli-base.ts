@@ -12,8 +12,16 @@ export interface CliAdapterOptions {
   defaultTimeoutMs?: number
 }
 
+/**
+ * Time to first output of premium CLI calls (diagnostics). "token": first streamed text delta
+ * (Claude Code with --include-partial-messages); "event": first model output event (Codex exec
+ * --json streams no token deltas).
+ */
+export const orchestratorFirstOutputs: Array<{ orchestrator: string; firstOutputMs: number; kind: 'token' | 'event'; at: string }> = []
+
 export abstract class CliOrchestratorBase {
   private readonly processes = new Map<string, Set<ChildProcess>>()
+  private readonly firstOutputPending = new Map<string, number>()
   private readonly cancelled = new Set<string>()
 
   constructor(protected readonly options: CliAdapterOptions = {}) {}
@@ -25,6 +33,9 @@ export abstract class CliOrchestratorBase {
 
   resolveBinary(): string | undefined {
     if (this.options.binaryPath) return existsSync(this.options.binaryPath) ? this.options.binaryPath : undefined
+    // explicit override (e.g. MAC_CLAUDE_BINARY): tests point it at a local stand-in so no real CLI runs
+    const override = process.env[`MAC_${this.binaryName.toUpperCase()}_BINARY`]
+    if (override) return existsSync(override) ? override : undefined
     return resolveExecutable(this.binaryName) ?? this.knownLocations.find((candidate) => existsSync(candidate))
   }
 
@@ -46,6 +57,9 @@ export abstract class CliOrchestratorBase {
     input: string,
     onJson: (event: Record<string, unknown>) => void,
   ): Promise<ProcessResult> {
+    if (ctx.limits?.maxContextTokens !== undefined || ctx.limits?.maxOutputTokens !== undefined) {
+      throw new OrchestratorError(`${this.binaryName} cannot enforce hard per-agent context/output token limits; use a local provider or remove these explicit limits. No model call was started.`, 'resource_limit', { retryable: false })
+    }
     const binary = this.requireBinary()
     this.cancelled.delete(ctx.runId)
     let buffer = ''
@@ -74,24 +88,41 @@ export abstract class CliOrchestratorBase {
       }
     }
 
-    const result = await runProcess(binary, args, {
+    this.firstOutputPending.set(ctx.runId, performance.now())
+    let result: ProcessResult
+    try { result = await runProcess(binary, args, {
       cwd: ctx.cwd,
       env: this.childEnv(),
       input,
       signal: ctx.signal,
       timeoutMs: ctx.timeoutMs ?? this.options.defaultTimeoutMs ?? 15 * 60_000,
       maxOutputBytes: 16 * 1024 * 1024,
+      failOnOutputLimit: true,
+      cleanupChildren: true,
       onStdout: handleChunk,
       onSpawn: (child) => this.track(ctx.runId, child),
     })
-    if (buffer.trim().startsWith('{')) dispatch(buffer.trim())
-    this.untrack(ctx.runId)
+      if (buffer.trim().startsWith('{')) dispatch(buffer.trim())
+    } finally {
+      this.firstOutputPending.delete(ctx.runId)
+      this.untrack(ctx.runId)
+    }
 
     if (result.spawnError) throw new OrchestratorError(`Could not start ${this.binaryName}: ${result.spawnError}`, 'not_installed', { retryable: false })
     if (this.cancelled.has(ctx.runId) || result.aborted) throw new OrchestratorError('Orchestrator call was cancelled.', 'cancelled', { retryable: false })
     if (result.timedOut) throw new OrchestratorError(`${this.binaryName} did not finish within the time limit.`, 'timeout', { retryable: true })
+    if (result.outputLimitExceeded) throw new OrchestratorError(`${this.binaryName} exceeded the structured output byte limit.`, 'resource_limit', { retryable: false })
     if (handlerError) throw handlerError
     return result
+  }
+
+  /** Records the time to the first model output of the running call (once per call). */
+  protected markFirstOutput(ctx: CallContext, kind: 'token' | 'event') {
+    const started = this.firstOutputPending.get(ctx.runId)
+    if (started === undefined) return
+    this.firstOutputPending.delete(ctx.runId)
+    orchestratorFirstOutputs.push({ orchestrator: this.binaryName, firstOutputMs: Math.round(performance.now() - started), kind, at: new Date().toISOString() })
+    if (orchestratorFirstOutputs.length > 200) orchestratorFirstOutputs.shift()
   }
 
   protected emit(ctx: CallContext, event: OrchestratorEvent) {

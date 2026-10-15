@@ -1,5 +1,6 @@
 import type { RuntimeStatus, TerminalInfo } from '../../shared/bridge'
 import { createStore } from './store/core'
+import type { PlanningProgressByTask } from './planning-progress'
 import type { Activity, ChatMessage, ExecutionRun, Project, RunEvent, SessionDetail, SessionSummary, Task, VersionedSettings } from './types'
 
 /*
@@ -12,7 +13,7 @@ import type { Activity, ChatMessage, ExecutionRun, Project, RunEvent, SessionDet
  *  5. running work & recovery data .... runtime jobs/runs/sessions  → sessionStore, activity
  */
 
-export type SideView = 'projects' | 'explorer' | 'git' | 'tasks' | 'agents' | 'models' | 'usage' | 'settings'
+export type SideView = 'projects' | 'explorer' | 'search' | 'git' | 'tasks' | 'agents' | 'models' | 'plugins' | 'skills' | 'mcp' | 'usage' | 'diagnostics' | 'settings'
 export type BottomTab = 'terminal' | 'logs' | 'tests' | 'diff' | 'run' | 'problems'
 export type Theme = 'dark' | 'light'
 
@@ -22,7 +23,17 @@ export interface UiState {
   sideView: SideView
   bottomTab: BottomTab
   bottomOpen: boolean
+  /** Bottom panel fills the whole center column (editor hidden). */
+  bottomMaximized: boolean
+  sideOpen: boolean
+  chatOpen: boolean
+  /** User-dragged sizes in px; unset = default (side width depends on the view). */
+  sideWidths: Partial<Record<SideView, number>>
+  chatWidth?: number
+  bottomHeight?: number
   lastProjectId?: string
+  /** Enough to show the workspace before the runtime has started (see sync.showCachedShell). */
+  lastProject?: { id: string; name: string; repoPath: string }
 }
 
 export interface ComposerDraft {
@@ -34,9 +45,12 @@ export interface ComposerDraft {
 /** Per-project work state, persisted as "workspace:<projectId>". */
 export interface WorkspaceState {
   activeSessionId?: string
+  chatView?: 'workflow' | 'history'
   explorer: { expanded: string[]; selected?: string }
   /** Chat composer drafts per session ("new" = no session yet). */
   composer: Record<string, ComposerDraft>
+  /** Second terminal shown next to the active one (split view). */
+  splitTerminalId?: string
   gitMessage: string
   activeTerminalId?: string
 }
@@ -69,7 +83,7 @@ function initialTheme(): Theme {
 export const appStore = createStore<AppState>({
   booted: false,
   reconnecting: false,
-  ui: { theme: initialTheme(), sideView: 'explorer', bottomTab: 'terminal', bottomOpen: true },
+  ui: { theme: initialTheme(), sideView: 'explorer', bottomTab: 'terminal', bottomOpen: true, bottomMaximized: false, sideOpen: true, chatOpen: true, sideWidths: {} },
   workspace: EMPTY_WORKSPACE,
   activity: { executions: [], plans: [], asks: [] },
 })
@@ -97,6 +111,8 @@ interface SessionState {
   execution?: ExecutionRun
   events: RunEvent[]
   selectedSubtaskId?: string
+  /** Older chat pages loaded on demand (kept apart from `active`, which reloads the newest page). */
+  older?: { sessionId: string; messages: SessionDetail['messages']; hasMore: boolean }
 }
 
 export const sessionStore = createStore<SessionState>({ list: [], listLoaded: false, includeArchived: false, pending: [], events: [] })
@@ -117,7 +133,10 @@ export interface PullProgress {
   status: string
 }
 
-export const jobsStore = createStore<{ pulls: Record<string, PullProgress>; installLog: string[] }>({ pulls: {}, installLog: [] })
+/** Planning progress survives session switches, also while two tasks plan concurrently. */
+export const planProgressStore = createStore<{ tasks: PlanningProgressByTask }>({ tasks: {} })
+
+export const jobsStore =createStore<{ pulls: Record<string, PullProgress>; installLog: string[] }>({ pulls: {}, installLog: [] })
 
 export const terminalStore = createStore<{ list: TerminalInfo[] }>({ list: [] })
 
@@ -144,6 +163,63 @@ export type DiffSource =
   | { type: 'git-head'; path: string }
   | { type: 'subtask-patch'; taskId: string; subtaskId: string }
 
-export const editorStore = createStore<{ tabs: EditorTab[]; activeTabId?: string; restoring: boolean }>({ tabs: [], restoring: false })
+/** splitTabId: a second file tab shown next to the active one (split editor). */
+export const editorStore = createStore<{ tabs: EditorTab[]; activeTabId?: string; splitTabId?: string; restoring: boolean }>({ tabs: [], restoring: false })
 
 export type { ChatMessage }
+
+/** Bumped on plugin_* runtime events; plugin views reload their list/details when it changes. */
+export const pluginStore = createStore<{ revision: number; lastEvent?: { id?: string; type: string; status?: string; error?: string } }>({ revision: 0 })
+
+// ---------------------------------------------------------------------------
+// IDE features (Phase F)
+// ---------------------------------------------------------------------------
+
+export interface SearchMatch {
+  line: number
+  column: number
+  length: number
+  preview: string
+}
+
+export interface SearchState {
+  query: string
+  replacement: string
+  regex: boolean
+  caseSensitive: boolean
+  wholeWord: boolean
+  include: string
+  exclude: string
+  loading: boolean
+  error?: string
+  results?: { files: Array<{ path: string; matches: SearchMatch[] }>; total: number; truncated: boolean }
+  /** "Find all references" shows its result in the search view. */
+  references?: { title: string; items: Array<{ path: string; line: number; column: number; endLine: number; endColumn: number; preview: string; isDefinition: boolean }> }
+}
+
+export const searchStore = createStore<SearchState>({ query: '', replacement: '', regex: false, caseSensitive: false, wholeWord: false, include: '', exclude: '', loading: false })
+
+export interface ProblemEntry {
+  path: string
+  line: number
+  column: number
+  severity: 'error' | 'warning' | 'info'
+  message: string
+  code?: string
+  source: string
+}
+
+export const problemsStore = createStore<{
+  /** Live diagnostics of open files (language service, unsaved content included). */
+  files: Record<string, ProblemEntry[]>
+  project?: { at: string; durationMs: number; problems: ProblemEntry[]; tools: string[]; running: boolean }
+}>({ files: {} })
+
+/** Modal dialogs opened from editor commands. */
+export type EditorDialog =
+  | { kind: 'ai-edit'; tabId: string; path: string; selection: { line: number; column: number; endLine: number; endColumn: number }; text: string }
+  | { kind: 'history'; tabId: string; path: string }
+  | { kind: 'quick-open'; mode: 'files' | 'commands' | 'line' }
+  | { kind: 'shortcuts' }
+
+export const dialogStore = createStore<{ dialog?: EditorDialog }>({})

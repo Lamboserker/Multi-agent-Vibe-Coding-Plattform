@@ -21,6 +21,7 @@ if (args[0] === 'auth' && args[1] === 'status') {
 let input = ''
 process.stdin.on('data', (c) => (input += c)).on('end', () => {
   if (mode === 'hang') { setTimeout(() => {}, 60000); return }
+  if (mode === 'no_session' && args.includes('--resume')) { process.stderr.write('No conversation found with session ID'); process.exit(1) }
   out({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-sonnet-4-6', tools: [] })
   if (mode === 'quota') {
     out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1791547200, rateLimitType: 'five_hour' } })
@@ -228,5 +229,47 @@ describe('CodexAdapter', () => {
     // no -m flag when model is empty → unsupported, and no pinned model → fallback is allowed
     process.env.FAKE_STRUCTURED = JSON.stringify({ answer: 'x' })
     await expect(adapter.chat({ question: 'hi', context }, { runId: 'c3', cwd: fake.dir })).resolves.toBeTruthy()
+  })
+})
+
+describe('chat session reuse', () => {
+  it('claude: a follow-up resumes the CLI session and sends only the question', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'ok'
+    process.env.FAKE_STRUCTURED = JSON.stringify({ answer: 'yes' })
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const first = await adapter.chat({ question: 'What is this?', context }, { runId: 'q1', cwd: fake.dir })
+    expect(first.meta.sessionId).toBe('sess-1')
+    expect((JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[] }).args).not.toContain('--no-session-persistence')
+    const followUp = await adapter.chat({ question: 'And the tests?', context, resumeSessionId: 'sess-1' }, { runId: 'q2', cwd: fake.dir })
+    expect(followUp.result.answer).toBe('yes')
+    const args = (JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[] }).args
+    expect(args).toEqual(expect.arrayContaining(['--resume', 'sess-1']))
+  })
+
+  it('claude: an expired CLI session falls back to the full prompt', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'no_session'
+    process.env.FAKE_STRUCTURED = JSON.stringify({ answer: 'full' })
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const { result } = await adapter.chat({ question: 'Again?', context, resumeSessionId: 'gone' }, { runId: 'q3', cwd: fake.dir })
+    expect(result.answer).toBe('full')
+    expect((JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[] }).args).not.toContain('--resume')
+  })
+
+  it('codex: a follow-up uses exec resume on the stored thread', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'ok'
+    process.env.FAKE_STRUCTURED = JSON.stringify({ answer: 'ok' })
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    await adapter.chat({ question: 'Follow-up', context, resumeSessionId: 'thread-1' }, { runId: 'q4', cwd: fake.dir })
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as Array<{ args: string[] }>
+    const exec = log.filter((entry) => entry.args[0] === 'exec').at(-1)!
+    expect(exec.args.slice(0, 2)).toEqual(['exec', 'resume'])
+    expect(exec.args).toContain('thread-1')
+    expect(exec.args).not.toContain('--ephemeral')
   })
 })

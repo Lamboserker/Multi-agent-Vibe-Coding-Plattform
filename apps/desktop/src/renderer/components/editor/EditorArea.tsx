@@ -6,23 +6,27 @@ import * as models from '../../lib/editor-models'
 import { touchWorkspace } from '../../lib/persistence'
 import { shallowEqual } from '../../lib/store/core'
 import { useAppState, useEditorState } from '../../lib/store'
-import type { EditorTab } from '../../lib/stores'
+import { editorStore, type EditorTab } from '../../lib/stores'
 import { Confirm, Spinner } from '../common'
 import { ProjectSetup } from '../panels/ProjectsPanel'
+import { attachEditorFeatures } from '../../lib/editor-features'
+import { saveWithFormat } from '../../lib/ide'
+import { RunOverview } from './RunOverview'
 
 const EDITOR_FONT = "'Cascadia Code', 'JetBrains Mono', Consolas, monospace"
 
 export function EditorArea() {
   const projectOpen = useAppState((state) => Boolean(state.project))
-  const { tabs, activeTabId, restoring } = useEditorState((state) => ({ tabs: state.tabs, activeTabId: state.activeTabId, restoring: state.restoring }), shallowEqual)
+  const { tabs, activeTabId, splitTabId, restoring } = useEditorState((state) => ({ tabs: state.tabs, activeTabId: state.activeTabId, splitTabId: state.splitTabId, restoring: state.restoring }), shallowEqual)
   const active = tabs.find((tab) => tab.id === activeTabId)
+  const split = tabs.find((tab) => tab.id === splitTabId && tab.kind === 'file')
   const [confirmClose, setConfirmClose] = useState<EditorTab>()
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && activeTabId) {
         event.preventDefault()
-        void actions.saveTab(activeTabId)
+        void saveWithFormat(activeTabId)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -81,13 +85,32 @@ export function EditorArea() {
           </button>
         </div>
       ) : null}
-      <div className="editor-host">
+      <div className={`editor-host ${split ? 'split' : ''}`}>
+        <div className="editor-group">
         {hasFileTab ? <CodeEditor tab={active?.kind === 'file' ? active : undefined} visible={active?.kind === 'file'} /> : null}
         {active?.kind === 'diff' ? <DiffView key={active.id} tab={active} /> : null}
         {!active ? (
           <div className="welcome">
-            {restoring ? <div className="row"><Spinner /> Stelle geöffnete Dateien wieder her …</div> : <div>Wähle eine Datei im Explorer oder beschreibe rechts eine Aufgabe.</div>}
-            <div className="faint">Strg+S speichert · Ungespeicherte Änderungen werden automatisch als Entwurf gesichert</div>
+            {restoring ? <div className="row"><Spinner /> Stelle geöffnete Dateien wieder her …</div> : <RunOverview />}
+            {!restoring ? <div>Wähle eine Datei im Explorer oder beschreibe rechts eine Aufgabe.</div> : null}
+            <div className="faint">Strg+S speichert · Strg+P öffnet Dateien · Strg+B / Strg+J / Strg+Umschalt+B blenden Bereiche ein und aus</div>
+          </div>
+        ) : null}
+        </div>
+        {split ? (
+          <div className="editor-group secondary" data-testid="split-editor">
+            <div className="split-header">
+              <span className="truncate" title={split.path}>
+                {split.title}
+              </span>
+              <span className="spacer" />
+              <button className="icon-btn" style={{ width: 20, height: 20 }} title="Teilung aufheben (Strg+\\)" aria-label="Teilung aufheben" onClick={() => editorStore.set({ splitTabId: undefined })}>
+                <X size={13} />
+              </button>
+            </div>
+            <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+              <CodeEditor tab={split} visible primary={false} />
+            </div>
           </div>
         ) : null}
       </div>
@@ -113,7 +136,7 @@ export function EditorArea() {
  * One Monaco editor instance for all file tabs: switching tabs swaps the text model and restores its
  * view state (cursor, selection, scroll, folding) instead of re-creating the editor.
  */
-function CodeEditor({ tab, visible }: { tab?: EditorTab; visible: boolean }) {
+function CodeEditor({ tab, visible, primary = true }: { tab?: EditorTab; visible: boolean; primary?: boolean }) {
   const host = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | undefined>(undefined)
   const currentTab = useRef<string | undefined>(undefined)
@@ -123,14 +146,20 @@ function CodeEditor({ tab, visible }: { tab?: EditorTab; visible: boolean }) {
   useEffect(() => {
     let disposed = false
     let saveTimer: number | undefined
+    let detachFeatures = () => undefined as void
     void models.loadMonaco().then((monaco) => {
       if (disposed || !host.current) return
       const editor = monaco.editor.create(host.current, { automaticLayout: true, fontFamily: EDITOR_FONT, fontSize: 13, minimap: { enabled: true }, smoothScrolling: true, tabSize: 2, model: null })
       editorRef.current = editor
+      if (primary) models.setActiveEditor(editor)
+      // commands (references, format, AI …) act on the editor the user works in
+      editor.onDidFocusEditorText(() => models.setActiveEditor(editor))
+      detachFeatures = attachEditorFeatures(monaco, editor)
       // View states are kept per tab and persisted (debounced) with the workspace.
       const remember = () => {
         if (saveTimer !== undefined) window.clearTimeout(saveTimer)
         saveTimer = window.setTimeout(() => {
+          if (!primary) return // the view state of a tab belongs to the main editor
           if (currentTab.current) models.setViewState(currentTab.current, editor.saveViewState())
           touchWorkspace()
         }, 800)
@@ -143,8 +172,10 @@ function CodeEditor({ tab, visible }: { tab?: EditorTab; visible: boolean }) {
       disposed = true
       if (saveTimer !== undefined) window.clearTimeout(saveTimer)
       const editor = editorRef.current
-      if (editor && currentTab.current) models.setViewState(currentTab.current, editor.saveViewState())
+      if (primary && editor && currentTab.current) models.setViewState(currentTab.current, editor.saveViewState())
       // Disposing the editor keeps the models (they belong to the tabs).
+      detachFeatures()
+      if (models.getActiveEditor() === editor) models.setActiveEditor(primary ? undefined : models.getPrimaryEditor())
       editor?.dispose()
       editorRef.current = undefined
     }
@@ -157,14 +188,15 @@ function CodeEditor({ tab, visible }: { tab?: EditorTab; visible: boolean }) {
   useEffect(() => {
     const editor = editorRef.current
     if (!editor || !ready) return
-    if (currentTab.current && currentTab.current !== tab?.id && editor.getModel()) models.setViewState(currentTab.current, editor.saveViewState())
+    if (primary && currentTab.current && currentTab.current !== tab?.id && editor.getModel()) models.setViewState(currentTab.current, editor.saveViewState())
     const model = tab ? models.getModel(tab.id) : null
     if (editor.getModel() !== model) editor.setModel(model)
     if (tab && model) {
       editor.updateOptions({ readOnly: tab.readOnly })
-      const viewState = models.viewStateOf(tab.id)
+      const viewState = primary ? models.viewStateOf(tab.id) : null
       if (viewState) editor.restoreViewState(viewState)
       if (visible) editor.focus()
+      models.applyPendingReveal(tab.id)
     }
     currentTab.current = tab?.id
   }, [tab?.id, tab?.readOnly, ready, visible])

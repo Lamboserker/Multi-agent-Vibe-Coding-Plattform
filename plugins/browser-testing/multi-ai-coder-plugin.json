@@ -1,0 +1,33 @@
+{
+  "id": "browser-testing",
+  "name": "Browser Testing",
+  "version": "1.0.0",
+  "description": "Webseiten in einem lokalen Chrome/Edge (headless) prüfen: Screenshots, Konsolen-Logs, Fehler, fehlgeschlagene Requests und einfache Automatisierung (klicken, tippen, warten, prüfen).",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["Testen", "Web"],
+  "permissions": {
+    "native": true
+  },
+  "contributes": {
+    "views": [{ "id": "main", "title": "Browser Testing" }],
+    "commands": [
+      { "id": "check", "title": "Seite prüfen (Screenshot + Konsole)" },
+      { "id": "run", "title": "Automatisierung ausführen" },
+      { "id": "toChat", "title": "Ergebnis in den Chat übernehmen" }
+    ],
+    "settings": [
+      { "key": "browserPath", "title": "Browser (Pfad)", "type": "string", "description": "Leer = Chrome, Chromium oder Edge wird automatisch gesucht." },
+      { "key": "width", "title": "Viewport-Breite", "type": "number", "default": 1280 },
+      { "key": "height", "title": "Viewport-Höhe", "type": "number", "default": 800 }
+    ],
+    "agentTools": [
+      {
+        "name": "browser_check",
+        "description": "Opens a URL in a headless browser and returns page title, HTTP status, console errors/warnings, uncaught exceptions and failed requests.",
+        "inputSchema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] }
+      }
+    ]
+  }
+}

@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { api, errorMessage } from '../../lib/api'
-import { useExecution } from '../../lib/execution'
+import { errorMessage } from '../../lib/api'
+import { approveRun, discardRun, undoRun, useWorkflowBusy } from '../../lib/workflow-actions'
 import { useApp } from '../../lib/store'
 import type { ExecutionRun, ReviewSummary, ValidationReport } from '../../lib/types'
 import { AsyncButton, Badge, Confirm } from '../common'
+import { localizeEngineText } from '../../lib/engine-text'
 
 function changedFiles(diff: string | null | undefined): string[] {
   return [...(diff ?? '').matchAll(/^diff --git a\/(\S+) b\//gm)].map((match) => match[1]!)
@@ -12,28 +13,21 @@ function changedFiles(diff: string | null | undefined): string[] {
 /** Final approval of an integrated change set (patch preview, validation, review, apply modes). */
 export function ApprovalBox({ execution }: { execution: ExecutionRun }) {
   const { openDiff, notify, setBottomTab, setBottomOpen } = useApp()
-  const { reloadExecution, reloadTask } = useExecution()
+  const busy = useWorkflowBusy(`execution:${execution.id}`)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const validation = execution.finalValidation as ValidationReport
   const review = execution.review as ReviewSummary
   const files = changedFiles(execution.finalDiff)
   const blockers = review?.result?.issues.filter((issue) => issue.severity === 'blocker') ?? []
 
-  const approve = async (mode: 'working_tree' | 'branch' | 'fast_forward') => {
-    const result = await api.post<{ ok: boolean; message: string; blockedBy?: string[] }>(`/executions/${execution.id}/approve`, { mode })
-    notify(result.message + (result.blockedBy?.length ? ` (${result.blockedBy.join(', ')})` : ''), result.ok ? 'success' : 'error')
-    await reloadExecution()
-    await reloadTask()
-  }
-
   return (
-    <div className="card stack" style={{ borderColor: 'var(--accent)' }}>
+    <div className="card stack" data-testid="workflow-approval" style={{ borderColor: 'var(--accent)' }}>
       <div className="row">
         <strong>Änderungen bereit zur Freigabe</strong>
         <span className="spacer" />
         <Badge kind={validation?.ok ? 'ok' : 'error'}>{validation?.ok ? 'Validierung ok' : 'Validierung fehlgeschlagen'}</Badge>
       </div>
-      {execution.summary ? <div className="muted">{execution.summary}</div> : null}
+      {execution.summary ? <div className="muted">{localizeEngineText(execution.summary)}</div> : null}
       <div className="stack" style={{ gap: 2, maxHeight: 140, overflow: 'auto' }}>
         {files.map((file) => (
           <span key={file} className="mono" style={{ fontSize: 11.5 }}>
@@ -56,7 +50,7 @@ export function ApprovalBox({ execution }: { execution: ExecutionRun }) {
           ) : null}
         </div>
       ) : review?.reason ? (
-        <div className={`callout ${review.kind === 'human_required' ? 'warn' : ''}`}>{review.reason}</div>
+        <div className={`callout ${review.kind === 'human_required' ? 'warn' : ''}`}>{localizeEngineText(review.reason)}</div>
       ) : null}
       {review?.deterministicIssues?.length ? (
         <details>
@@ -73,19 +67,24 @@ export function ApprovalBox({ execution }: { execution: ExecutionRun }) {
         </button>
       </div>
       <div className="row wrap">
-        <AsyncButton className="btn primary" onClick={() => approve('working_tree')} title="Wendet den Patch auf deine Arbeitskopie an (ohne Commit). Dateien mit eigenen ungespeicherten Änderungen werden nicht überschrieben.">
+        <AsyncButton className="btn primary" disabled={busy} onClick={() => approveRun(execution, 'working_tree')} title="Wendet den Patch auf deine Arbeitskopie an (ohne Commit). Dateien mit eigenen ungespeicherten Änderungen werden nicht überschrieben.">
           In Arbeitskopie übernehmen
         </AsyncButton>
-        <AsyncButton className="btn" onClick={() => approve('branch')} title={`Behält das Ergebnis auf dem Branch ${execution.integrationBranch}`}>
+      </div>
+      <details>
+        <summary>Weitere Freigabeoptionen</summary>
+        <div className="row wrap" style={{ marginTop: 8 }}>
+        <AsyncButton className="btn" disabled={busy} onClick={() => approveRun(execution, 'branch')} title={`Behält das Ergebnis auf dem Branch ${execution.integrationBranch}`}>
           Als Branch behalten
         </AsyncButton>
-        <AsyncButton className="btn" onClick={() => approve('fast_forward')} title="Fast-Forward des aktuellen Branches auf das integrierte Ergebnis (nur wenn der Branch unverändert ist).">
+        <AsyncButton className="btn" disabled={busy} onClick={() => approveRun(execution, 'fast_forward')} title="Fast-Forward des aktuellen Branches auf das integrierte Ergebnis (nur wenn der Branch unverändert ist).">
           Committen (Fast-Forward)
         </AsyncButton>
-        <button className="btn danger" onClick={() => setConfirmDiscard(true)}>
+        <button className="btn danger" disabled={busy} onClick={() => setConfirmDiscard(true)}>
           Verwerfen
         </button>
-      </div>
+        </div>
+      </details>
       {confirmDiscard ? (
         <Confirm
           title="Ergebnis verwerfen?"
@@ -95,9 +94,7 @@ export function ApprovalBox({ execution }: { execution: ExecutionRun }) {
           onConfirm={async () => {
             setConfirmDiscard(false)
             try {
-              await api.post(`/executions/${execution.id}/discard`)
-              await reloadExecution()
-              await reloadTask()
+              await discardRun(execution)
             } catch (error) {
               notify(errorMessage(error), 'error')
             }
@@ -111,10 +108,9 @@ export function ApprovalBox({ execution }: { execution: ExecutionRun }) {
 }
 
 export function AppliedBox({ execution }: { execution: ExecutionRun }) {
-  const { notify } = useApp()
-  const { reloadExecution } = useExecution()
+  const busy = useWorkflowBusy(`execution:${execution.id}`)
   const record = execution.applyRecords?.find((entry) => entry.status === 'applied')
-  if (!record) return null
+  if (!record) return execution.applyRecords?.some((entry) => entry.status === 'reverted') ? <div className="callout warn">Die Übernahme wurde rückgängig gemacht.</div> : null
   return (
     <div className="callout ok stack">
       <div>
@@ -123,11 +119,8 @@ export function AppliedBox({ execution }: { execution: ExecutionRun }) {
       <div className="row">
         <AsyncButton
           className="btn small"
-          onClick={async () => {
-            const result = await api.post<{ ok: boolean; message: string }>(`/apply-records/${record.id}/undo`)
-            notify(result.message, result.ok ? 'success' : 'error')
-            await reloadExecution()
-          }}
+          disabled={busy}
+          onClick={() => undoRun(execution, record.id)}
         >
           Rückgängig machen
         </AsyncButton>

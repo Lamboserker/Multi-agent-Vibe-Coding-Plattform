@@ -53,6 +53,10 @@ const digest = await time(() => engine.buildContextDigest(oneChanged.value, 'Add
 const cacheFile = path.join(repo, '..', `index-${path.basename(repo)}.json`)
 const save = await time(() => engine.saveIndexCache(cacheFile, oneChanged.value))
 const load = await time(() => engine.loadIndexCache(cacheFile))
+writeFileSync(path.join(repo, 'src', 'module2', 'file2.ts'), 'export const changedAgain = 2\n')
+const watcherRefresh = typeof engine.refreshRepoIndex === 'function' ? await time(() => engine.refreshRepoIndex(repo, oneChanged.value, ['src/module2', 'src/module2/file2.ts'])) : undefined
+const headCheck = await time(() => engine.headCommit(repo))
+log('repo_index_incremental', { watcherOneFileMs: watcherRefresh?.ms, noChangeHeadCheckMs: headCheck.ms })
 log('repo_index', { files: fileCount, coldMs: cold.ms, warmNoChangeMs: warm.ms, oneFileChangedMs: oneChanged.ms, digestMs: digest.ms, cacheSaveMs: save.ms, cacheLoadMs: load.ms, reused: oneChanged.value.stats.reusedFromCache, reindexed: oneChanged.value.stats.indexedFiles })
 
 // --- git worktree + patch validation --------------------------------------------------

@@ -365,21 +365,34 @@ async function main() {
   const fcp = []
   const ide = []
   const runtimeReady = []
+  const modelsAfterRestart = []
+  const workspaceRestored = []
   for (let index = 0; index < launches; index += 1) {
     session = await start(profile)
     ;({ app, page } = session)
     await page.waitForSelector('.ide', { timeout: 120_000 })
     const timing = await page.evaluate(() => ({ origin: performance.timeOrigin, fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? null, now: performance.now() }))
     ide.push(timing.origin + timing.now - session.launchedAt)
+    // project, tabs and session list back (marks exist only in versions that restore the workspace)
+    const restored = await page.waitForFunction(() => performance.getEntriesByName('mac:workspace-restored')[0]?.startTime, null, { timeout: 15_000 }).then((handle) => handle.jsonValue()).catch(() => null)
+    if (restored) workspaceRestored.push(timing.origin + restored - session.launchedAt)
     if (timing.fcp !== null) fcp.push(timing.origin + timing.fcp - session.launchedAt)
     const log = readFileSync(path.join(profile, 'logs', 'runtime.log'), 'utf8').split(/\r?\n/)
     const startLine = [...log].reverse().find((line) => line.includes('starting runtime'))
     const readyLine = [...log].reverse().find((line) => line.includes('runtime ready'))
     if (startLine && readyLine) runtimeReady.push(new Date(readyLine.slice(1, 25)).getTime() - new Date(startLine.slice(1, 25)).getTime())
+    await instrument(page)
+    await page.locator('nav.activity-bar button[title="Explorer"]').click()
+    modelsAfterRestart.push(await page.evaluate(async (selector) => {
+      const before = window.__perf.visibleHeader()
+      return window.__perf.clickUntil(selector, `() => { const header = window.__perf.visibleHeader(); return header && header !== ${JSON.stringify(before)} && ![...document.querySelectorAll('.side-panel .spinner')].some((spinner) => spinner.offsetParent !== null) && document.querySelector('.side-panel table.table tbody tr') }`, 30_000)
+    }, 'nav.activity-bar button[title="Modelle"]'))
     await stop(app)
   }
   record('startup_first_paint_ms', fcp, { note: 'process launch → first contentful paint' })
-  record('startup_ide_ms', ide, { note: 'process launch → IDE visible with the restored project' })
+  record('startup_ide_ms', ide, { note: 'process launch → IDE visible' })
+  record('startup_workspace_restored_ms', workspaceRestored, { note: 'process launch → project, tabs and sessions restored from the runtime' })
+  record('models_view_after_restart_ms', modelsAfterRestart, { note: 'first visit of the Models view after an app restart (recommendations table visible)' })
   record('runtime_start_ms', runtimeReady, { note: 'utility process fork → NestJS listening (migrations, recovery included)' })
 
   results.finishedAt = new Date().toISOString()

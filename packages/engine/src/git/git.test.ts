@@ -39,7 +39,54 @@ describe('worktree pool', () => {
     for (const handle of [second, third, fourth]) await manager.remove(repo, handle.path, handle.branch)
     // the real node_modules was never touched by cleaning
     expect(existsSync(path.join(repo, 'node_modules', 'dep'))).toBe(true)
-  })
+  }, 20_000)
+
+  it('prewarm creates idle slots ahead of a run; create() then reuses them on the right commit', async () => {
+    const repo = await createTempRepo({ 'a.txt': 'base\n' })
+    const base = (await headCommit(repo))!
+    const manager = new WorktreeManager({ root: tempDir('mac-pool-'), poolSize: 2 })
+    expect(await manager.prewarm(repo, 'demo', 5)).toBe(2) // capped at the pool size
+    expect(await manager.prewarm(repo, 'demo', 2)).toBe(0) // idempotent
+
+    await fs.writeFile(path.join(repo, 'a.txt'), 'next\n')
+    await stageAll(repo)
+    await commitStaged(repo, 'next')
+    const next = (await headCommit(repo))!
+    expect(next).not.toBe(base)
+
+    const handle = await manager.create(repo, { projectKey: 'demo', name: 'run-task-1', branch: 'mac/run/task-1', baseCommit: next })
+    expect(path.basename(handle.path)).toBe('pool-0')
+    expect(await headCommit(handle.path)).toBe(next)
+    expect((await fs.readFile(path.join(handle.path, 'a.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('next\n')
+    await manager.remove(repo, handle.path, handle.branch)
+  }, 20_000)
+
+  it('keeps unpooled worktrees out of the pool and attach() recovers a branch stuck in a pool slot', async () => {
+    const repo = await createTempRepo({ 'a.txt': 'base\n' })
+    const base = (await headCommit(repo))!
+    const manager = new WorktreeManager({ root: tempDir('mac-pool-'), poolSize: 2 })
+
+    const integration = await manager.create(repo, { projectKey: 'demo', name: 'run-integration', branch: 'mac/run/integration', baseCommit: base, pooled: false })
+    expect(path.basename(integration.path)).toBe('run-integration')
+    await manager.remove(repo, integration.path, integration.branch)
+
+    // legacy run: the integration branch was created in pool-0 and the app restarted before resume
+    const legacy = await manager.create(repo, { projectKey: 'demo', name: 'old-integration', branch: 'mac/old/integration', baseCommit: base })
+    expect(path.basename(legacy.path)).toBe('pool-0')
+    await fs.writeFile(path.join(legacy.path, 'a.txt'), 'integrated\n')
+    await stageAll(legacy.path)
+    const integrated = await commitStaged(legacy.path, 'task-1: change')
+
+    const attached = await manager.attach(repo, { projectKey: 'demo', name: 'old-integration', branch: 'mac/old/integration' })
+    expect(path.basename(attached.path)).toBe('old-integration')
+    expect(await headCommit(attached.path)).toBe(integrated)
+    expect(await currentBranch(attached.path)).toBe('mac/old/integration')
+    // the slot is back in the pool
+    const task = await manager.create(repo, { projectKey: 'demo', name: 'old-task-2', branch: 'mac/old/task-2', baseCommit: base })
+    expect(path.basename(task.path)).toBe('pool-0')
+    await manager.remove(repo, task.path, task.branch)
+    await manager.remove(repo, attached.path, attached.branch)
+  }, 20_000)
 })
 
 describe('task commits on the integration branch', () => {

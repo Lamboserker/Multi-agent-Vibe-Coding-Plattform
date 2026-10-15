@@ -27,6 +27,7 @@ export interface TerminalInfo {
 }
 
 export interface PersistedTerminal {
+  commandHistory?: string[]
   title: string
   cwd?: string
   projectId?: string
@@ -64,9 +65,33 @@ export class ScrollbackBuffer {
 }
 
 interface Entry {
+  commands: string[]
+  commandParser: CommandHistoryParser
   info: TerminalInfo
   pty?: IPty
   buffer: ScrollbackBuffer
+}
+
+/** Completed shell commands only; raw password/key input is never captured. */
+export class CommandHistoryParser {
+  private pending = ''
+  push(data: string): string[] {
+    this.pending = (this.pending + data).slice(-64 * 1024)
+    const commands: string[] = []
+    const marker = '\x1b]633;E;'
+    let start: number
+    while ((start = this.pending.indexOf(marker)) >= 0) {
+      const end = this.pending.indexOf('\x07', start)
+      if (end < 0) { this.pending = this.pending.slice(start); break }
+      const encoded = this.pending.slice(start + marker.length, end)
+      if (/^[A-Za-z0-9+/=]+$/.test(encoded)) {
+        const command = Buffer.from(encoded, 'base64').toString('utf8').trim()
+        if (command && command.length <= 8000) commands.push(command)
+      }
+      this.pending = this.pending.slice(end + 1)
+    }
+    return commands
+  }
 }
 
 /**
@@ -121,6 +146,12 @@ export class TerminalManager {
       }
     } else {
       ;({ file, args } = this.defaultShell())
+      if (process.platform === 'win32') {
+        // Preserve PSReadLine's module-bound reader. Calling its .NET method from a replacement
+        // function loses that context and can return empty input in a loop instead of accepting it.
+        const script = `Import-Module PSReadLine; $global:__MultiAICoderReadLine = $function:PSConsoleHostReadLine; function global:PSConsoleHostReadLine { $line = & $global:__MultiAICoderReadLine; [Console]::Write([char]27 + ']633;E;' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($line)) + [char]7); return $line }`
+        args.push('-NoExit', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'))
+      }
     }
     const env: Record<string, string> = {}
     for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith('MAC_') && key !== 'ELECTRON_RUN_AS_NODE') env[key] = value
@@ -132,11 +163,19 @@ export class TerminalManager {
     const buffer = new ScrollbackBuffer(SCROLLBACK_BYTES)
     if (replaced) buffer.append(replaced.buffer.toString())
     const entry: Entry = {
+      commands: replaced?.commands.slice() ?? [],
+      commandParser: new CommandHistoryParser(),
       info: { id, title: options.title?.slice(0, 80) || path.basename(cwd) || `Terminal ${this.counter}`, cwd, command: options.command, projectId: options.projectId, pid: terminal.pid, status: 'running', startedAt: new Date().toISOString() },
       pty: terminal,
       buffer,
     }
     terminal.onData((data) => {
+      const commands = entry.commandParser.push(data)
+      if (commands.length) {
+        entry.commands.push(...commands)
+        entry.commands = entry.commands.slice(-500)
+        this.onChange()
+      }
       entry.buffer.append(data)
       this.onData(id, data)
     })
@@ -165,6 +204,8 @@ export class TerminalManager {
   write(id: string, data: string) {
     this.terminals.get(id)?.pty?.write(data)
   }
+
+  history(id: string) { return this.terminals.get(id)?.commands.slice() ?? [] }
 
   resize(id: string, cols: number, rows: number) {
     try {
@@ -212,6 +253,7 @@ export class TerminalManager {
       projectId: entry.info.projectId,
       scrollback: entry.buffer.toString(PERSISTED_SCROLLBACK_BYTES),
       endedAt: entry.info.endedAt ?? new Date().toISOString(),
+      commandHistory: entry.commands.slice(-500),
     }))
   }
 
@@ -222,7 +264,7 @@ export class TerminalManager {
       const buffer = new ScrollbackBuffer(SCROLLBACK_BYTES)
       buffer.append(item.scrollback)
       buffer.append(`\r\n\x1b[90m[Sitzung vom ${new Date(item.endedAt).toLocaleString()} – der Prozess wurde mit der App beendet. Verlauf wiederhergestellt.]\x1b[0m\r\n`)
-      this.terminals.set(id, { info: { id, title: item.title, cwd: item.cwd, projectId: item.projectId, status: 'restored', startedAt: item.endedAt, endedAt: item.endedAt }, buffer })
+      this.terminals.set(id, { info: { id, title: item.title, cwd: item.cwd, projectId: item.projectId, status: 'restored', startedAt: item.endedAt, endedAt: item.endedAt }, buffer, commands: item.commandHistory?.slice(-500) ?? [], commandParser: new CommandHistoryParser() })
     }
   }
 }

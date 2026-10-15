@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common'
+import { AgentResourcesService } from '../agents/agent-resources.service.js'
 import { Prisma, type ChatMessage, type ChatSession, type ExecutionStatus, type Job } from '@prisma/client'
 import type { Subscription } from 'rxjs'
 import { PrismaService } from '../common/prisma.service.js'
@@ -44,6 +45,7 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     private readonly orchestrators: OrchestratorService,
     private readonly repoContext: RepoContextService,
     private readonly executions: ExecutionService,
+    @Optional() private readonly agentResources?: AgentResourcesService,
   ) {}
 
   onModuleInit() {
@@ -314,13 +316,17 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
         await this.systemMessage(session, question.taskId, 'system', 'Kein Orchestrator verbunden. Bitte Claude Code oder Codex in den Einstellungen verbinden.', { kind: 'answer_error' })
         return
       }
-      const { digest } = await this.repoContext.digest(session.projectId, session.project.repoPath, question.content, 4000)
+      const { digest: repoDigest } = await this.repoContext.digest(session.projectId, session.project.repoPath, question.content, 4000)
+      const skills = await this.agentResources?.promptContext('chat', session.projectId, question.content).catch(() => undefined)
+      const digest = skills?.text ? { ...repoDigest, summary: `${repoDigest.summary}\n\n${skills.text}` } : repoDigest
       const history = (await this.prisma.chatMessage.findMany({ where: { sessionId, createdAt: { lt: question.createdAt }, role: { in: ['user', 'assistant'] } }, orderBy: { createdAt: 'desc' }, take: 8 }))
         .reverse()
         .map((message) => ({ role: message.role as 'user' | 'assistant', content: message.content.slice(0, 2000) }))
       const started = Date.now()
       try {
-        const { result, meta } = await adapter.chat({ question: question.content, context: digest, history }, { runId: `chat-${sessionId}-${messageId}`, cwd: session.project.repoPath, timeoutMs: 5 * 60_000, effort: 'low' })
+        // A follow-up resumes the orchestrator's own session (context + history are already there).
+        const resumeSessionId = session.provider === adapter.id && session.externalSessionId ? session.externalSessionId : undefined
+        const { result, meta } = await adapter.chat({ question: question.content, context: digest, history, resumeSessionId }, { runId: `chat-${sessionId}-${messageId}`, cwd: session.project.repoPath, timeoutMs: 5 * 60_000, effort: 'low' })
         await this.prisma.modelCall.create({
           data: {
             kind: 'orchestrator', provider: adapter.id, model: meta.model ?? adapter.id, purpose: 'chat', status: 'ok', sessionId: meta.sessionId, durationMs: meta.durationMs,
@@ -329,18 +335,23 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
           },
         })
         await this.prisma.chatSession.update({ where: { id: sessionId }, data: { provider: adapter.id, ...(meta.sessionId ? { externalSessionId: meta.sessionId } : {}) } })
-        await this.systemMessage(session, question.taskId, 'assistant', result.answer, { kind: 'answer', orchestrator: adapter.id, questionId: messageId })
+        await this.systemMessage(session, question.taskId, 'assistant', result.answer, { kind: 'answer', orchestrator: adapter.id, questionId: messageId, resumedSession: Boolean(resumeSessionId && meta.sessionId === resumeSessionId) })
       } catch (error) {
         await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, model: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started } })
         await this.systemMessage(session, question.taskId, 'system', `Fehler bei der Antwort: ${error instanceof Error ? error.message : String(error)}`, { kind: 'answer_error', questionId: messageId })
       }
     } finally {
-      const current = await this.prisma.chatSession.findUnique({ where: { id: sessionId } })
-      if (current) {
-        const recovery = jsonObject(current.recovery)
-        if ((recovery.pendingAsk as { messageId?: string } | undefined)?.messageId === messageId) delete recovery.pendingAsk
-        await this.prisma.chatSession.update({ where: { id: sessionId }, data: { recovery: asJson(recovery), lastActivityAt: new Date() } })
-      }
+      // Shares the session's send-lock with sendQuestion()'s pendingAsk write: without it, a fast
+      // answer (e.g. a scripted/local model) can finish and clear pendingAsk here before sendQuestion
+      // has even persisted it, leaving a stale pendingAsk that never gets cleaned up.
+      await this.sendLocks.run(sessionId, async () => {
+        const current = await this.prisma.chatSession.findUnique({ where: { id: sessionId } })
+        if (current) {
+          const recovery = jsonObject(current.recovery)
+          if ((recovery.pendingAsk as { messageId?: string } | undefined)?.messageId === messageId) delete recovery.pendingAsk
+          await this.prisma.chatSession.update({ where: { id: sessionId }, data: { recovery: asJson(recovery), lastActivityAt: new Date() } })
+        }
+      })
       this.scheduleRefresh(sessionId, 0)
     }
   }

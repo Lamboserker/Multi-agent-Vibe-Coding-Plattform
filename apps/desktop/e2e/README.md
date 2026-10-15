@@ -1,5 +1,24 @@
 # Live end-to-end test
 
+## Central workflow regression
+
+The desktop session has one `Arbeitsablauf` for task → plan → execution → approval. The `Verlauf`
+tab retains the conversation. Agent and run-detail views link back to the workflow; lifecycle and
+approval controls are rendered only there. `Ctrl+Shift+L` opens it, also when the chat is collapsed.
+
+After building the desktop app, run without any premium/model calls:
+
+```bash
+node --test --test-concurrency=1 e2e/fast-path.test.mjs e2e/agents.test.mjs e2e/layout.test.mjs
+```
+
+The fast-path test covers real planning, isolated execution and project checks, exactly one approval
+surface, navigation back from agent/run details, collapsed-chat recovery, renderer reload, apply and
+undo. The agent test edits assignments from the central plan. The layout test includes minimum width.
+The separate `session-persistence.test.mjs` covers drafts, conversation history, crashes and restart.
+
+## Premium live run
+
 `live-react-component.test.mjs` drives the real desktop app (Playwright for Electron) through the
 complete user flow – nothing is mocked:
 

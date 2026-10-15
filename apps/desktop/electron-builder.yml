@@ -17,6 +17,11 @@ files:
 # electron-builder always drops dot-directories inside node_modules; the generated Prisma client
 # (with the query engine) lives in node_modules/.prisma, so it is copied explicitly.
 extraResources:
+  # TypeScript's standard-library declarations are runtime inputs to the language server.
+  # The default file matcher drops .d.ts; copy this complete runtime directory explicitly.
+  - from: release-app/backend/typescript
+    to: app/backend/typescript
+    filter: ['**/*']
   - from: release-app/node_modules/.prisma
     to: app/node_modules/.prisma
     filter: ['**/*']

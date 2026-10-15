@@ -69,6 +69,8 @@ export interface MacBridge {
   }
   app: {
     info(): Promise<{ version: string; platform: string; arch: string; electron: string; chrome: string; node: string; dataDir: string; packaged: boolean }>
+    /** CPU and memory of every Electron process (diagnostics). */
+    metrics(): Promise<Array<{ pid: number; type: string; name?: string; cpuPercent: number; workingSetMb: number }>>
     /** The app is quitting: write pending state, then call flushed(). */
     onFlushRequest(listener: () => void): () => void
     flushed(): void
@@ -79,6 +81,12 @@ export interface MacBridge {
     saveText(defaultName: string, content: string): Promise<string | null>
   }
   shell: { openExternal(url: string): Promise<boolean>; showItem(target: string): Promise<boolean> }
+  /** Encrypted secrets (scope e.g. "plugin:github"); values can be written but never read back. */
+  secrets: {
+    set(scope: string, name: string, value: string): Promise<boolean>
+    delete(scope: string, name: string): Promise<boolean>
+    names(scope: string): Promise<{ available: boolean; names: string[] }>
+  }
   state: {
     hello(epoch: string): Promise<boolean>
     get<T = unknown>(key: string): Promise<StateDocument<T> | null>
@@ -92,6 +100,7 @@ export interface MacBridge {
     list(projectKey: string): Promise<DraftEntry[]>
   }
   terminal: {
+    history(id: string): Promise<string[]>
     create(options: { cols: number; rows: number; cwd?: string; command?: string[]; title?: string; projectId?: string; replaces?: string }): Promise<TerminalInfo>
     list(projectId?: string): Promise<TerminalInfo[]>
     attach(id: string): Promise<{ info: TerminalInfo; scrollback: string } | null>

@@ -1,0 +1,37 @@
+{
+  "id": "api-tools",
+  "name": "API Tools",
+  "version": "1.0.0",
+  "description": "REST-Client: Anfragen senden, Antworten prüfen, Anfragen in Sammlungen speichern, Umgebungsvariablen ({{baseUrl}}), Antworten als Kontext in den Chat übernehmen.",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["APIs", "Testen"],
+  "permissions": {
+    "network": ["*"]
+  },
+  "contributes": {
+    "views": [{ "id": "main", "title": "API Tools" }],
+    "commands": [
+      { "id": "send", "title": "Anfrage senden" },
+      { "id": "save", "title": "Anfrage in Sammlung speichern" },
+      { "id": "run", "title": "Gespeicherte Anfrage ausführen" },
+      { "id": "load", "title": "Gespeicherte Anfrage laden" },
+      { "id": "delete", "title": "Gespeicherte Anfrage löschen", "confirm": "Gespeicherte Anfrage löschen?" },
+      { "id": "saveEnvironment", "title": "Umgebungsvariablen speichern" },
+      { "id": "runCollection", "title": "Sammlung ausführen" }
+    ],
+    "agentTools": [
+      {
+        "name": "http_request",
+        "description": "Sends an HTTP request (GET by default) and returns status, headers and the (truncated) body. Environment variables like {{baseUrl}} are replaced.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "method": { "type": "string" }, "url": { "type": "string" }, "headers": { "type": "object" }, "body": { "type": "string" } },
+          "required": ["url"]
+        },
+        "sideEffects": true
+      }
+    ]
+  }
+}

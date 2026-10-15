@@ -76,7 +76,11 @@ export function SettingsPanel() {
             </Field>
             <Field label="Kontextfenster lokal (num_ctx)">{numberField('numCtx', 2048, 262144)}</Field>
             <Field label="Timeout pro Aufgabe (min)">{numberField('taskTimeoutMinutes', 2, 120)}</Field>
+            <Field label="Modell im Speicher halten (min)">{numberField('keepAliveMinutes', 1, 240)}</Field>
           </div>
+          <label className="row"><input type="checkbox" checked={settings.fastPath} onChange={(event) => set({ fastPath: event.target.checked })} /> Fast Path: kleine, eindeutige Aufgaben ohne Premium-Planung (Formatieren, Lint-Fix, Importe, Umbenennen deterministisch ohne Modell)</label>
+          <label className="row"><input type="checkbox" checked={settings.formatOnSave} onChange={(event) => set({ formatOnSave: event.target.checked })} /> Beim Speichern formatieren (Prettier des Projekts, falls installiert)</label>
+          <label className="row"><input type="checkbox" checked={settings.modelWarmup} onChange={(event) => set({ modelWarmup: event.target.checked })} /> Lokale Modelle während der Planung vorladen (nur wenn genug Grafikspeicher frei ist)</label>
         </div>
 
         <div className="card stack">
@@ -89,6 +93,11 @@ export function SettingsPanel() {
             </select>
           </Field>
           <label className="row"><input type="checkbox" checked={settings.planApproval} onChange={(event) => set({ planApproval: event.target.checked })} /> Plan vor der Ausführung bestätigen</label>
+          {settings.planApproval ? (
+            <label className="row" style={{ paddingLeft: 22 }} title="Höchstens 2 Teilaufgaben, geringe Komplexität und geringes Risiko, keine sicherheitskritischen Dateien, nur lokale Agenten. Die Übernahme ins Projekt muss weiterhin freigegeben werden.">
+              <input type="checkbox" checked={settings.autoStartSmallPlans ?? true} onChange={(event) => set({ autoStartSmallPlans: event.target.checked })} /> Kleine, risikoarme Pläne sofort ausführen
+            </label>
+          ) : null}
           <label className="row"><input type="checkbox" checked={settings.allowProjectCode} onChange={(event) => set({ allowProjectCode: event.target.checked })} /> Projekt-Skripte (Tests/Typecheck) im Worktree ausführen</label>
           <label className="row"><input type="checkbox" checked={settings.strictScope} onChange={(event) => set({ strictScope: event.target.checked })} /> Änderungen außerhalb des geplanten Dateiumfangs blockieren</label>
           {info ? (

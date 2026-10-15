@@ -36,6 +36,7 @@ const bridge: MacBridge = {
   },
   app: {
     info: () => ipcRenderer.invoke('app:info'),
+    metrics: () => ipcRenderer.invoke('app:metrics'),
     onFlushRequest: (listener) => onFlush(listener),
     flushed: () => ipcRenderer.send('app:flushed'),
   },
@@ -46,6 +47,11 @@ const bridge: MacBridge = {
   shell: {
     openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
     showItem: (target) => ipcRenderer.invoke('shell:showItem', target),
+  },
+  secrets: {
+    set: (scope, name, value) => ipcRenderer.invoke('secrets:set', scope, name, value),
+    delete: (scope, name) => ipcRenderer.invoke('secrets:delete', scope, name),
+    names: (scope) => ipcRenderer.invoke('secrets:names', scope),
   },
   state: {
     hello: (epoch) => ipcRenderer.invoke('state:hello', epoch),
@@ -59,6 +65,7 @@ const bridge: MacBridge = {
     list: (projectKey) => ipcRenderer.invoke('draft:list', projectKey),
   },
   terminal: {
+    history: (id) => ipcRenderer.invoke('terminal:history', id),
     create: (options) => ipcRenderer.invoke('terminal:create', options),
     list: (projectId) => ipcRenderer.invoke('terminal:list', projectId),
     attach: (id) => ipcRenderer.invoke('terminal:attach', id),

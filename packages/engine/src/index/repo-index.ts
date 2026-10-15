@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
-import { isGitRepository, listFiles } from '../git/git.js'
+import { git, isGitRepository, listFiles } from '../git/git.js'
 import { isIgnoredPath, isSensitivePath, redactSecrets } from '../security/paths.js'
 import { resolveExecutable, runProcess } from '../util/process.js'
 import type { RepoContextDigest } from '../orchestrator/types.js'
@@ -182,6 +182,137 @@ export async function buildRepoIndex(root: string, previous?: RepoIndex): Promis
     isGit,
     stats,
   }
+}
+
+/** Indexes one file (or reuses the cached entry); undefined = not indexable. */
+async function indexFile(root: string, relative: string, cached: FileEntry | undefined, stats: RepoIndex['stats']): Promise<FileEntry | undefined> {
+  if (isIgnoredPath(relative) || isSensitivePath(relative)) return undefined
+  if (BINARY_EXTENSIONS.has(path.extname(relative).toLowerCase())) {
+    stats.skippedBinary += 1
+    return undefined
+  }
+  let stat: import('node:fs').Stats
+  try {
+    stat = await fs.stat(path.join(root, relative))
+  } catch {
+    return undefined
+  }
+  if (!stat.isFile()) return undefined
+  if (stat.size > MAX_INDEXED_FILE_BYTES) {
+    stats.skippedLarge += 1
+    return undefined
+  }
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    stats.reusedFromCache += 1
+    return cached
+  }
+  let content: string
+  try {
+    content = await fs.readFile(path.join(root, relative), 'utf8')
+  } catch {
+    return undefined
+  }
+  if (content.includes('\0')) {
+    stats.skippedBinary += 1
+    return undefined
+  }
+  const hash = createHash('sha1').update(content).digest('hex')
+  if (cached && cached.hash === hash) {
+    stats.reusedFromCache += 1
+    return { ...cached, mtimeMs: stat.mtimeMs }
+  }
+  const language = languageOf(relative)
+  const { symbols, imports } = extractSymbols(relative, content, language)
+  stats.indexedFiles += 1
+  return { path: relative, size: stat.size, mtimeMs: stat.mtimeMs, hash, language, lines: content.split('\n').length, symbols, imports, dependsOn: [] }
+}
+
+/** Paths among `candidates` that git ignores (one process for the whole batch). */
+async function gitIgnored(root: string, candidates: string[]): Promise<Set<string>> {
+  if (!candidates.length) return new Set()
+  const result = await git(root, ['check-ignore', '--stdin'], { input: candidates.join('\n'), allowFailure: true })
+  return new Set(result.stdout.split('\n').map((line) => line.trim().replaceAll('\\', '/')).filter(Boolean))
+}
+
+/**
+ * Updates an index for a set of changed paths (from a file watcher) without scanning the repository.
+ * Directories are expanded (new) or dropped (deleted). Returns the index unchanged when nothing
+ * relevant changed. Callers must fall back to buildRepoIndex when the change list is incomplete.
+ */
+export async function refreshRepoIndex(root: string, previous: RepoIndex, changedPaths: string[]): Promise<RepoIndex> {
+  const resolvedRoot = path.resolve(root)
+  const byPath = new Map(previous.files.map((file) => [file.path, file]))
+  const stats = { indexedFiles: 0, reusedFromCache: 0, skippedLarge: 0, skippedBinary: 0 }
+  const queue = [...new Set(changedPaths.map((entry) => entry.replaceAll('\\', '/').replace(/^\.\/+/, '').replace(/\/+$/, '')))].filter((entry) => entry && !entry.startsWith('.git/') && entry !== '.git' && !isIgnoredPath(entry))
+  const files: string[] = []
+  let changed = false
+  for (const relative of queue) {
+    const stat = await fs.stat(path.join(resolvedRoot, relative)).catch(() => undefined)
+    if (!stat) {
+      // deleted file or directory
+      for (const known of [...byPath.keys()]) {
+        if (known === relative || known.startsWith(`${relative}/`)) {
+          byPath.delete(known)
+          changed = true
+        }
+      }
+      continue
+    }
+    if (stat.isDirectory()) {
+      // Existing directories are reported when a child changes (the child is reported too); a new or
+      // renamed directory has no indexed children yet and is walked.
+      if ([...byPath.keys()].some((known) => known.startsWith(`${relative}/`))) continue
+      const walk = async (dir: string) => {
+        for (const entry of await fs.readdir(path.join(resolvedRoot, dir), { withFileTypes: true }).catch(() => [])) {
+          const child = `${dir}/${entry.name}`
+          if (isIgnoredPath(child)) continue
+          if (entry.isDirectory()) await walk(child)
+          else if (entry.isFile()) files.push(child)
+        }
+      }
+      await walk(relative)
+    } else if (stat.isFile()) files.push(relative)
+  }
+  const ignored = previous.isGit ? await gitIgnored(resolvedRoot, files.filter((file) => !byPath.has(file))) : new Set<string>()
+  for (const relative of files) {
+    if (ignored.has(relative)) continue
+    const cached = byPath.get(relative)
+    const entry = await indexFile(resolvedRoot, relative, cached, stats)
+    if (entry === cached) continue
+    changed = true
+    if (entry) byPath.set(relative, entry)
+    else byPath.delete(relative)
+  }
+  if (!changed) return previous
+  const entries = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path))
+  const known = new Set(entries.map((entry) => entry.path))
+  for (const entry of entries) entry.dependsOn = resolveImports(entry.path, entry.imports, known)
+  const packageJsonChanged = files.some((file) => path.posix.basename(file) === 'package.json') || queue.some((entry) => !known.has(entry) && previous.packageJsons.some((pkg) => pkg.path === entry))
+  const packageJsons = packageJsonChanged ? await readPackageJsons(resolvedRoot, entries) : previous.packageJsons
+  const languages: Record<string, number> = {}
+  for (const entry of entries) if (entry.language !== 'other') languages[entry.language] = (languages[entry.language] ?? 0) + entry.lines
+  return {
+    ...previous,
+    builtAt: new Date().toISOString(),
+    files: entries,
+    packageJsons,
+    languages,
+    frameworks: detectFrameworks(packageJsons, known),
+    stats: { ...stats, reusedFromCache: entries.length - stats.indexedFiles },
+  }
+}
+
+async function readPackageJsons(root: string, entries: FileEntry[]): Promise<RepoIndex['packageJsons']> {
+  const packageJsons: RepoIndex['packageJsons'] = []
+  for (const entry of entries.filter((file) => path.posix.basename(file.path) === 'package.json').slice(0, 60)) {
+    try {
+      const json = JSON.parse(await fs.readFile(path.join(root, entry.path), 'utf8')) as { name?: string; type?: string; scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+      packageJsons.push({ path: entry.path, name: json.name, type: json.type, scripts: json.scripts ?? {}, dependencies: Object.keys({ ...(json.dependencies ?? {}), ...(json.devDependencies ?? {}) }).sort() })
+    } catch {
+      // invalid package.json
+    }
+  }
+  return packageJsons
 }
 
 function detectPackageManager(root: string): string | undefined {
@@ -485,7 +616,17 @@ export function summarizeIndex(index: RepoIndex, validationCommands: string[] = 
 export async function buildContextDigest(
   index: RepoIndex,
   goal: string,
-  options: { budgetTokens?: number; explicitFiles?: string[]; validationCommands?: string[]; maxFiles?: number; excerptFiles?: number } = {},
+  options: {
+    budgetTokens?: number
+    explicitFiles?: string[]
+    validationCommands?: string[]
+    maxFiles?: number
+    excerptFiles?: number
+    excerptChars?: number
+    excerptMaxLines?: number
+    /** After the ranked files, add files no keyword matched (manifests and configs first) while the budget lasts. */
+    fillUnranked?: boolean
+  } = {},
 ): Promise<RepoContextDigest & { tokenEstimate: number; consideredFiles: number }> {
   const budget = options.budgetTokens ?? 6000
   const summary = summarizeIndex(index, options.validationCommands)
@@ -495,20 +636,35 @@ export async function buildContextDigest(
   const relevantFiles: RepoContextDigest['relevantFiles'] = []
   const excerptBudget = options.excerptFiles ?? 3
 
-  for (const { path: file } of ranked.slice(0, options.maxFiles ?? 14)) {
+  const candidates = ranked.map((entry) => entry.path)
+  if (options.fillUnranked) {
+    const listed = new Set(candidates)
+    const manifest = (file: string) => (/(^|\/)(package\.json|[^/]*\.config\.[cm]?[jt]s|tsconfig[^/]*\.json)$/.test(file) ? 0 : 1)
+    const rest = index.files
+      .filter((entry) => !listed.has(entry.path) && entry.language !== 'other' && (!['json', 'markdown', 'yaml', 'toml'].includes(entry.language) || /(^|\/)(package\.json|tsconfig[^/]*\.json)$/.test(entry.path)))
+      .map((entry) => entry.path)
+      .sort((a, b) => manifest(a) - manifest(b) || a.localeCompare(b))
+    candidates.push(...rest)
+  }
+
+  for (const file of candidates.slice(0, options.maxFiles ?? 14)) {
     const entry = byPath.get(file)
     if (!entry) continue
     const outline = outlineOf(entry)
     let excerpt: string | undefined
-    if (relevantFiles.length < excerptBudget && entry.lines <= 220) {
-      const content = await fs.readFile(path.join(index.root, file), 'utf8').catch(() => '')
-      const candidate = redactSecrets(content).slice(0, 3500)
-      if (used + estimateTokens(outline + candidate) <= budget) excerpt = candidate
+    let complete = false
+    if (relevantFiles.length < excerptBudget && entry.lines <= (options.excerptMaxLines ?? 220)) {
+      const content = redactSecrets(await fs.readFile(path.join(index.root, file), 'utf8').catch(() => ''))
+      const candidate = content.slice(0, options.excerptChars ?? 3500)
+      if (used + estimateTokens(outline + candidate) <= budget) {
+        excerpt = candidate
+        complete = candidate.length === content.length
+      }
     }
     const cost = estimateTokens(outline + (excerpt ?? '')) + 10
     if (used + cost > budget) break
     used += cost
-    relevantFiles.push({ path: file, outline, excerpt })
+    relevantFiles.push({ path: file, outline, excerpt, ...(complete ? { complete } : {}) })
   }
 
   return { summary, relevantFiles, validationCommands: options.validationCommands ?? [], tokenEstimate: used, consideredFiles: ranked.length }

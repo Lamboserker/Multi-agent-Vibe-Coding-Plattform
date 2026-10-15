@@ -23,6 +23,12 @@ describe('parseTestCounts', () => {
 })
 
 describe('validation checks', () => {
+  it('bounds a plugin runner even when it ignores its abort signal', async () => {
+    const report = await runValidationChecks(tempDir('mac-checks-timeout-'), [{ id: 'plugin', kind: 'test', command: 'Plugin hanging', blocking: true, timeoutMs: 50, source: 'plugin', execute: async () => new Promise(() => undefined) }])
+    expect(report.ok).toBe(false)
+    expect(report.results[0]).toMatchObject({ status: 'timeout' })
+    expect(report.results[0]!.reason).toMatch(/timeout/i)
+  })
   it('detects package scripts and avoids watch mode', async () => {
     const dir = tempDir('mac-checks-')
     await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc --noEmit', test: 'vitest', lint: 'eslint .' }, devDependencies: { vitest: '1' } }))

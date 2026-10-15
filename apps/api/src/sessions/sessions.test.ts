@@ -117,9 +117,11 @@ describe('SessionsService', () => {
     const { service } = makeSessions()
     const session = await service.create(projectId)
     await service.send(session.id, { content: 'Wie ist das Projekt aufgebaut?', mode: 'ask', clientId: 'client-ask-0001' })
+    // the answer is stored first, the pending marker is cleared right after (under the session lock)
     const answered = await waitFor(async () => {
       const detail = await service.get(session.id)
-      return detail.messages.some((message) => message.role === 'assistant') && detail
+      const recovery = (await prisma.chatSession.findUniqueOrThrow({ where: { id: session.id } })).recovery as Record<string, unknown>
+      return detail.messages.some((message) => message.role === 'assistant') && recovery.pendingAsk === undefined && detail
     })
     expect(answered.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
     expect(answered.messages[1]!.content).toContain('Antwort auf: Wie ist das Projekt aufgebaut?')

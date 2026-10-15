@@ -1,6 +1,7 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { windowsJobCommand } from './windows-job.js'
 
 export interface RunProcessOptions {
   cwd?: string
@@ -11,6 +12,10 @@ export interface RunProcessOptions {
   signal?: AbortSignal
   /** Output beyond this many bytes per stream is dropped (the tail is kept). */
   maxOutputBytes?: number
+  /** Fail rather than silently truncate a structured response. */
+  failOnOutputLimit?: boolean
+  /** Own all descendants through an OS job/process group, including successful completion. */
+  cleanupChildren?: boolean
   onStdout?: (chunk: string) => void
   onStderr?: (chunk: string) => void
   onSpawn?: (child: ChildProcess) => void
@@ -28,10 +33,19 @@ export interface ProcessResult {
   durationMs: number
   /** Present when the binary could not be started at all (ENOENT etc.). */
   spawnError?: string
+  outputLimitExceeded?: boolean
 }
 
 const DEFAULT_MAX_OUTPUT = 4 * 1024 * 1024
 const isWindows = process.platform === 'win32'
+
+/** Owned stdio process for long-lived protocol clients such as language servers. */
+export function spawnOwnedProcess(command: string, args: string[], options: SpawnOptionsWithoutStdio = {}): ChildProcessWithoutNullStreams {
+  const owned = isWindows ? windowsJobCommand(command, args) : { file: command, args }
+  const child = spawn(owned.file, owned.args, { ...options, detached: !isWindows, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  if (!isWindows) child.once('exit', () => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL') } catch { /* group gone */ } })
+  return child
+}
 
 /** Resolves a binary on PATH (honouring PATHEXT on Windows). Returns undefined when not found. */
 export function resolveExecutable(command: string, envPath = process.env.PATH ?? process.env.Path ?? ''): string | undefined {
@@ -111,6 +125,12 @@ export function runProcess(command: string, args: string[], options: RunProcessO
   }
 
   const spawnEnv = shimTarget && !resolveExecutable('node', env.PATH ?? env.Path ?? process.env.PATH ?? '') ? { ...env, ELECTRON_RUN_AS_NODE: '1' } : env
+  if (isWindows && options.cleanupChildren) {
+    const owned = windowsJobCommand(file, finalArgs, windowsVerbatimArguments)
+    file = owned.file
+    finalArgs = owned.args
+    windowsVerbatimArguments = false
+  }
 
   return new Promise((resolve) => {
     let stdout = ''
@@ -119,6 +139,11 @@ export function runProcess(command: string, args: string[], options: RunProcessO
     let aborted = false
     let settled = false
     let child: ChildProcess
+    let timer: NodeJS.Timeout | undefined
+    let outputLimitExceeded = false
+    let outputBytes = 0
+    let callbackError: string | undefined
+    const onAbort = () => { aborted = true; if (child) killProcessTree(child) }
 
     const finish = (result: Partial<ProcessResult>) => {
       if (settled) return
@@ -134,10 +159,13 @@ export function runProcess(command: string, args: string[], options: RunProcessO
         stderr,
         timedOut,
         aborted,
+        outputLimitExceeded,
         durationMs: Date.now() - started,
         ...result,
       })
     }
+
+    if (options.signal?.aborted) { aborted = true; finish({}); return }
 
     try {
       child = spawn(file, finalArgs, {
@@ -153,13 +181,11 @@ export function runProcess(command: string, args: string[], options: RunProcessO
       return
     }
 
-    options.onSpawn?.(child)
-
-    const onAbort = () => {
-      aborted = true
+    try { options.onSpawn?.(child) } catch (error) {
       killProcessTree(child)
+      child.once('close', () => finish({ spawnError: error instanceof Error ? error.message : String(error) }))
     }
-    const timer = options.timeoutMs
+    timer = options.timeoutMs
       ? setTimeout(() => {
           timedOut = true
           killProcessTree(child)
@@ -173,15 +199,20 @@ export function runProcess(command: string, args: string[], options: RunProcessO
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
+      outputBytes += Buffer.byteLength(chunk)
+      if (options.failOnOutputLimit && outputBytes > maxOutput) { outputLimitExceeded = true; killProcessTree(child); return }
       stdout = appendCapped(stdout, chunk, maxOutput)
-      options.onStdout?.(chunk)
+      try { options.onStdout?.(chunk) } catch (error) { callbackError = String(error); killProcessTree(child) }
     })
     child.stderr?.on('data', (chunk: string) => {
       stderr = appendCapped(stderr, chunk, maxOutput)
-      options.onStderr?.(chunk)
+      try { options.onStderr?.(chunk) } catch (error) { callbackError = String(error); killProcessTree(child) }
     })
     child.on('error', (error) => finish({ spawnError: error.message }))
-    child.on('close', (exitCode, signal) => finish({ exitCode, signal }))
+    child.on('close', (exitCode, signal) => finish({ exitCode, signal, ...(callbackError ? { spawnError: callbackError } : {}) }))
+    if (!isWindows && options.cleanupChildren) child.once('exit', () => {
+      try { if (child.pid) process.kill(-child.pid, 'SIGKILL') } catch { /* group already gone */ }
+    })
 
     child.stdin?.on('error', () => {
       // The process may exit before reading stdin; that is reported through the exit code.
@@ -193,7 +224,8 @@ export function runProcess(command: string, args: string[], options: RunProcessO
 
 function appendCapped(current: string, chunk: string, max: number): string {
   const next = current + chunk
-  return next.length > max ? next.slice(next.length - max) : next
+  const bytes = Buffer.from(next)
+  return bytes.length > max ? bytes.subarray(bytes.length - max).toString('utf8') : next
 }
 
 /** Kills a process and all of its children (taskkill /T on Windows, process group elsewhere). */
@@ -201,7 +233,7 @@ export function killProcessTree(child: ChildProcess): void {
   if (child.pid === undefined || child.exitCode !== null) return
   try {
     if (isWindows) {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => { try { child.kill('SIGKILL') } catch { /* gone */ } })
     } else {
       process.kill(-child.pid, 'SIGTERM')
       setTimeout(() => {

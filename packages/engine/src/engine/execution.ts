@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { runLocalAgent, type LocalAgentResult } from '../agents/local-agent.js'
+import { runLocalAgent, type AgentTool, type LocalAgentResult } from '../agents/local-agent.js'
 import { commitStaged, git, hasStagedChanges, headCommit, integratedTaskCommits, squashSince, stageAll } from '../git/git.js'
 import { WorktreeManager, type WorktreeHandle } from '../git/worktrees.js'
 import { buildContextDigest, searchCode, type RepoIndex } from '../index/repo-index.js'
@@ -11,12 +11,14 @@ import { OrchestratorError, type OrchestratorAdapter, type OrchestratorEvent, ty
 import { DEFAULT_DENIED_PATTERNS, validatePatch, type PatchPolicy, type PatchValidationResult } from '../patch/validator.js'
 import { WorkspaceFiles } from '../patch/workspace-files.js'
 import { analyzeDag } from '../planning/dag.js'
+import { FILE_SCOPED_CRITERION } from '../planning/fallback-planner.js'
 import { routeTask, type CostMode, type LocalModelProfile, type RouteDecision } from '../routing/router.js'
 import type { SuitabilityStats } from '../routing/stats.js'
 import { DagScheduler, type SchedulableTask, type TaskState } from '../scheduler/scheduler.js'
 import { isSecurityCriticalPath } from '../security/paths.js'
 import { failureDigest, runValidationChecks, type ValidationCheck, type ValidationReport } from '../validation/checks.js'
 import { runProcess, sanitizedEnv } from '../util/process.js'
+import { runFastPathTool, type FastPathTool } from '../fastpath/fast-path.js'
 
 export type EngineTaskStatus = 'planned' | 'queued' | 'running' | 'validating' | 'repairing' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'blocked'
 
@@ -37,9 +39,36 @@ export interface EngineTask {
   suggestedExecutor: 'local' | 'premium'
   priority: number
   manualModel?: string
+  /** Fast path: a deterministic tool tried before any model (see fastpath/fast-path.ts). */
+  tool?: FastPathTool
+  /** Agent profile assigned to the task (agent manager): model, limits, escalation, role prompt. */
+  agent?: AgentAssignment
   status: EngineTaskStatus
   /** Commit on the integration branch once integrated. */
   commitSha?: string
+}
+
+export interface AgentAssignment {
+  maxContextTokens?: number
+  permissions?: { read?: boolean; write?: boolean; externalTools?: boolean }
+  resources?: { timeoutMs?: number; maxFiles?: number; maxWriteBytes?: number; maxOutputTokens?: number }
+  mcpServers?: string[]
+  id: string
+  name: string
+  /** premium: normal escalation chain; local: never escalate to the premium orchestrator; none: no escalation at all. */
+  escalation: 'premium' | 'local' | 'none'
+  maxSteps?: number
+  maxRepairs?: number
+  /** Role-specific instructions appended to the local agent's system prompt. */
+  instructions?: string
+}
+
+/** Compact result of a finished task, handed to the tasks that depend on it. */
+export interface TaskHandoff {
+  key: string
+  title: string
+  files: string[]
+  summary: string
 }
 
 export interface EngineRun {
@@ -67,6 +96,8 @@ export interface EngineSettings {
   taskTimeoutMs: number
   strictScope: boolean
   reviewFixRounds: number
+  /** Ollama keep_alive for agent calls, e.g. '15m'. */
+  keepAlive?: string
 }
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
@@ -90,7 +121,7 @@ export type AttemptOutcome = 'success' | 'validation_failed' | 'invalid_patch' |
 export interface AttemptStart {
   runId: string
   taskId: string
-  executor: 'local' | 'premium'
+  executor: 'local' | 'premium' | 'deterministic'
   model: string
   category: string
   repairRound: number
@@ -188,12 +219,18 @@ export interface EngineDeps {
   store: EngineStore
   worktrees: WorktreeManager
   ollama: OllamaClient
+  localClientFor?: (model: string) => Pick<OllamaClient, 'chat'>
   localModels: LocalModelRuntime[]
   orchestrator?: OrchestratorAdapter
   checks: ValidationCheck[]
   index: RepoIndex
   stats: SuitabilityStats[]
   settings: EngineSettings
+  /**
+   * Skills, MCP and plugin tools assigned to the executing agent (provided by the application).
+   * Failures are logged and the agent runs with its file tools only.
+   */
+  agentResources?: (input: { task: EngineTask; model: string; worktreePath: string; supportsTools: boolean }) => Promise<{ tools: AgentTool[]; instructions?: string; sources?: string[] }>
 }
 
 export interface RunOutcome {
@@ -233,6 +270,7 @@ export class ExecutionRunner {
   private premiumBlockedReason?: string
   private integrationWorktree?: WorktreeHandle
   private readonly decisions = new Map<string, RouteDecision>()
+  private readonly handoffs = new Map<string, TaskHandoff>()
 
   constructor(
     private readonly run: EngineRun,
@@ -286,7 +324,7 @@ export class ExecutionRunner {
     const resuming = Boolean(this.run.integrationBranch)
     this.integrationWorktree = this.run.integrationBranch
       ? await worktrees.attach(this.run.repoPath, { projectKey: this.run.projectKey, name: `${runKey}-integration`, branch: integrationBranch })
-      : await worktrees.create(this.run.repoPath, { projectKey: this.run.projectKey, name: `${runKey}-integration`, branch: integrationBranch, baseCommit: base })
+      : await worktrees.create(this.run.repoPath, { projectKey: this.run.projectKey, name: `${runKey}-integration`, branch: integrationBranch, baseCommit: base, pooled: false })
     this.run.integrationBranch = integrationBranch
     await store.updateRun(this.run.id, { baseCommit: base, integrationBranch, integrationWorktree: this.integrationWorktree.path })
     this.event('info', 'integration_ready', `Integration worktree on ${integrationBranch} (base ${base.slice(0, 8)}).`)
@@ -312,13 +350,13 @@ export class ExecutionRunner {
       const decision = this.route(task)
       this.decisions.set(task.key, decision)
       await store.updateTask(task.id, {
-        status: decision.executor === 'blocked' ? 'blocked' : 'queued',
+        status: decision.executor === 'blocked' && !task.tool ? 'blocked' : 'queued',
         selectedModelClass: decision.executor === 'premium' ? 'premium_llm' : decision.executor === 'local' ? 'local_llm' : 'no_llm',
         selectedModelName: decision.executor === 'premium' ? this.deps.orchestrator?.displayName ?? 'premium' : decision.model,
         modelReason: decision.reasons.join('\n'),
-        errorMessage: decision.executor === 'blocked' ? decision.reasons.at(-1) : null,
+        errorMessage: decision.executor === 'blocked' && !task.tool ? decision.reasons.at(-1) : null,
       })
-      if (decision.executor === 'blocked') task.status = 'blocked'
+      if (decision.executor === 'blocked' && !task.tool) task.status = 'blocked'
       this.event('info', 'task_routed', `${task.key} → ${decision.executor === 'premium' ? 'premium' : decision.model ?? 'blocked'} (${decision.tier}).`, { reasons: decision.reasons }, task.id)
     }
 
@@ -417,7 +455,11 @@ export class ExecutionRunner {
     const decision = this.decisions.get(task.key) ?? this.route(task)
     if (decision.executor === 'blocked') return []
     const chain: ChainStep[] = [{ executor: decision.executor, model: decision.model }, ...decision.escalation]
-    return chain.slice(0, 1 + this.deps.settings.maxEscalationSteps).filter((step) => step.executor === 'local' || this.deps.settings.premiumExecutionAllowed || decision.executor === 'premium')
+    const allowed = chain.slice(0, 1 + this.deps.settings.maxEscalationSteps).filter((step) => step.executor === 'local' || this.deps.settings.premiumExecutionAllowed || decision.executor === 'premium')
+    // the assigned agent limits escalation (the first step is always its own)
+    if (task.agent?.escalation === 'none') return allowed.slice(0, 1)
+    if (task.agent?.escalation === 'local') return allowed.filter((step, index) => index === 0 || step.executor === 'local')
+    return allowed
   }
 
   private async executeTask(task: EngineTask, signal: AbortSignal): Promise<'succeeded' | 'failed'> {
@@ -425,6 +467,12 @@ export class ExecutionRunner {
     const runKey = short(this.run.id)
     task.status = 'running'
     await store.updateTask(task.id, { status: 'running', startedAt: new Date(), errorMessage: null })
+
+    if (task.tool) {
+      const viaTool = await this.executeTool(task, task.tool, signal)
+      if (viaTool) return viaTool
+      this.event('info', 'fast_path_fallback', `${task.key}: deterministic ${task.tool.kind} did not produce a validated change; using an agent.`, undefined, task.id)
+    }
 
     const chain = this.chainFor(task)
     if (!chain.length) {
@@ -434,6 +482,7 @@ export class ExecutionRunner {
     }
 
     let attemptsTotal = 0
+    let lastSummary = ''
     let previousFailures = ''
     let lastError = ''
     let worktree: WorktreeHandle | undefined
@@ -463,7 +512,7 @@ export class ExecutionRunner {
             await worktrees.reset(worktree.path, startHead)
             this.event('warn', 'task_escalated', `${task.key}: escalating to ${step.executor === 'premium' ? 'premium orchestrator' : step.model}.`, undefined, task.id)
           }
-          const maxRounds = step.executor === 'local' ? 1 + settings.maxLocalRepairs : 2
+          const maxRounds = step.executor === 'local' ? 1 + (task.agent?.maxRepairs ?? settings.maxLocalRepairs) : 1 + Math.min(1, task.agent?.maxRepairs ?? 1)
           let sessionId: string | undefined
           for (let round = 0; round < maxRounds; round += 1) {
             if (signal.aborted) throw new CancelledError()
@@ -485,6 +534,7 @@ export class ExecutionRunner {
               ? await this.runLocal(task, step.model!, worktree, previousFailures, signal, logs, round)
               : await this.runPremium(task, worktree, previousFailures, signal, logs, round, sessionId)
             sessionId = agent.sessionId ?? sessionId
+            lastSummary = agent.summary ?? lastSummary
 
             if (agent.hardFailure) {
               await store.finishAttempt(attemptId, {
@@ -507,6 +557,17 @@ export class ExecutionRunner {
             // Commit the attempt and validate it.
             await store.updateTask(task.id, { status: 'validating' })
             const commit = await commitIfChanged(worktree.path, `${task.key}: ${task.title}`)
+            if (!commit && !agent.error && agent.summary && task.acceptanceCriteria.includes(FILE_SCOPED_CRITERION)) {
+              // a per-file task of a project-wide goal: the agent found nothing in its file to change
+              await store.finishAttempt(attemptId, {
+                outcome: 'success', status: 'completed', durationMs: Date.now() - started, inputTokens: agent.inputTokens, outputTokens: agent.outputTokens,
+                tokensMeasured: agent.tokensMeasured, patchStatus: 'empty', logs, escalated: false,
+              })
+              task.status = 'completed'
+              await store.updateTask(task.id, { status: 'completed', finishedAt: new Date(), errorMessage: null })
+              this.event('info', 'task_no_change', `${task.key}: nothing to change in ${task.relevantFiles.join(', ')}${agent.summary ? ` – ${agent.summary.slice(0, 300)}` : ''}.`, undefined, task.id)
+              return 'succeeded'
+            }
             if (!commit) {
               await store.finishAttempt(attemptId, {
                 outcome: 'no_changes', status: 'failed', durationMs: Date.now() - started, inputTokens: agent.inputTokens, outputTokens: agent.outputTokens,
@@ -528,6 +589,20 @@ export class ExecutionRunner {
               this.event('warn', 'patch_rejected', `${task.key}: patch rejected.\n${issues}`, undefined, task.id)
               previousFailures = `The patch was rejected by the safety validator:\n${issues}`
               lastError = previousFailures
+              continue
+            }
+
+            // a file-scoped task may legitimately only remove (e.g. the old framework's import in one file)
+            const hollow = task.acceptanceCriteria.includes(FILE_SCOPED_CRITERION) ? undefined : hollowChange(patch.diff, `${task.title}\n${this.run.goal}`)
+            if (hollow) {
+              await git(worktree.path, ['reset', '-q', startHead], { internal: true })
+              await store.finishAttempt(attemptId, {
+                outcome: 'invalid_patch', status: 'failed', durationMs: Date.now() - started, inputTokens: agent.inputTokens, outputTokens: agent.outputTokens,
+                tokensMeasured: agent.tokensMeasured, patchText: patch.diff.slice(0, 200_000), patchStatus: 'rejected', diffSummary: summarizePatch(patch), logs, errorMessage: hollow, escalated: false,
+              })
+              this.event('warn', 'patch_rejected', `${task.key}: ${hollow}`, undefined, task.id)
+              previousFailures = `${hollow} The task is not a removal: replace every removed piece with its equivalent that fulfils the task, then call finish.`
+              lastError = hollow
               continue
             }
 
@@ -598,6 +673,7 @@ export class ExecutionRunner {
           errorMessage: null,
         })
         this.event('info', 'task_integrated', `${task.key}: integrated (${success.patch.files.length} file(s), tests ${success.report.testsPassed} passed).`, undefined, task.id)
+        this.recordHandoff(task, success.patch.files.map((file) => file.path), lastSummary)
         return 'succeeded'
       }
       task.status = 'failed'
@@ -616,10 +692,88 @@ export class ExecutionRunner {
     }
   }
 
+  /**
+   * Fast path: runs the deterministic tool in its own worktree, validates and integrates like an agent
+   * result. Returns undefined when the tool produced nothing usable (the agent chain takes over).
+   */
+  private async executeTool(task: EngineTask, tool: FastPathTool, signal: AbortSignal): Promise<'succeeded' | undefined> {
+    const { store, worktrees, settings } = this.deps
+    const runKey = short(this.run.id)
+    const startHead = await this.integrationMutex.run(async () => (await headCommit(this.integrationWorktree!.path))!)
+    const worktree = await worktrees.create(this.run.repoPath, { projectKey: this.run.projectKey, name: `${runKey}-${task.key}-tool`, branch: `mac/${runKey}/${task.key}-tool`, baseCommit: startHead })
+    const started = Date.now()
+    const attemptId = await store.startAttempt({ runId: this.run.id, taskId: task.id, executor: 'deterministic', model: `tool:${tool.kind}`, category: task.category, repairRound: 0, promptSummary: `${task.key} ${task.title}`.slice(0, 500) })
+    const finish = (input: Partial<AttemptFinish> & Pick<AttemptFinish, 'outcome' | 'status'>) =>
+      store.finishAttempt(attemptId, { durationMs: Date.now() - started, tokensMeasured: true, inputTokens: 0, outputTokens: 0, patchStatus: 'no_patch', logs: [], escalated: false, ...input })
+    try {
+      this.event('info', 'fast_path_started', `${task.key}: deterministic ${tool.kind} (no model call).`, undefined, task.id)
+      const result = await runFastPathTool(worktree.path, tool, { signal })
+      const commit = result.ok && result.changed.length ? await commitIfChanged(worktree.path, `${task.key}: ${task.title}`) : undefined
+      if (!commit) {
+        await finish({ outcome: result.ok ? 'no_changes' : 'error', status: 'failed', errorMessage: result.message, logs: [result.message] })
+        return undefined
+      }
+      const patch = await validatePatch(worktree.path, startHead, commit, this.patchPolicy(task))
+      if (!patch.ok) {
+        await finish({ outcome: 'invalid_patch', status: 'failed', patchText: patch.diff.slice(0, 200_000), patchStatus: 'rejected', errorMessage: patch.issues.map((issue) => issue.message).join('; ') })
+        return undefined
+      }
+      const report = await runValidationChecks(worktree.path, this.deps.checks, { signal, allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+      if (!report.ok) {
+        await finish({ outcome: 'validation_failed', status: 'failed', patchText: patch.diff.slice(0, 200_000), patchStatus: 'validation_failed', validation: report, errorMessage: report.summary })
+        return undefined
+      }
+      const integration = await this.integrationMutex.run(() => cherryPick(this.integrationWorktree!.path, commit))
+      if (!integration.ok) {
+        await finish({ outcome: 'conflict', status: 'failed', errorMessage: `conflict in ${integration.conflicts.join(', ')}` })
+        return undefined
+      }
+      await finish({ outcome: 'success', status: 'completed', patchText: patch.diff.slice(0, 200_000), patchStatus: 'validated', diffSummary: summarizePatch(patch), validation: report, logs: [result.message] })
+      task.status = 'completed'
+      task.commitSha = integration.sha
+      await store.updateTask(task.id, {
+        status: 'completed',
+        commitSha: integration.sha,
+        selectedModelClass: 'no_llm',
+        selectedModelName: `Werkzeug: ${tool.kind}`,
+        patchText: patch.diff.slice(0, 200_000),
+        patchStats: { files: patch.files, linesAdded: patch.linesAdded, linesDeleted: patch.linesDeleted, securityCritical: patch.securityCritical, warnings: patch.issues.filter((issue) => issue.severity === 'warning') },
+        validation: report,
+        finishedAt: new Date(),
+        errorMessage: null,
+      })
+      this.event('info', 'task_integrated', `${task.key}: integrated via ${tool.kind} without a model call (${patch.files.length} file(s)).`, undefined, task.id)
+      this.recordHandoff(task, patch.files.map((file) => file.path), `${tool.kind} applied deterministically.`)
+      return 'succeeded'
+    } catch (error) {
+      if (signal.aborted) throw new CancelledError()
+      await finish({ outcome: 'error', status: 'failed', errorMessage: error instanceof Error ? error.message : String(error) }).catch(() => undefined)
+      return undefined
+    } finally {
+      await worktrees.remove(this.run.repoPath, worktree.path, worktree.branch).catch(() => undefined)
+    }
+  }
+
   private patchPolicy(task: EngineTask): PatchPolicy {
     const files = [...task.relevantFiles, ...task.newFiles]
     const allowed = files.length ? [...files, ...new Set(files.map((file) => path.posix.dirname(file)).filter((dir) => dir && dir !== '.').map((dir) => `${dir}/**`))] : []
-    return { allowedPatterns: allowed, deniedPatterns: DEFAULT_DENIED_PATTERNS, strictScope: this.deps.settings.strictScope, maxFiles: 40, maxFileBytes: 512 * 1024 }
+    return { allowedPatterns: allowed, deniedPatterns: DEFAULT_DENIED_PATTERNS, strictScope: this.deps.settings.strictScope, maxFiles: task.agent?.permissions?.write === false ? 0 : Math.min(40, task.agent?.resources?.maxFiles ?? 40), maxFileBytes: Math.min(512 * 1024, task.agent?.resources?.maxWriteBytes ?? 512 * 1024) }
+  }
+
+  /** Structured, compact handoff (files + one-paragraph summary) for dependent tasks. */
+  private recordHandoff(task: EngineTask, files: string[], summary: string) {
+    const handoff: TaskHandoff = { key: task.key, title: task.title, files: files.slice(0, 30), summary: summary.replace(/\s+/g, ' ').trim().slice(0, 600) || task.title }
+    this.handoffs.set(task.key, handoff)
+    this.event('debug', 'task_handoff', `${task.key}: handoff for dependent tasks (${handoff.files.length} file(s)).`, { handoff }, task.id)
+  }
+
+  /** Results of the prerequisite tasks, as compact text for a dependent task's prompt. */
+  handoffContext(task: EngineTask): string {
+    const lines = task.dependsOn
+      .map((key) => this.handoffs.get(key))
+      .filter((handoff): handoff is TaskHandoff => Boolean(handoff))
+      .map((handoff) => `- ${handoff.key} "${handoff.title}": ${handoff.summary} Files: ${handoff.files.join(', ') || '–'}`)
+    return lines.length ? `## Results of prerequisite tasks (already integrated)\n${lines.join('\n')}` : ''
   }
 
   private async runLocal(task: EngineTask, model: string, worktree: WorktreeHandle, previousFailures: string, signal: AbortSignal, logs: string[], round: number) {
@@ -629,24 +783,38 @@ export class ExecutionRunner {
       writablePatterns: policy.allowedPatterns,
       deniedPatterns: DEFAULT_DENIED_PATTERNS,
       maxReadBytes: 64 * 1024,
-      maxWriteBytes: 256 * 1024,
+      maxWriteBytes: Math.min(256 * 1024, task.agent?.resources?.maxWriteBytes ?? Infinity),
       allowDelete: false,
+      allowRead: task.agent?.permissions?.read,
+      allowWrite: task.agent?.permissions?.write,
+      maxFiles: task.agent?.resources?.maxFiles,
     })
-    const numCtx = Math.min(this.deps.settings.numCtx, profile?.contextWindow || this.deps.settings.numCtx)
+    const numCtx = Math.min(this.deps.settings.numCtx, profile?.contextWindow || this.deps.settings.numCtx, task.agent?.maxContextTokens ?? Infinity)
     const digest = await buildContextDigest(this.deps.index, `${task.title}\n${task.description}`, { explicitFiles: task.relevantFiles, budgetTokens: Math.min(2500, Math.floor(numCtx / 6)), excerptFiles: 0, maxFiles: 10 })
-    this.event('info', 'agent_started', `${task.key}: ${model}${round ? ` (repair ${round})` : ''}, ${profile?.toolCalling ? 'tool calling' : 'structured output'}.`, undefined, task.id)
+    const resources = this.deps.agentResources
+      ? await this.deps.agentResources({ task, model, worktreePath: worktree.path, supportsTools: profile?.toolCalling ?? false }).catch((error: unknown) => {
+          this.event('warn', 'agent_resources_failed', `${task.key}: skills/tools unavailable (${error instanceof Error ? error.message : String(error)}).`, undefined, task.id)
+          return undefined
+        })
+      : undefined
+    this.event('info', 'agent_started', `${task.key}: ${task.agent ? `${task.agent.name} mit ` : ''}${model}${round ? ` (repair ${round})` : ''}, ${profile?.toolCalling ? 'tool calling' : 'structured output'}${resources?.sources?.length ? `, mit ${resources.sources.join(', ')}` : ''}.`, undefined, task.id)
     const result: LocalAgentResult = await runLocalAgent({
-      client: this.deps.ollama,
+      client: this.deps.localClientFor?.(model) ?? this.deps.ollama,
       model,
       supportsTools: profile?.toolCalling ?? false,
       supportsThinking: profile?.thinking,
       workspace,
       task: { id: task.key, title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria, relevantFiles: task.relevantFiles, newFiles: task.newFiles },
-      context: renderContext(digest, 10_000),
+      context: [renderContext(digest, 10_000), this.handoffContext(task)].filter(Boolean).join('\n\n'),
       previousFailures: previousFailures || undefined,
       search: (query) => searchCode(worktree.path, query, { maxResults: 30 }),
+      extraTools: task.agent?.permissions?.externalTools === false ? [] : resources?.tools,
+      extraInstructions: [task.agent?.instructions ? `## Your role: ${task.agent.name}\n${task.agent.instructions}` : '', resources?.instructions ?? ''].filter(Boolean).join('\n\n') || undefined,
+      maxSteps: task.agent?.maxSteps,
+      maxOutputTokens: task.agent?.resources?.maxOutputTokens,
       numCtx,
-      timeoutMs: this.deps.settings.taskTimeoutMs,
+      keepAlive: this.deps.settings.keepAlive,
+      timeoutMs: Math.min(this.deps.settings.taskTimeoutMs, task.agent?.resources?.timeoutMs ?? Infinity),
       signal,
       onEvent: (event) => {
         if (event.type === 'tool_call') {
@@ -696,11 +864,23 @@ export class ExecutionRunner {
       outputTokens: result.completionTokens,
       tokensMeasured: true,
       sessionId: undefined as string | undefined,
+      summary: result.summary,
     }
   }
 
   private async runPremium(task: EngineTask, worktree: WorktreeHandle, previousFailures: string, signal: AbortSignal, logs: string[], round: number, resumeSessionId?: string) {
     const orchestrator = this.deps.orchestrator!
+    if (task.agent?.maxContextTokens !== undefined || task.agent?.resources?.maxOutputTokens !== undefined) {
+      const error = `Agent ${task.agent.name}: hard context/output token limits are not supported by the premium CLI; no call was started.`
+      this.event('error', 'agent_resource_limit', error, undefined, task.id)
+      return { hardFailure: true, timedOut: false, error, inputTokens: 0, outputTokens: 0, tokensMeasured: true, sessionId: undefined as string | undefined, summary: undefined as string | undefined }
+    }
+    // a premium CLI reads the worktree itself: "no read permission" cannot be enforced there
+    if (task.agent?.permissions?.read === false) {
+      const error = `Agent ${task.agent.name} has no read permission; this can only be enforced for local agents, not for ${orchestrator.displayName}.`
+      this.event('error', 'agent_permission', `${task.key}: ${error}`, undefined, task.id)
+      return { hardFailure: true, timedOut: false, error, inputTokens: 0, outputTokens: 0, tokensMeasured: true, sessionId: undefined as string | undefined, summary: undefined as string | undefined }
+    }
     this.event('info', 'agent_started', `${task.key}: ${orchestrator.displayName}${round ? ' (repair)' : ''}.`, undefined, task.id)
     const started = Date.now()
     try {
@@ -717,8 +897,11 @@ export class ExecutionRunner {
         {
           runId: `${this.run.id}:${task.key}`,
           cwd: worktree.path,
+          mcpRole: 'coder',
+          // externalTools: false = no MCP tools at all; otherwise the agent's assigned servers
+          mcpServers: task.agent?.permissions?.externalTools === false ? [] : task.agent?.mcpServers,
           signal,
-          timeoutMs: this.deps.settings.taskTimeoutMs,
+          timeoutMs: Math.min(this.deps.settings.taskTimeoutMs, task.agent?.resources?.timeoutMs ?? Infinity),
           effort: task.complexity >= 4 ? 'high' : 'medium',
           onEvent: (event) => this.forwardOrchestratorEvent(event, task, logs),
         },
@@ -728,7 +911,7 @@ export class ExecutionRunner {
         purpose: round ? 'repair' : 'execute', status: 'ok', sessionId: meta.sessionId, durationMs: meta.durationMs, usage: meta.usage,
       })
       logs.push(`Summary: ${result.summary}`)
-      return { hardFailure: false, timedOut: false, error: undefined as string | undefined, inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, tokensMeasured: meta.usage.measured, sessionId: result.sessionId }
+      return { hardFailure: false, timedOut: false, error: undefined as string | undefined, inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, tokensMeasured: meta.usage.measured, sessionId: result.sessionId, summary: result.summary as string | undefined }
     } catch (error) {
       const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
       const message = error instanceof Error ? error.message : String(error)
@@ -741,7 +924,7 @@ export class ExecutionRunner {
         this.event('error', 'premium_blocked', `${this.premiumBlockedReason}. Premium execution disabled for this run. ${message.slice(0, 300)}`, { kind }, task.id)
       }
       logs.push(`Error (${kind}): ${message}`)
-      return { hardFailure: true, timedOut: kind === 'timeout', error: `${kind}: ${message}`, inputTokens: 0, outputTokens: 0, tokensMeasured: false, sessionId: undefined }
+      return { hardFailure: true, timedOut: kind === 'timeout', error: `${kind}: ${message}`, inputTokens: 0, outputTokens: 0, tokensMeasured: false, sessionId: undefined, summary: undefined }
     }
   }
 
@@ -805,7 +988,16 @@ export class ExecutionRunner {
         status: 'planned',
       }
       this.event('info', 'review_fix_started', `Review requested changes; running one fix round (${review.result.requiredFixes.length} item(s)).`)
-      const fixStore: EngineStore = { ...store, updateTask: async () => undefined }
+      // explicit delegation: the store is usually a class instance whose methods live on the
+      // prototype, so an object spread would drop them (→ "store.emit is not a function")
+      const fixStore: EngineStore = {
+        updateRun: (runId, patch) => store.updateRun(runId, patch),
+        updateTask: async () => undefined,
+        startAttempt: (input) => store.startAttempt(input),
+        finishAttempt: (attemptId, input) => store.finishAttempt(attemptId, input),
+        recordModelCall: (call) => store.recordModelCall(call),
+        emit: (event) => store.emit(event),
+      }
       const runner = new ExecutionRunner(this.run, [fixTask], { ...this.deps, store: fixStore })
       runner.integrationWorktree = integration
       runner.decisions.set('review-fix', runner.route(fixTask))
@@ -906,6 +1098,26 @@ export async function commitIfChanged(worktreePath: string, message: string): Pr
   await stageAll(worktreePath)
   if (!(await hasStagedChanges(worktreePath))) return undefined
   return commitStaged(worktreePath, message)
+}
+
+const REMOVAL_TASK = /\b(remove|delete|drop|strip|clean ?up|entfern\w*|lösch\w*|streich\w*|aufräum\w*)\b/i
+
+/**
+ * Detects an attempt that only removed code (e.g. an import replaced by a lone ";") although the task
+ * asks for an implementation. Returns the reason, or undefined when the change has substance.
+ */
+export function hollowChange(diff: string, taskText: string): string | undefined {
+  if (REMOVAL_TASK.test(taskText)) return undefined
+  let added = 0
+  let removed = 0
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    // a line counts when it has at least a few letters/digits, not just punctuation or whitespace
+    const substance = line.slice(1).replace(/[^\p{L}\p{N}]/gu, '').length >= 3
+    if (line.startsWith('+') && substance) added += 1
+    else if (line.startsWith('-') && substance) removed += 1
+  }
+  return added === 0 && removed > 0 ? `The change only removed code (${removed} line(s)) and added nothing.` : undefined
 }
 
 function summarizePatch(patch: PatchValidationResult): string {

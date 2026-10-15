@@ -27,6 +27,7 @@ export interface Settings {
   premiumExecutionAllowed: boolean
   premiumReviewPolicy: 'risk_based' | 'always' | 'never'
   planApproval: boolean
+  autoStartSmallPlans: boolean
   maxTasks: number
   maxLocalRepairs: number
   maxEscalationSteps: number
@@ -36,6 +37,10 @@ export interface Settings {
   ollamaBaseUrl: string
   ollamaModelsDir: string | null
   numCtx: number
+  modelWarmup: boolean
+  keepAliveMinutes: number
+  fastPath: boolean
+  formatOnSave: boolean
   taskTimeoutMinutes: number
   modelRoles: Record<LocalRole, string | null>
   allowProjectCode: boolean
@@ -142,6 +147,8 @@ export interface Subtask {
   selectedModelName?: string | null
   modelReason?: string | null
   manualModel?: string | null
+  fastPath?: Record<string, unknown> | null
+  agentId?: string | null
   allowedFiles: string[]
   newFiles: string[]
   dependsOn: string[]
@@ -180,6 +187,7 @@ export interface Task {
   status: string
   currentStep: string
   createdAt: string
+  planning?: { startedAt: string; phase: 'queued' | 'preparing' }
   subtasks: Subtask[]
   chatMessages?: ChatMessage[]
   plans?: TaskPlan[]

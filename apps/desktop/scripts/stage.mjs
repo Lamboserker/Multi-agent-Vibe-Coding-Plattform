@@ -2,6 +2,8 @@
 // bundled main/preload/renderer/backend, SQL migrations, and the few native/external modules
 // (Prisma client + query engine, node-pty prebuilds). No dev dependencies end up in the installer.
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,7 +30,49 @@ cpSync(path.join(root, 'dist/preload'), path.join(out, 'dist/preload'), { recurs
 cpSync(path.join(root, 'dist/renderer'), path.join(out, 'dist/renderer'), { recursive: true })
 mkdirSync(path.join(out, 'backend'), { recursive: true })
 cpSync(path.join(root, 'dist/backend/main.cjs'), path.join(out, 'backend/main.cjs'))
+cpSync(path.join(root, 'dist/backend/plugin-host.cjs'), path.join(out, 'backend/plugin-host.cjs'))
+for (const file of ['ts-worker.cjs', 'boot.cjs', 'ts-worker-boot.cjs']) cpSync(path.join(root, 'dist/backend', file), path.join(out, 'backend', file))
+cpSync(path.join(root, 'dist/backend/lsp-server.mjs'), path.join(out, 'backend/lsp-server.mjs'))
+cpSync(path.join(root, 'dist/backend/typescript'), path.join(out, 'backend/typescript'), { recursive: true })
+// plugins and skills shipped with the app (trusted)
+for (const folder of ['plugins', 'skills']) {
+  if (existsSync(path.join(repo, folder))) cpSync(path.join(repo, folder), path.join(out, folder), { recursive: true, filter: (file) => !/[\\/]node_modules[\\/]/.test(file) })
+}
 cpSync(path.join(repo, 'prisma/migrations'), path.join(out, 'backend/migrations'), { recursive: true })
+
+// build assignment: which source state this package was built from (commit + uncommitted changes)
+{
+  const git = (args) => {
+    try {
+      return execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+    } catch {
+      return ''
+    }
+  }
+  const status = git(['status', '--porcelain=v1', '--untracked-files=all'])
+  const tracked = git(['diff', 'HEAD', '--binary'])
+  const untracked = status.split('\n').filter((line) => line.startsWith('?? ')).map((line) => line.slice(3).replace(/^"|"$/g, '')).sort()
+  const hash = createHash('sha256').update(tracked)
+  for (const file of untracked) {
+    hash.update(`\0${file}\0`)
+    try { hash.update(readFileSync(path.join(repo, file))) } catch { /* directories/unreadable */ }
+  }
+  // A content manifest distinguishes source changes from later documentation-only edits.
+  // Ignored runtime data/secrets/build outputs never enter this git-listed source inventory.
+  const sourceFiles = Object.fromEntries(git(['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0')
+    .filter((file) => /^(apps\/|packages\/|plugins\/|skills\/|prisma\/|pnpm-|package\.json$|tsconfig|scripts\/)/.test(file) && !file.includes('/results/') && !/(^|\/)\.env($|\.)/.test(file))
+    .sort().flatMap((file) => { try { return [[file, createHash('sha256').update(readFileSync(path.join(repo, file))).digest('hex')]] } catch { return [] } }))
+  writeFileSync(path.join(out, 'build-info.json'), JSON.stringify({
+    version: pkg.version,
+    commit: git(['rev-parse', 'HEAD']).trim() || null,
+    branch: git(['rev-parse', '--abbrev-ref', 'HEAD']).trim() || null,
+    uncommittedChanges: status.trim().split('\n').filter(Boolean).length,
+    workingTreeSha256: hash.digest('hex'),
+    sourceFiles,
+    sourceSha256: createHash('sha256').update(JSON.stringify(sourceFiles)).digest('hex'),
+    builtAt: new Date().toISOString(),
+  }, null, 2))
+}
 if (existsSync(path.join(root, 'build/icon.png'))) cpSync(path.join(root, 'build/icon.png'), path.join(out, 'build/icon.png'))
 
 // --- external runtime modules ---------------------------------------------------------------

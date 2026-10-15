@@ -17,6 +17,7 @@ import {
   type SideView,
   type Theme,
   type Toast,
+  type UiState,
   type WorkspaceState,
 } from './stores'
 import type { Activity, ExecutionRun, FileContent, Project, RunEvent, SessionDetail, SessionSummary, Settings, Task, VersionedSettings } from './types'
@@ -45,6 +46,8 @@ function applySettings(next: VersionedSettings) {
   const current = appStore.get().settings
   if (current && typeof next.version === 'number' && next.version < current.version) return
   appStore.set({ settings: next })
+  // last known settings: lets the next start show the workspace before the runtime is ready
+  persistence.saveDocument('settings-cache', next)
 }
 
 export async function loadSettings() {
@@ -68,7 +71,12 @@ export async function updateSettings(patch: Partial<Settings>) {
 // ---------------------------------------------------------------------------
 
 export function setSideView(sideView: SideView) {
-  appStore.set((state) => ({ ui: { ...state.ui, sideView } }))
+  appStore.set((state) => ({ ui: { ...state.ui, sideView, sideOpen: true } }))
+}
+
+/** Activity bar click: clicking the view that is already shown collapses the side panel. */
+export function toggleSideView(sideView: SideView) {
+  appStore.set((state) => ({ ui: { ...state.ui, sideView, sideOpen: !(state.ui.sideOpen && state.ui.sideView === sideView) } }))
 }
 
 export function setBottomTab(bottomTab: BottomTab) {
@@ -76,7 +84,19 @@ export function setBottomTab(bottomTab: BottomTab) {
 }
 
 export function setBottomOpen(bottomOpen: boolean) {
-  appStore.set((state) => ({ ui: { ...state.ui, bottomOpen } }))
+  appStore.set((state) => ({ ui: { ...state.ui, bottomOpen, bottomMaximized: bottomOpen && state.ui.bottomMaximized } }))
+}
+
+export function setLayout(patch: Partial<Pick<UiState, 'sideOpen' | 'chatOpen' | 'bottomMaximized' | 'chatWidth' | 'bottomHeight'>>) {
+  appStore.set((state) => ({ ui: { ...state.ui, ...patch } }))
+}
+
+export function setSideWidth(view: SideView, width: number | undefined) {
+  appStore.set((state) => ({ ui: { ...state.ui, sideWidths: { ...state.ui.sideWidths, [view]: width } } }))
+}
+
+export function toggleBottomMaximized() {
+  appStore.set((state) => ({ ui: { ...state.ui, bottomOpen: true, bottomMaximized: !state.ui.bottomMaximized } }))
 }
 
 export function setTheme(theme: Theme) {
@@ -90,6 +110,15 @@ export function updateWorkspace(patch: Partial<WorkspaceState> | ((workspace: Wo
 
 export function composerKey(sessionId?: string) {
   return sessionId ?? 'new'
+}
+
+/** The composer writes typing with a short delay; actions that extend the draft flush it first. */
+let composerFlush: (() => void) | undefined
+export function registerComposerFlush(flush: (() => void) | undefined) {
+  composerFlush = flush
+}
+export function flushComposer() {
+  composerFlush?.()
 }
 
 export function setComposerDraft(sessionId: string | undefined, patch: Partial<ComposerDraft>) {
@@ -122,16 +151,18 @@ export async function selectProject(project: Project) {
 }
 
 /** Switches the workspace to a project and restores its persisted work state. */
-export async function activateProject(project: Project) {
+export async function activateProject(project: Project, options: { onShown?: () => void } = {}) {
   const previous = appStore.get().project
   if (previous && previous.id !== project.id) {
     await persistence.flushNow()
     models.disposeProject(previous.id)
   }
   const { workspace, raw } = await persistence.loadWorkspace(project.id)
-  appStore.set((state) => ({ project, workspace, ui: { ...state.ui, lastProjectId: project.id } }))
+  appStore.set((state) => ({ project, workspace, ui: { ...state.ui, lastProjectId: project.id, lastProject: { id: project.id, name: project.name, repoPath: project.repoPath } } }))
   sessionStore.set({ list: [], listLoaded: false, active: undefined, task: undefined, execution: undefined, events: [], selectedSubtaskId: undefined })
   liveStore.set({ executionId: undefined, lines: [] })
+  // The project is known: the IDE can be shown while tabs, sessions and terminals load.
+  options.onShown?.()
   await Promise.all([restoreTabs(project.id, raw), loadSessions(), refreshTerminals()])
   const sessions = sessionStore.get().list
   // null = the user deliberately started a new (not yet created) session; absent = never chosen
@@ -294,7 +325,7 @@ export function closeTab(id: string, force = false): 'closed' | 'needs_confirmat
   editorStore.set((state) => {
     const index = state.tabs.findIndex((entry) => entry.id === id)
     const tabs = state.tabs.filter((entry) => entry.id !== id)
-    return { tabs, activeTabId: state.activeTabId === id ? tabs[Math.max(0, index - 1)]?.id : state.activeTabId }
+    return { tabs, activeTabId: state.activeTabId === id ? tabs[Math.max(0, index - 1)]?.id : state.activeTabId, splitTabId: state.splitTabId === id ? undefined : state.splitTabId }
   })
   return 'closed'
 }
@@ -371,9 +402,21 @@ export function upsertSessionSummary(summary: Partial<SessionSummary> & { id: st
 /** Shows a session. Nothing is cancelled or reset by switching: the runtime keeps running its work. */
 export async function selectSession(sessionId: string | undefined) {
   if (appStore.get().workspace.activeSessionId !== sessionId) updateWorkspace({ activeSessionId: sessionId })
-  if (sessionStore.get().active?.id !== sessionId) sessionStore.set({ active: undefined, task: undefined, execution: undefined, events: [], selectedSubtaskId: undefined })
+  if (sessionStore.get().active?.id !== sessionId) sessionStore.set({ active: undefined, task: undefined, execution: undefined, events: [], selectedSubtaskId: undefined, older: undefined })
   if (!sessionId) return
   await reloadActiveSession()
+}
+
+/** Loads the next older page of the active chat (100 messages) in front of the loaded ones. */
+export async function loadOlderMessages() {
+  const { active, older } = sessionStore.get()
+  if (!active) return
+  const current = older?.sessionId === active.id ? older : undefined
+  const oldest = current?.messages[0] ?? active.messages[0]
+  if (!oldest) return
+  const page = await api.get<SessionDetail>(`/sessions/${active.id}/messages?before=${encodeURIComponent(oldest.createdAt)}&limit=100`)
+  if (sessionStore.get().active?.id !== active.id) return
+  sessionStore.set({ older: { sessionId: active.id, messages: [...page.messages, ...(current?.messages ?? [])], hasMore: page.hasMore } })
 }
 
 export async function reloadActiveSession() {
@@ -412,7 +455,9 @@ export async function reloadExecution(executionId: string | undefined = sessionS
     sessionStore.set({ execution: undefined, events: [] })
     return
   }
-  const result = await Promise.all([api.get<ExecutionRun>(`/executions/${executionId}`), api.get<RunEvent[]>(`/executions/${executionId}/events`)]).catch(() => undefined)
+  // events: all of them (long runs have 10,000+), incrementally behind the ones already loaded
+  const known = sessionStore.get().execution?.id === executionId ? sessionStore.get().events : []
+  const result = await Promise.all([api.get<ExecutionRun>(`/executions/${executionId}`), loadEvents(executionId, known)]).catch(() => undefined)
   if (!result) return
   const task = sessionStore.get().task
   if (task && task.executions?.[0] && task.executions[0].id !== executionId) return // a newer run was selected meanwhile
@@ -420,8 +465,27 @@ export async function reloadExecution(executionId: string | undefined = sessionS
   if (liveStore.get().executionId !== executionId) liveStore.set({ executionId, lines: [] })
 }
 
+async function loadEvents(executionId: string, known: RunEvent[]): Promise<RunEvent[]> {
+  let events = known
+  for (let page = 0; page < 10 && events.length < 20_000; page++) {
+    const last = events.at(-1)
+    const batch = await api.get<RunEvent[]>(`/executions/${executionId}/events?limit=2000${last ? `&after=${encodeURIComponent(last.createdAt)}&afterId=${encodeURIComponent(last.id)}` : ''}`)
+    if (batch.length) events = [...events, ...batch]
+    if (batch.length < 2000) break
+  }
+  return events
+}
+
 export function setSelectedSubtask(subtaskId: string | undefined) {
   sessionStore.set({ selectedSubtaskId: subtaskId })
+}
+
+/** All execution entry points lead to the same session workflow, including a hidden chat panel. */
+export async function openWorkflow(sessionId?: string) {
+  if (sessionId && appStore.get().workspace.activeSessionId !== sessionId) await selectSession(sessionId)
+  setLayout({ chatOpen: true })
+  updateWorkspace({ chatView: 'workflow' })
+  requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-testid="workflow"]')?.focus({ preventScroll: true }))
 }
 
 function newClientId() {
@@ -436,6 +500,7 @@ function newClientId() {
 export async function sendMessage(content: string, mode: 'task' | 'ask', autoRun: boolean) {
   const project = appStore.get().project
   if (!project || !content.trim()) return
+  updateWorkspace({ chatView: mode === 'task' ? 'workflow' : 'history' })
   const clientId = newClientId()
   const sessionId = appStore.get().workspace.activeSessionId
   sessionStore.set((state) => ({ pending: [...state.pending, { clientId, sessionId, content, mode, status: 'sending', createdAt: new Date().toISOString() }] }))
@@ -488,6 +553,7 @@ export function discardPending(clientId: string) {
 }
 
 export function newSession() {
+  updateWorkspace({ chatView: 'workflow' })
   void selectSession(undefined)
 }
 

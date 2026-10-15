@@ -117,6 +117,7 @@ test('a real run keeps running and stays in its session across navigation, reloa
       validation: run.finalValidation?.summary,
       premiumCalls: run.usage?.premium.calls,
     })
+    report.coding = { status: finalStatus, ok: ['awaiting_approval', 'completed'].includes(finalStatus), task: detail.tasks[0], attempts: run.agentRuns, finalValidation: run.finalValidation }
     assert.equal(run.usage?.premium.calls ?? 0, 0, 'no premium call happened')
     if (finalStatus === 'awaiting_approval') await page.getByText('Änderungen bereit zur Freigabe').first().waitFor({ timeout: 20_000 })
 
@@ -134,6 +135,7 @@ test('a real run keeps running and stays in its session across navigation, reloa
     step('app restart', { restartedStatus })
     await page.screenshot({ path: path.join(resultsDir, `${id}-navigation-run-restart.png`) })
     report.ok = true
+    report.acceptance = { navigation: true, persistence: true, coding: report.coding.ok }
   } finally {
     report.consoleErrors = session.consoleErrors
     report.finishedAt = new Date().toISOString()

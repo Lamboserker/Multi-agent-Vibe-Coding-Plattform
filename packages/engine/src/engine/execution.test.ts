@@ -12,6 +12,7 @@ import { detectValidationChecks } from '../validation/checks.js'
 import {
   DEFAULT_ENGINE_SETTINGS,
   ExecutionRunner,
+  hollowChange,
   type AttemptFinish,
   type AttemptStart,
   type EngineEvent,
@@ -201,6 +202,44 @@ describe('ExecutionRunner (real git, real validation, scripted model)', () => {
     expect(store.attempts[0]!.errorMessage).toContain('syntax_error')
   }, 60_000)
 
+  it('hands a compact result of finished tasks to dependent tasks and applies the assigned agent', async () => {
+    const { deps, repo } = await setup((request) => {
+      const key = taskKeyOf(request)
+      const step = toolResults(request)
+      if (key === 'task-001') return [write('src/greet.js', GREET), { toolCalls: [{ name: 'finish', arguments: { summary: 'Added greet(name) in src/greet.js returning "Hello <name>".' } }] }][step] ?? finish
+      return [{ toolCalls: [{ name: 'edit_file', arguments: { path: 'src/index.js', search: "export { add } from './math.js'", replace: "export { add } from './math.js'\nexport { greet } from './greet.js'" } }] }, finish][step] ?? finish
+    })
+    const tasks = [
+      task('task-001', { newFiles: ['src/greet.js'] }),
+      task('task-002', { relevantFiles: ['src/index.js'], dependsOn: ['task-001'], agent: { id: 'a1', name: 'Frontend-Agent', escalation: 'none', maxSteps: 5, instructions: 'Always export new helpers from src/index.js.' } }),
+    ]
+    const outcome = await new ExecutionRunner({ id: 'run-handoff-0009', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, tasks, deps).execute()
+    expect(outcome.status).toBe('awaiting_approval')
+    const second = fake!.requests.find((request) => taskKeyOf(request) === 'task-002')!
+    const prompt = second.messages[1]!.content
+    expect(prompt).toContain('## Results of prerequisite tasks')
+    expect(prompt).toContain('task-001 "task-001": Added greet(name) in src/greet.js returning "Hello <name>". Files: src/greet.js')
+    expect(second.messages[0]!.content).toContain('## Your role: Frontend-Agent\nAlways export new helpers from src/index.js.')
+  }, 60_000)
+
+  it('an agent with escalation "none" does not escalate to a stronger model', async () => {
+    const models: LocalModelRuntime[] = [
+      { model: 'small:1b', roles: ['fast'], toolCalling: true, contextWindow: 32768, available: true },
+      { model: 'big:7b', roles: ['balanced'], toolCalling: true, contextWindow: 32768, available: true },
+    ]
+    const { store, deps, repo } = await setup((request) => [write('src/greet.js', 'export const greet = (name => {\n'), finish][toolResults(request)] ?? finish, models)
+    deps.settings = { ...deps.settings, maxLocalRepairs: 2 }
+    const runner = new ExecutionRunner(
+      { id: 'run-noescalate-0010', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { newFiles: ['src/greet.js'], agent: { id: 'a2', name: 'Sparsam', escalation: 'none', maxRepairs: 0 } })],
+      deps,
+    )
+    const outcome = await runner.execute()
+    expect(outcome.status).toBe('failed')
+    // one attempt only: maxRepairs 0 and no escalation to big:7b
+    expect(store.attempts.map((attempt) => attempt.model)).toEqual(['small:1b'])
+  }, 60_000)
+
   it('blocks writes outside the task scope and to secrets at the tool layer', async () => {
     const { store, deps, repo } = await setup((request) => {
       const step = toolResults(request)
@@ -283,6 +322,21 @@ describe('ExecutionRunner (real git, real validation, scripted model)', () => {
     expect(resumed.diff!.match(/\+\+\+ b\/src\/greet\.js/g)).toHaveLength(1)
   }, 90_000)
 
+  it('fast path: a deterministic tool task is integrated without any model call', async () => {
+    const { repo, store, deps } = await setup(() => {
+      throw new Error('no model must be called')
+    })
+    const tool = { kind: 'rename' as const, files: ['src/math.js'], from: 'add', to: 'sum' }
+    const outcome = await new ExecutionRunner({ id: 'run-fastpath-0009', projectKey: 'demo', repoPath: repo, goal: 'Rename add to sum' }, [task('task-001', { relevantFiles: ['src/math.js'], tool })], deps).execute()
+    expect(outcome.status).toBe('awaiting_approval')
+    expect(outcome.finalValidation?.ok).toBe(true) // the renamed call sites in the tests still pass
+    expect(outcome.diff).toContain('export const sum')
+    expect(outcome.diff).toContain('export { sum }')
+    expect(store.attempts.map((attempt) => [attempt.executor, attempt.model, attempt.outcome])).toEqual([['deterministic', 'tool:rename', 'success']])
+    expect(fake!.requests).toHaveLength(0)
+    expect(store.calls).toHaveLength(0)
+  }, 60_000)
+
   it('cancels a running run and leaves no task worktrees behind', async () => {
     const { deps, worktrees, repo } = await setup(() => ({ content: '', stallMs: 5000 }))
     const runner = new ExecutionRunner({ id: 'run-cancel-0007', projectKey: 'demo', repoPath: repo, goal: 'x' }, [task('task-001'), task('task-002')], deps)
@@ -294,4 +348,172 @@ describe('ExecutionRunner (real git, real validation, scripted model)', () => {
     const remaining = await worktrees.listManaged(repo)
     expect(remaining.every((entry) => entry.branch?.endsWith('/integration'))).toBe(true)
   }, 60_000)
+})
+
+describe('agent limits are enforced during real execution', () => {
+  const toolMessages = () => fake!.requests.at(-1)!.messages.filter((message) => message.role === 'tool').map((message) => message.content)
+
+  it('local agent: no write permission → every write is refused, nothing is integrated', async () => {
+    const { deps, repo } = await setup((request) => [write('src/greet.js', GREET), finish][toolResults(request)] ?? finish)
+    const runner = new ExecutionRunner({ id: 'run-noperm-0101', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'], agent: { id: 'ro', name: 'Leser', escalation: 'none', maxRepairs: 0, permissions: { write: false } } })], deps)
+    const outcome = await runner.execute()
+    expect(outcome.status).toBe('failed')
+    expect(toolMessages()[0]).toMatch(/no write permission/)
+    expect(existsSync(path.join(repo, 'src/greet.js'))).toBe(false)
+  }, 60_000)
+
+  it('local agent: file limit, context budget and output token limit reach the model call', async () => {
+    const { deps, repo } = await setup((request) => [write('src/greet.js', GREET), write('src/other.js', 'export const x = 1\n'), finish][toolResults(request)] ?? finish)
+    const runner = new ExecutionRunner(
+      { id: 'run-limits-0102', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { newFiles: ['src/greet.js', 'src/other.js'], agent: { id: 'lim', name: 'Begrenzt', escalation: 'none', maxRepairs: 0, maxContextTokens: 4096, resources: { maxFiles: 1, maxOutputTokens: 2000 } } })],
+      deps,
+    )
+    const outcome = await runner.execute()
+    expect(toolMessages()[1]).toMatch(/file resource limit/)
+    const options = (fake!.requests[0] as unknown as { options: { num_ctx: number; num_predict: number } }).options
+    expect(options.num_ctx).toBe(4096)
+    expect(options.num_predict).toBeLessThanOrEqual(2000)
+    expect(outcome.diff ?? '').not.toContain('src/other.js')
+  }, 60_000)
+
+  it('local agent: the time limit of the agent ends a stalled model call', async () => {
+    const { deps, repo, store } = await setup(() => ({ content: '', stallMs: 20_000 }))
+    const started = Date.now()
+    const runner = new ExecutionRunner({ id: 'run-timeout-0103', projectKey: 'demo', repoPath: repo, goal: 'x' }, [task('task-001', { newFiles: ['src/greet.js'], agent: { id: 'fast', name: 'Eilig', escalation: 'none', maxRepairs: 0, resources: { timeoutMs: 2000 } } })], deps)
+    const outcome = await runner.execute()
+    expect(outcome.status).toBe('failed')
+    expect(Date.now() - started).toBeLessThan(15_000)
+    expect(store.attempts[0]!.errorMessage ?? JSON.stringify(store.attempts[0])).toMatch(/time|timeout|stall/i)
+  }, 60_000)
+
+  function premium(onCall: (cwd: string) => Promise<void>) {
+    const calls: Array<{ mcpServers?: string[]; timeoutMs?: number }> = []
+    const orchestrator = {
+      id: 'codex', displayName: 'Fake Premium',
+      async executeComplexTask(_input: unknown, ctx: { cwd: string; mcpServers?: string[]; timeoutMs?: number }) {
+        calls.push({ mcpServers: ctx.mcpServers, timeoutMs: ctx.timeoutMs })
+        await onCall(ctx.cwd)
+        return { result: { summary: 'done', filesChanged: ['src/greet.js'], commandsRun: [] }, meta: { durationMs: 1, usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, measured: true, billing: 'subscription' } } }
+      },
+    }
+    return { calls, orchestrator }
+  }
+
+  it('premium agent: time limit and "no external tools" (no MCP servers) reach the CLI call', async () => {
+    const { deps, repo } = await setup(() => finish, [])
+    const { calls, orchestrator } = premium((cwd) => fs.writeFile(path.join(cwd, 'src/greet.js'), GREET))
+    const runner = new ExecutionRunner(
+      { id: 'run-premium-0104', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'], agent: { id: 'p', name: 'Premium', escalation: 'none', maxRepairs: 0, mcpServers: ['srv-1'], permissions: { externalTools: false }, resources: { timeoutMs: 7000 } } })],
+      { ...deps, orchestrator: orchestrator as never },
+    )
+    const outcome = await runner.execute()
+    expect(calls).toEqual([{ mcpServers: [], timeoutMs: 7000 }])
+    expect(outcome.status).toBe('awaiting_approval')
+  }, 60_000)
+
+  it('review fix round runs with a class-based store (events keep working)', async () => {
+    const { deps, repo, store } = await setup(() => finish, [])
+    const { orchestrator } = premium((cwd) => fs.writeFile(path.join(cwd, 'src/greet.js'), GREET))
+    const usage = { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, measured: true, billing: 'subscription' }
+    let reviews = 0
+    const reviewing = {
+      ...orchestrator,
+      async reviewResult() {
+        reviews += 1
+        const result = reviews === 1
+          ? { verdict: 'request_changes', score: 40, summary: 'needs a fix', issues: [{ severity: 'blocker', file: 'src/greet.js', message: 'fix it' }], requiredFixes: ['fix greet'] }
+          : { verdict: 'approve', score: 90, summary: 'ok', issues: [], requiredFixes: [] }
+        return { result, meta: { durationMs: 1, usage } }
+      },
+      async cancelRun() {},
+    }
+    const runner = new ExecutionRunner(
+      { id: 'run-review-fix', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'] })],
+      { ...deps, orchestrator: reviewing as never, settings: { ...deps.settings, premiumReviewPolicy: 'always' as const, reviewFixRounds: 1 } },
+    )
+    await runner.execute()
+    expect(reviews).toBeGreaterThanOrEqual(1)
+    expect(store.events.some((event) => event.type === 'review_fix_started')).toBe(true)
+    expect(store.events.some((event) => /is not a function/.test(event.message))).toBe(false)
+  }, 60_000)
+
+  it('premium agent: without write permission a change by the CLI is rejected before integration', async () => {
+    const { deps, repo } = await setup(() => finish, [])
+    const { calls, orchestrator } = premium((cwd) => fs.writeFile(path.join(cwd, 'src/greet.js'), GREET))
+    const runner = new ExecutionRunner(
+      { id: 'run-premium-0105', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'], agent: { id: 'p', name: 'Nur lesen', escalation: 'none', maxRepairs: 0, permissions: { write: false } } })],
+      { ...deps, orchestrator: orchestrator as never },
+    )
+    const outcome = await runner.execute()
+    expect(calls).toHaveLength(1)
+    expect(outcome.status).toBe('failed')
+    expect(outcome.diff ?? '').not.toContain('greet')
+  }, 60_000)
+
+  it('premium agent: "no read permission" cannot be enforced for a CLI and is refused before the call', async () => {
+    const { deps, repo, store } = await setup(() => finish, [])
+    const { calls, orchestrator } = premium(async () => undefined)
+    const runner = new ExecutionRunner(
+      { id: 'run-premium-0106', projectKey: 'demo', repoPath: repo, goal: 'x' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'], agent: { id: 'p', name: 'Blind', escalation: 'none', maxRepairs: 0, permissions: { read: false } } })],
+      { ...deps, orchestrator: orchestrator as never },
+    )
+    const outcome = await runner.execute()
+    expect(calls).toHaveLength(0)
+    expect(outcome.status).toBe('failed')
+    expect(store.events.some((event) => event.type === 'agent_permission')).toBe(true)
+  }, 60_000)
+})
+
+describe('load: parallel local agents (measured)', () => {
+  // 12 independent tasks, each agent call takes 400 ms in the fake model; real git worktrees and
+  // real validation (node --test) per task. Same work with 1 and with 4 local slots.
+  const runWith = async (slots: number) => {
+    const { deps, repo, worktrees, store } = await setup((request) => {
+      const key = taskKeyOf(request) ?? 'task-000'
+      const index = Number(key.slice(5))
+      return [{ ...write(`src/part${index}.js`, `export const part${index} = ${index}\n`), stallMs: 400 }, finish][toolResults(request)] ?? finish
+    })
+    deps.settings = { ...deps.settings, localSlots: slots }
+    const tasks = Array.from({ length: 12 }, (_, index) => task(`task-${String(index + 1).padStart(3, '0')}`, { newFiles: [`src/part${index + 1}.js`] }))
+    const heapBefore = process.memoryUsage().heapUsed
+    const started = Date.now()
+    const outcome = await new ExecutionRunner({ id: `run-load-${slots}-0200`, projectKey: 'demo', repoPath: repo, goal: 'parts' }, tasks, deps).execute()
+    const ms = Date.now() - started
+    const left = (await worktrees.listManaged(repo)).filter((entry) => !entry.branch?.endsWith('/integration'))
+    await fake?.close()
+    fake = undefined
+    return { outcome, ms, heapDeltaMb: Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024 / 1024), events: store.events.length, leftoverWorktrees: left.length }
+  }
+
+  it('4 slots run the agents concurrently, integrate all 12 results and leave no worktrees', async () => {
+    const sequential = await runWith(1)
+    const parallel = await runWith(4)
+    const metrics = { sequentialMs: sequential.ms, parallelMs: parallel.ms, speedup: Math.round((sequential.ms / parallel.ms) * 100) / 100, events: parallel.events, heapDeltaMb: parallel.heapDeltaMb }
+    // measured values for the acceptance report (console output is silenced in the test config)
+    if (process.env.MAC_LOAD_RESULT) await fs.writeFile(process.env.MAC_LOAD_RESULT, JSON.stringify(metrics))
+    for (const result of [sequential, parallel]) {
+      expect(result.outcome.status).toBe('awaiting_approval')
+      for (let index = 1; index <= 12; index++) expect(result.outcome.diff).toContain(`src/part${index}.js`)
+      expect(result.leftoverWorktrees).toBe(0)
+    }
+    expect(parallel.ms).toBeLessThan(sequential.ms)
+  }, 600_000)
+})
+
+describe('hollowChange', () => {
+  const diff = (...lines: string[]) => ['--- a/src/style.css', '+++ b/src/style.css', '@@ -1,2 +1,2 @@', ...lines].join('\n')
+
+  it('rejects an attempt that only replaced code with punctuation', () => {
+    expect(hollowChange(diff('-@import "bootstrap/dist/css/bootstrap.css";', '+;'), 'Baue alles auf TailwindCSS um')).toContain('only removed code')
+  })
+
+  it('accepts real replacements and explicit removal tasks', () => {
+    expect(hollowChange(diff('-@import "bootstrap/dist/css/bootstrap.css";', '+@import "tailwindcss";'), 'Baue alles auf TailwindCSS um')).toBeUndefined()
+    expect(hollowChange(diff('-import "bootstrap";'), 'Entferne Bootstrap')).toBeUndefined()
+  })
 })

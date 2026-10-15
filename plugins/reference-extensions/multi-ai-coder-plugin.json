@@ -1,0 +1,28 @@
+{
+  "id": "reference-extensions",
+  "name": "Referenz-Erweiterungen",
+  "version": "1.0.0",
+  "description": "Referenzimplementierung aller sechs Erweiterungspunkte: OpenAI-kompatibler lokaler Modellanbieter (LM Studio, llama.cpp, vLLM) und Orchestrator darauf, Manifest-Analyse, Test-Runner über Paket-Skripte/pytest, JSON-Diagnosen und Git über die git-CLI.",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["Erweiterungspunkte", "Lokale Modelle"],
+  "permissions": {
+    "network": ["127.0.0.1", "localhost"],
+    "fs": "project-write",
+    "processes": ["git", "npm", "pnpm", "yarn", "python"]
+  },
+  "contributes": {
+    "settings": [
+      { "key": "baseUrl", "title": "Basis-URL des OpenAI-kompatiblen Servers", "type": "string", "default": "http://127.0.0.1:1234/v1", "description": "Nur lokale Server (127.0.0.1/localhost)." },
+      { "key": "model", "title": "Modell für den Orchestrator (leer = erstes verfügbares)", "type": "string", "default": "" },
+      { "key": "contextTokens", "title": "Kontextfenster der Modelle (Tokens)", "type": "number", "default": 8192 }
+    ],
+    "modelProviders": [{ "id": "openai-compatible", "title": "OpenAI-kompatibler lokaler Server", "description": "Modelle von LM Studio, llama.cpp-Server, vLLM o. Ä. über /v1/models und /v1/chat/completions." }],
+    "orchestratorAdapters": [{ "id": "local-orchestrator", "title": "Lokaler Orchestrator (OpenAI-kompatibel)", "description": "Analyse, Planung, Ausführung (Dateiänderungen im Agenten-Worktree), Review und Chat mit einem lokalen Modell – ohne Abo." }],
+    "repositoryAnalyzers": [{ "id": "manifest-analyzer", "title": "Manifest-Analyse", "description": "Sprachen, Build-Werkzeuge, Skripte, Abhängigkeiten und Workspaces aus package.json, pyproject.toml, Cargo.toml, go.mod u. a." }],
+    "testRunners": [{ "id": "package-tests", "title": "Paket-Tests (npm/pnpm/yarn test, pytest)", "description": "Führt das Test-Skript des Projekts im Worktree aus und zählt bestandene/fehlgeschlagene Tests." }],
+    "languageIntegrations": [{ "id": "json-diagnostics", "title": "JSON-Diagnosen", "description": "Syntaxfehler in .json-Dateien mit Position; andere Dateien bleiben beim eingebauten Language Server." }],
+    "gitIntegrations": [{ "id": "git-cli", "title": "Git über die git-CLI", "description": "Status, Diff und Branches über die installierte git-CLI." }]
+  }
+}

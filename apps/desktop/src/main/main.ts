@@ -6,6 +6,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resourcePaths } from './paths.js'
 import { RuntimeManager } from './runtime.js'
+import { SecretVault } from './secret-vault.js'
 import { isValidProjectKey, isValidStateKey, StateStore } from './state-store.js'
 import { normalizeForCompare, TerminalManager, type PersistedTerminal } from './terminal.js'
 import {
@@ -37,6 +38,21 @@ if (!app.requestSingleInstanceLock()) {
 const dataDir = app.getPath('userData')
 const runtime = new RuntimeManager(dataDir)
 const state = new StateStore(path.join(dataDir, 'state'))
+const vault = new SecretVault(dataDir)
+// The runtime reads a secret only through this channel, after checking the plugin's/server's grant.
+runtime.onShellRequest((method, params) => {
+  if (method === 'secret:get') return vault.get(String(params.scope), String(params.name))
+  // used when importing MCP configurations: credential values go straight into the vault
+  if (method === 'secret:set' && /^mcp:/.test(String(params.scope))) {
+    vault.set(String(params.scope), String(params.name), String(params.value))
+    return true
+  }
+  if (method === 'secret:delete' && /^mcp:/.test(String(params.scope))) {
+    vault.delete(String(params.scope), String(params.name))
+    return true
+  }
+  throw new Error(`Unknown shell request ${method}.`)
+})
 let mainWindow: BrowserWindow | undefined
 
 // --- batched delivery to the renderer ------------------------------------------
@@ -210,6 +226,10 @@ function registerIpc() {
     packaged: app.isPackaged,
   }))
 
+  handle('app:metrics', () =>
+    app.getAppMetrics().map((entry) => ({ pid: entry.pid, type: entry.type, name: entry.name ?? entry.serviceName, cpuPercent: Math.round(entry.cpu.percentCPUUsage * 10) / 10, workingSetMb: Math.round(entry.memory.workingSetSize / 1024) })),
+  )
+
   handle('dialog:openFolder', async (_event, title) => {
     const result = await dialog.showOpenDialog(mainWindow!, { title: typeof title === 'string' ? title.slice(0, 100) : 'Ordner öffnen', properties: ['openDirectory', 'createDirectory'] })
     return result.canceled ? null : result.filePaths[0] ?? null
@@ -223,6 +243,16 @@ function registerIpc() {
     return result.filePath
   })
 
+  // secrets: the renderer can set, delete and list names, but never read values back
+  handle('secrets:set', (_event, scope, name, value) => {
+    vault.set(String(scope), String(name), String(value))
+    return true
+  })
+  handle('secrets:delete', (_event, scope, name) => {
+    vault.delete(String(scope), String(name))
+    return true
+  })
+  handle('secrets:names', (_event, scope) => ({ available: vault.available, names: vault.names(String(scope)) }))
   handle('shell:openExternal', async (_event, url) => {
     await shell.openExternal(validateExternalUrl(url))
     return true
@@ -243,6 +273,7 @@ function registerIpc() {
   })
   handle('terminal:list', (_event, projectId) => terminals.list(typeof projectId === 'string' ? projectId : undefined))
   handle('terminal:attach', (_event, id) => terminals.attach(validateTerminalId(id)) ?? null)
+  handle('terminal:history', (_event, id) => terminals.history(validateTerminalId(id)))
   handle('terminal:rename', (_event, id, title) => {
     terminals.rename(validateTerminalId(id), validateTerminalTitle(title))
     return true

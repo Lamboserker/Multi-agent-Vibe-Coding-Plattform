@@ -8,6 +8,9 @@ export type FileOperation =
   | { action: 'delete'; path: string }
 
 export interface WorkspaceScope {
+  allowRead?: boolean
+  allowWrite?: boolean
+  maxFiles?: number
   /** Patterns the agent may write. Empty = any non-denied file. */
   writablePatterns: string[]
   deniedPatterns: string[]
@@ -52,6 +55,8 @@ export class WorkspaceFiles {
   }
 
   assertWritable(requested: string) {
+    if (this.scope.allowWrite === false) throw new PathViolationError('This agent has no write permission.', requested)
+    if (!this.touched.has(requested) && this.touched.size >= (this.scope.maxFiles ?? Infinity)) throw new PathViolationError('Agent file resource limit reached.', requested)
     const resolved = this.resolve(requested)
     if (this.scope.writablePatterns.length && !matchesAny(resolved.relative, this.scope.writablePatterns)) {
       throw new PathViolationError(
@@ -63,6 +68,7 @@ export class WorkspaceFiles {
   }
 
   async read(requested: string, options: { startLine?: number; endLine?: number } = {}): Promise<{ path: string; content: string; totalLines: number; truncated: boolean }> {
+    if (this.scope.allowRead === false) throw new PathViolationError('This agent has no read permission.', requested)
     const { absolute, relative } = this.resolve(requested)
     let raw: string
     try {
@@ -87,6 +93,7 @@ export class WorkspaceFiles {
   }
 
   async list(requested = '.', depth = 2, limit = 300): Promise<string[]> {
+    if (this.scope.allowRead === false) throw new PathViolationError('This agent has no read permission.', requested)
     const base = requested === '.' || requested === '' ? { absolute: path.resolve(this.root), relative: '' } : this.resolve(requested)
     const results: string[] = []
     const walk = async (absolute: string, relative: string, level: number) => {

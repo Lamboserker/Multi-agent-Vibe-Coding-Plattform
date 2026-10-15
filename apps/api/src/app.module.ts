@@ -41,7 +41,20 @@ import { WorkspaceFsService } from './workspace-fs/workspace-fs.service.js'
 import { WorkspaceFsController } from './workspace-fs/workspace-fs.controller.js'
 import { SelfTestController } from './runtime/self-test.controller.js'
 import { SessionsService } from './sessions/sessions.service.js'
+import { DiagnosticsService } from './runtime/diagnostics.service.js'
 import { SessionsController } from './sessions/sessions.controller.js'
+import { PluginsService } from './plugins/plugins.service.js'
+import { PluginsController } from './plugins/plugins.controller.js'
+import { SkillsService } from './skills/skills.service.js'
+import { SkillsController } from './skills/skills.controller.js'
+import { McpService } from './mcp/mcp.service.js'
+import { McpController } from './mcp/mcp.controller.js'
+import { AgentResourcesService } from './agents/agent-resources.service.js'
+import { IdeService } from './ide/ide.service.js'
+import { AgentProfilesService } from './agents/agent-profiles.service.js'
+import { AgentsController } from './agents/agents.controller.js'
+import { IdeController } from './ide/ide.controller.js'
+import { LocalHistoryService } from './ide/local-history.service.js'
 
 @Module({
   controllers: [
@@ -62,6 +75,11 @@ import { SessionsController } from './sessions/sessions.controller.js'
     WorkspaceFsController,
     SelfTestController,
     SessionsController,
+    PluginsController,
+    SkillsController,
+    McpController,
+    IdeController,
+    AgentsController,
   ],
   providers: [
     PrismaService,
@@ -89,6 +107,14 @@ import { SessionsController } from './sessions/sessions.controller.js'
     RepoContextService,
     WorkspaceFsService,
     SessionsService,
+    DiagnosticsService,
+    PluginsService,
+    SkillsService,
+    McpService,
+    AgentResourcesService,
+    IdeService,
+    AgentProfilesService,
+    LocalHistoryService,
   ],
 })
 export class AppModule implements NestModule {

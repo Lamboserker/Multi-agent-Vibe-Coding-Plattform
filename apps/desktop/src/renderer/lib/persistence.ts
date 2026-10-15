@@ -150,10 +150,12 @@ export async function loadWorkspace(projectId: string): Promise<{ workspace: Wor
   const workspace: WorkspaceState = {
     ...EMPTY_WORKSPACE,
     activeSessionId: typeof raw.activeSessionId === 'string' ? raw.activeSessionId : undefined,
+      chatView: raw.chatView === 'history' ? 'history' : 'workflow',
     explorer: raw.explorer && typeof raw.explorer === 'object' ? { expanded: Array.isArray((raw.explorer as WorkspaceState['explorer']).expanded) ? (raw.explorer as WorkspaceState['explorer']).expanded : [''], selected: (raw.explorer as WorkspaceState['explorer']).selected } : EMPTY_WORKSPACE.explorer,
     composer: raw.composer && typeof raw.composer === 'object' ? (raw.composer as WorkspaceState['composer']) : {},
     gitMessage: typeof raw.gitMessage === 'string' ? raw.gitMessage : '',
     activeTerminalId: typeof raw.activeTerminalId === 'string' ? raw.activeTerminalId : undefined,
+    splitTerminalId: typeof raw.splitTerminalId === 'string' ? raw.splitTerminalId : undefined,
   }
   return { workspace, raw }
 }
@@ -164,6 +166,9 @@ export function startPersistence() {
   started = true
   lastUi = appStore.get().ui
   lastWorkspace = appStore.get().workspace
+  // changes made while the workspace was still being restored are written now
+  saveDocument('ui', lastUi)
+  touchWorkspace()
   appStore.subscribe(() => {
     const state = appStore.get()
     if (state.ui !== lastUi) {

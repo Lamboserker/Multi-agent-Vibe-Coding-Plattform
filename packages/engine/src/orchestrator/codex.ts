@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { runProcess } from '../util/process.js'
 import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from './cli-base.js'
-import { analysisPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
+import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
 import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
   OrchestratorError,
@@ -142,8 +142,7 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
     const checkedAt = new Date().toISOString()
     const binary = this.resolveBinary()
     if (!binary) return { orchestrator: this.id, installed: false, authenticated: false, usesApiKeyBilling: false, checkedAt, message: 'Codex CLI is not installed.' }
-    const version = await this.version(binary)
-    const result = await runProcess(binary, ['login', 'status'], { timeoutMs: 20_000, env: this.childEnv() })
+    const [version, result] = await Promise.all([this.version(binary), runProcess(binary, ['login', 'status'], { timeoutMs: 20_000, env: this.childEnv() })])
     const text = `${result.stdout}\n${result.stderr}`.trim()
     const chatgpt = /logged in using chatgpt/i.test(text)
     const apiKey = /logged in using an api key|api key/i.test(text) && !chatgpt
@@ -230,7 +229,18 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
   }
 
   async chat(input: ChatInput, ctx: CallContext) {
-    const call = await this.callStructured(withSystem(chatPrompt(input)), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: true }, ctx)
+    // Threads are kept (not ephemeral) so a follow-up question can resume them.
+    let call: Awaited<ReturnType<CodexAdapter['callStructured']>>
+    if (input.resumeSessionId) {
+      try {
+        call = await this.callStructured(chatFollowUpPrompt(input), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false, resumeSessionId: input.resumeSessionId }, ctx)
+      } catch (error) {
+        if (error instanceof OrchestratorError && ['cancelled', 'not_authenticated', 'session_expired', 'quota_exhausted', 'rate_limited'].includes(error.kind)) throw error
+        call = await this.callStructured(withSystem(chatPrompt(input)), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false }, ctx)
+      }
+    } else {
+      call = await this.callStructured(withSystem(chatPrompt(input)), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false }, ctx)
+    }
     const answer = (call.structured as { answer?: unknown })?.answer
     return { result: { answer: typeof answer === 'string' ? answer : call.text }, meta: call.meta }
   }
@@ -276,12 +286,47 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
     }
   }
 
+  private mcpServersCache?: { at: number; names: string[] }
+
+  /**
+   * MCP servers from the user's Codex configuration that would still be active with plugins disabled
+   * (`codex mcp list --json` reads configuration only; no model call). Cached for 5 minutes.
+   */
+  private async userMcpServers(): Promise<string[]> {
+    if (this.mcpServersCache && Date.now() - this.mcpServersCache.at < 5 * 60_000) return this.mcpServersCache.names
+    const binary = this.resolveBinary()
+    let names: string[] = []
+    if (binary) {
+      const result = await runProcess(binary, ['mcp', 'list', '--json', '--disable', 'plugins'], { timeoutMs: 20_000, env: this.childEnv() }).catch(() => undefined)
+      try {
+        names = (JSON.parse(result?.stdout ?? '[]') as Array<{ name?: unknown; enabled?: unknown }>).filter((entry) => typeof entry.name === 'string' && entry.enabled !== false).map((entry) => entry.name as string)
+      } catch {
+        names = []
+      }
+    }
+    this.mcpServersCache = { at: Date.now(), names }
+    return names
+  }
+
   private async callOnce(prompt: string, options: CodexCallOptions, ctx: CallContext): Promise<{ structured: unknown; text: string; meta: CallMeta }> {
     const schemaDir = mkdtempSync(path.join(os.tmpdir(), 'mac-codex-'))
     const schemaFile = path.join(schemaDir, 'schema.json')
     await fs.writeFile(schemaFile, JSON.stringify(options.schema), 'utf8')
 
     const shared = ['--json', '--output-schema', schemaFile, '--skip-git-repo-check', '--sandbox', options.sandbox]
+    // MCP isolation (verified with `codex mcp list --json`): a `-c mcp_servers={…}` table override only
+    // merges, so the user's own servers would stay active. Instead plugin-provided servers are switched
+    // off with the `plugins` feature and every remaining configured server with `enabled=false` – all
+    // per call, ~/.codex/config.toml is never written. The gateway then exposes only three small tools.
+    shared.push('--disable', 'plugins')
+    for (const name of await this.userMcpServers()) if (name !== 'app') shared.push('-c', `mcp_servers.${tomlKey(name)}.enabled=false`)
+    if (ctx.mcpGateway) {
+      shared.push('-c', `mcp_servers.app.url=${JSON.stringify(ctx.mcpGateway.url)}`, '-c', 'mcp_servers.app.enabled_tools=["search_tools","call_tool","read_result"]')
+      // codex exec runs with approval policy "never": tools needing approval are rejected. Only the three
+      // gateway tools are pre-approved; behind call_tool are only tools the app allows for agents
+      // ("confirm" tools never reach agents) and every call is re-checked by the app.
+      for (const tool of ['search_tools', 'call_tool', 'read_result']) shared.push('-c', `mcp_servers.app.tools.${tool}.approval_mode="approve"`)
+    }
     const model = this.effectiveModel()
     if (model) shared.push('-m', model)
     if (ctx.effort) shared.push('-c', `model_reasoning_effort="${ctx.effort}"`)
@@ -305,6 +350,7 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
         } else if (type === 'item.completed' || type === 'item.started') {
           const item = (event.item ?? {}) as Record<string, unknown>
           const itemType = String(item.type ?? '')
+          if (itemType === 'agent_message' || itemType === 'reasoning') this.markFirstOutput(ctx, 'event')
           if (itemType === 'agent_message' && type === 'item.completed' && typeof item.text === 'string') {
             lastMessage = item.text
             this.emit(ctx, { type: 'text', text: item.text })
@@ -350,6 +396,11 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
       rmSync(schemaDir, { recursive: true, force: true })
     }
   }
+}
+
+/** TOML key for a dotted `-c` path (bare keys allow letters, digits, "_" and "-"). */
+export function tomlKey(name: string) {
+  return /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name)
 }
 
 function withSystem(prompt: string): string {

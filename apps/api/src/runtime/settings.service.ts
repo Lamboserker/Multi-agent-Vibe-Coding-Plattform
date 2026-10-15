@@ -8,6 +8,8 @@ export type OrchestratorChoice = 'claude-code' | 'codex'
 export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree'
 
 export interface AppSettings {
+  languageServers: Array<{ command: string; args: string[]; extensions: string[]; languageId: string }>
+  pluginExtensions: Record<string, { plugin: string; id: string } | null>
   orchestrator: OrchestratorChoice | null
   claudeModel: string
   codexModel: string
@@ -20,6 +22,8 @@ export interface AppSettings {
   premiumReviewPolicy: 'risk_based' | 'always' | 'never'
   /** Ask the user to approve the plan before execution starts. */
   planApproval: boolean
+  /** With planApproval: small, low-risk plans (see isSmallSafePlan) start without asking. */
+  autoStartSmallPlans: boolean
   maxTasks: number
   maxLocalRepairs: number
   maxEscalationSteps: number
@@ -30,6 +34,14 @@ export interface AppSettings {
   /** Model storage used when Multi-AI Coder starts Ollama itself (OLLAMA_MODELS). null = Ollama default. */
   ollamaModelsDir: string | null
   numCtx: number
+  /** Load the planned local models in the background before the first agent call (memory permitting). */
+  modelWarmup: boolean
+  /** Small, unambiguous requests run without premium planning (see engine fastpath). */
+  fastPath: boolean
+  /** Format with the project's Prettier before saving (only when Prettier is installed). */
+  formatOnSave: boolean
+  /** How long Ollama keeps a local model loaded after its last use. */
+  keepAliveMinutes: number
   taskTimeoutMinutes: number
   modelRoles: { fast: string | null; balanced: string | null; advanced: string | null }
   allowProjectCode: boolean
@@ -56,6 +68,8 @@ export interface ModelSelfTest {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  languageServers: [],
+  pluginExtensions: {},
   orchestrator: null,
   claudeModel: '',
   codexModel: '',
@@ -65,6 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   premiumExecutionAllowed: true,
   premiumReviewPolicy: 'risk_based',
   planApproval: true,
+  autoStartSmallPlans: true,
   maxTasks: 8,
   maxLocalRepairs: 2,
   maxEscalationSteps: 2,
@@ -74,6 +89,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
   ollamaModelsDir: null,
   numCtx: 16_384,
+  modelWarmup: true,
+  fastPath: true,
+  formatOnSave: false,
+  keepAliveMinutes: 15,
   taskTimeoutMinutes: 20,
   modelRoles: { fast: null, balanced: null, advanced: null },
   allowProjectCode: true,

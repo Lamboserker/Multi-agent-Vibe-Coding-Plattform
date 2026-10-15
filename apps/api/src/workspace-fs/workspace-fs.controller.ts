@@ -18,7 +18,7 @@ export class WorkspaceFsController {
 
   @Put('file')
   write(@Param('id') id: string, @Body() body: unknown) {
-    return this.files.writeFile(id, str(body, 'path', { max: 1000 }), str(body, 'content', { optional: true, max: 6_000_000 }), num(body, 'expectedMtimeMs', { optional: true }))
+    return this.files.writeFile(id, str(body, 'path', { max: 1000 }), str(body, 'content', { optional: true, max: 6_000_000 }), num(body, 'expectedMtimeMs', { optional: true }), oneOf(body, 'reason', ['save', 'replace', 'rename', 'format', 'ai-edit', 'restore'] as const, 'save'))
   }
 
   @Post('entries')

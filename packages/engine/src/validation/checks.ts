@@ -3,10 +3,13 @@ import path from 'node:path'
 import { classifyCommand } from '../security/commands.js'
 import { redactSecrets } from '../security/paths.js'
 import { runProcess, sanitizedEnv } from '../util/process.js'
+import { withAbort } from '../util/abort.js'
 
 export type CheckKind = 'typecheck' | 'test' | 'lint' | 'build' | 'syntax'
 
 export interface ValidationCheck {
+  /** Executed by an isolated plugin host, supplied by the runtime. */
+  execute?: (cwd: string, signal?: AbortSignal) => Promise<{ passed: number; failed: number; output: string }>
   id: string
   kind: CheckKind
   command: string
@@ -143,6 +146,24 @@ export async function runValidationChecks(cwd: string, checks: ValidationCheck[]
   const results: CheckResult[] = []
   for (const check of checks) {
     if (options.signal?.aborted) break
+    if (check.execute) {
+      const started = Date.now()
+      let checkSignal: AbortSignal | undefined
+      if (options.allowProjectCode === false) {
+        results.push({ id: check.id, kind: check.kind, command: check.command, status: 'skipped', blocking: check.blocking, durationMs: 0, exitCode: null, output: '', reason: 'Running project code is disabled in settings.' })
+        continue
+      }
+      try {
+        checkSignal = AbortSignal.any([AbortSignal.timeout(check.timeoutMs), ...(options.signal ? [options.signal] : [])])
+        const value = await withAbort(check.execute(cwd, checkSignal), checkSignal)
+        if (!Number.isSafeInteger(value.passed) || value.passed < 0 || !Number.isSafeInteger(value.failed) || value.failed < 0 || typeof value.output !== 'string') throw new Error('Plugin test runner returned an invalid result.')
+        const status = value.failed ? 'failed' : 'passed'
+        results.push({ id: check.id, kind: check.kind, command: check.command, status, blocking: check.blocking, durationMs: Date.now() - started, exitCode: value.failed ? 1 : 0, testsPassed: value.passed, testsFailed: value.failed, output: redactSecrets(value.output).slice(-6000) })
+      } catch (error) {
+        results.push({ id: check.id, kind: check.kind, command: check.command, status: checkSignal?.reason?.name === 'TimeoutError' ? 'timeout' : 'error', blocking: check.blocking, durationMs: Date.now() - started, exitCode: null, output: '', reason: error instanceof Error ? error.message : String(error) })
+      }
+      continue
+    }
     const policy = classifyCommand(check.command)
     const approved = options.approvedCommands?.includes(check.command) ?? false
     if (policy.decision === 'deny' || (policy.decision === 'approval' && !approved) || (policy.runsProjectCode && options.allowProjectCode === false)) {
@@ -166,6 +187,7 @@ export async function runValidationChecks(cwd: string, checks: ValidationCheck[]
       timeoutMs: check.timeoutMs,
       signal: options.signal,
       maxOutputBytes: 512 * 1024,
+      cleanupChildren: true,
       onStdout: (chunk) => options.onOutput?.(check.id, chunk),
       onStderr: (chunk) => options.onOutput?.(check.id, chunk),
     })

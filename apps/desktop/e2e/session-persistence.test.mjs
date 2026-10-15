@@ -126,17 +126,20 @@ test('sessions, drafts and settings survive navigation, reload, renderer crash a
       assert.equal(afterCrash.tabDirty, 1)
       assert.equal(afterCrash.activeTab, before.activeTab)
       step('renderer crash recovered', { ms: report.crashRestoreMs })
+      // changed outside the settings view immediately before quitting
+      await cdp.evaluate("window.mac.api('PATCH', '/settings', { costMode: 'quality' }).then((response) => response.status)")
     } finally {
       await cdp.close()
     }
 
-    // --- full app restart ---
+    // --- full app restart; a setting changed right before quitting must win over the cached shell ---
     const restartStarted = Date.now()
     session = await launch(profile)
     ;({ app, page, api } = session)
     await waitRestored(() => page.evaluate(READ_UI), before, 'state restored after app restart')
     report.restartRestoreMs = Date.now() - restartStarted
     assert.deepEqual(await snapshot(page, api), before, 'an app restart must restore the same state')
+    await waitUntil(async () => (await page.locator('.status-bar').textContent()).includes('Modus: quality'), 10_000, 'current (not cached) settings after restart')
     const terminals = await page.evaluate(() => window.mac.terminal.list())
     assert.ok(terminals.some((terminal) => terminal.status === 'restored'), 'terminal history of the previous app session is available')
     step('app restart restored everything', { ms: report.restartRestoreMs, terminals: terminals.map((terminal) => terminal.status) })

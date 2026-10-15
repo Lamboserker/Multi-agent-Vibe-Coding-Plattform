@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { runProcess } from '../util/process.js'
 import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from './cli-base.js'
-import { analysisPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
+import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
 import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
   OrchestratorError,
@@ -33,6 +33,8 @@ interface ClaudeCallOptions {
   permissionMode?: 'default' | 'acceptEdits'
   persistSession?: boolean
   resumeSessionId?: string
+  /** Upper bound for agentic turns (tool round trips); the structured answer counts as one. */
+  maxTurns?: number
 }
 
 interface ClaudeCallResult {
@@ -47,6 +49,14 @@ interface ClaudeCallResult {
  * established with the official `claude auth login` flow (claude.ai subscription); the app never
  * reads or forwards tokens.
  */
+/**
+ * Claude otherwise guesses "/package.json" for a repo-relative path, which on Windows points to the
+ * drive root; every failed read costs a turn (seen in planning and review).
+ */
+function repositoryRootNote(cwd: string): string {
+  return `\n\n# Repository root\n${cwd}\nThe working directory is the repository root. Pass tool paths as absolute paths under it (e.g. ${path.join(cwd, 'src', 'main.ts')}); a path starting with "/" points outside the repository.`
+}
+
 export class ClaudeCodeAdapter extends CliOrchestratorBase implements OrchestratorAdapter {
   readonly id = 'claude-code' as const
   readonly displayName = 'Claude Code'
@@ -117,8 +127,7 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
     if (!binary) {
       return { orchestrator: this.id, installed: false, authenticated: false, usesApiKeyBilling: false, checkedAt, message: 'Claude Code CLI is not installed.' }
     }
-    const version = await this.version(binary)
-    const result = await runProcess(binary, ['auth', 'status', '--json'], { timeoutMs: 20_000, env: this.childEnv() })
+    const [version, result] = await Promise.all([this.version(binary), runProcess(binary, ['auth', 'status', '--json'], { timeoutMs: 20_000, env: this.childEnv() })])
     let parsed: Record<string, unknown> | undefined
     try {
       parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>
@@ -209,18 +218,30 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
   }
 
   async createPlan(input: PlanningInput, ctx: CallContext) {
-    // Read-only tools let the planner verify a file when the digest is insufficient.
-    const call = await this.callStructured(planningPrompt(input), { schema: PLAN_SCHEMA, tools: 'Read,Glob,Grep' }, ctx)
+    // Read-only tools let the planner verify a file when the digest is insufficient. The turn cap
+    // keeps it from exploring a large repository for minutes (seen: 10 min until the timeout).
+    const call = await this.callStructured(planningPrompt(input) + repositoryRootNote(ctx.cwd), { schema: PLAN_SCHEMA, tools: 'Read,Glob,Grep', maxTurns: ctx.effort === 'high' ? 16 : 8 }, ctx)
     return { result: normalizePlan(call.structured, input.maxTasks), meta: call.meta }
   }
 
   async reviewResult(input: ReviewInput, ctx: CallContext) {
-    const call = await this.callStructured(reviewPrompt(input), { schema: REVIEW_SCHEMA, tools: 'Read,Glob,Grep' }, ctx)
+    const call = await this.callStructured(reviewPrompt(input) + repositoryRootNote(ctx.cwd), { schema: REVIEW_SCHEMA, tools: 'Read,Glob,Grep' }, ctx)
     return { result: normalizeReview(call.structured), meta: call.meta }
   }
 
   async chat(input: ChatInput, ctx: CallContext) {
-    const call = await this.callStructured(chatPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep' }, ctx)
+    // Sessions are kept so a follow-up question can resume them instead of re-sending the context.
+    let call: ClaudeCallResult
+    if (input.resumeSessionId) {
+      try {
+        call = await this.callStructured(chatFollowUpPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true, resumeSessionId: input.resumeSessionId }, ctx)
+      } catch (error) {
+        if (error instanceof OrchestratorError && ['cancelled', 'not_authenticated', 'session_expired', 'quota_exhausted', 'rate_limited'].includes(error.kind)) throw error
+        call = await this.callStructured(chatPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true }, ctx)
+      }
+    } else {
+      call = await this.callStructured(chatPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true }, ctx)
+    }
     const answer = (call.structured as { answer?: unknown })?.answer
     return { result: { answer: typeof answer === 'string' ? answer : call.text }, meta: call.meta }
   }
@@ -261,7 +282,12 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
   }
 
   private async callWithPromptDir(prompt: string, options: ClaudeCallOptions, ctx: CallContext, promptDir: string): Promise<ClaudeCallResult> {
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands']
+    // partial messages: the first text delta gives the real time to first token (diagnostics)
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands']
+    const mcpFile = path.join(promptDir, 'mcp.json')
+    writeFileSync(mcpFile, JSON.stringify({ mcpServers: ctx.mcpGateway ? { app: { type: 'http', url: ctx.mcpGateway.url } } : {} }), { encoding: 'utf8', mode: 0o600 })
+    args.push('--mcp-config', mcpFile)
+    if (ctx.mcpGateway) args.push('--allowedTools', 'mcp__app__search_tools,mcp__app__call_tool,mcp__app__read_result')
     const systemFile = path.join(promptDir, 'system.md')
     if (options.appendSystemPrompt) {
       writeFileSync(systemFile, options.appendSystemPrompt, 'utf8')
@@ -277,6 +303,7 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
     if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
     if (this.options.model) args.push('--model', this.options.model)
     if (ctx.effort) args.push('--effort', ctx.effort)
+    if (options.maxTurns) args.push('--max-turns', String(options.maxTurns))
 
     let sessionId: string | undefined
     let model: string | undefined
@@ -286,6 +313,11 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
 
     const processResult = await this.runJsonl(args, ctx, prompt, (event) => {
       const type = event.type
+      if (type === 'stream_event') {
+        const delta = (event.event as { type?: string } | undefined)?.type
+        if (delta === 'content_block_delta') this.markFirstOutput(ctx, 'token')
+        return
+      }
       if (type === 'system' && event.subtype === 'init') {
         sessionId = typeof event.session_id === 'string' ? event.session_id : sessionId
         model = typeof event.model === 'string' ? event.model : model

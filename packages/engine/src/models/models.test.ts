@@ -136,6 +136,11 @@ describe('repository index', () => {
     expect(digest.tokenEstimate).toBeLessThanOrEqual(1500)
     expect(digest.relevantFiles[0]!.outline).toContain('LoginForm')
 
+    // planning: files no keyword matched are added too, with their complete content
+    const full = await buildContextDigest(index, 'Add password validation to the login form', { budgetTokens: 20_000, excerptFiles: 10, excerptChars: 20_000, fillUnranked: true })
+    expect(full.relevantFiles.map((file) => file.path)).toContain('src/lib/cart.ts')
+    expect(full.relevantFiles.find((file) => file.path === 'src/lib/cart.ts')).toMatchObject({ complete: true, excerpt: expect.stringContaining('class Cart') })
+
     // incremental rebuild reuses unchanged files
     await fs.writeFile(path.join(repo, 'src/lib/cart.ts'), 'export class Cart { add() {} remove() {} }\n')
     const second = await buildRepoIndex(repo, index)

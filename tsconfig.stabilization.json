@@ -1,0 +1,13 @@
+{
+  "extends": "./apps/api/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@multi-ai-coder/engine": ["packages/engine/src/index.ts"],
+      "@multi-ai-coder/plugin-sdk": ["packages/plugin-sdk/src/index.ts"]
+    }
+  },
+  "include": ["apps/api/src/**/*.ts", "apps/api/src/**/*.cts", "packages/engine/src/**/*.ts", "packages/plugin-sdk/src/**/*.ts"]
+}

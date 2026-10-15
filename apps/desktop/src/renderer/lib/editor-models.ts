@@ -196,3 +196,82 @@ export function disposeProject(projectId: string) {
   for (const entry of [...entries.values()]) if (entry.projectId === projectId) disposeModel(entry.tabId, { keepDraft: true })
   lastDirty = new Map([...lastDirty].filter(([tabId]) => entries.has(tabId)))
 }
+
+// ---------------------------------------------------------------------------
+// Navigation and programmatic edits (IDE features)
+// ---------------------------------------------------------------------------
+
+export interface TextRange {
+  line: number
+  column: number
+  endLine?: number
+  endColumn?: number
+}
+
+let activeEditor: Monaco.editor.IStandaloneCodeEditor | undefined
+const pendingReveal = new Map<string, TextRange>()
+
+let primaryEditor: Monaco.editor.IStandaloneCodeEditor | undefined
+
+/** The editor commands act on (the focused one; the main editor by default). */
+export function setActiveEditor(editor: Monaco.editor.IStandaloneCodeEditor | undefined) {
+  activeEditor = editor
+  if (!primaryEditor || !editor) primaryEditor = editor
+}
+
+export function getPrimaryEditor() {
+  return primaryEditor
+}
+
+export function getActiveEditor() {
+  return activeEditor
+}
+
+export function entryInfo(tabId: string): { projectId: string; path: string } | undefined {
+  const entry = entries.get(tabId)
+  return entry ? { projectId: entry.projectId, path: entry.path } : undefined
+}
+
+/** Tab of a model (models are created with modelPath URIs). */
+export function tabIdOfModel(model: Monaco.editor.ITextModel): string | undefined {
+  for (const entry of entries.values()) if (entry.model === model) return entry.tabId
+  return undefined
+}
+
+function reveal(editor: Monaco.editor.IStandaloneCodeEditor, range: TextRange) {
+  const selection = { startLineNumber: range.line, startColumn: range.column, endLineNumber: range.endLine ?? range.line, endColumn: range.endColumn ?? range.column }
+  editor.setSelection(selection)
+  editor.revealRangeInCenterIfOutsideViewport(selection)
+  editor.focus()
+}
+
+/** Moves the cursor in a tab now (if shown) or as soon as the tab is shown. */
+export function requestReveal(tabId: string, range: TextRange) {
+  const model = getModel(tabId)
+  if (activeEditor && model && activeEditor.getModel() === model) reveal(activeEditor, range)
+  else pendingReveal.set(tabId, range)
+}
+
+/** Called by the editor after it switched to a tab. */
+export function applyPendingReveal(tabId: string) {
+  const range = pendingReveal.get(tabId)
+  if (!range || !activeEditor) return
+  pendingReveal.delete(tabId)
+  reveal(activeEditor, range)
+}
+
+/** Applies text edits to an open tab as one undoable step. */
+export function applyEdits(tabId: string, edits: Array<{ range: TextRange; text: string }>) {
+  const model = getModel(tabId)
+  if (!model) return false
+  model.pushStackElement()
+  model.pushEditOperations(
+    [],
+    edits.map((edit) => ({ range: { startLineNumber: edit.range.line, startColumn: edit.range.column, endLineNumber: edit.range.endLine ?? edit.range.line, endColumn: edit.range.endColumn ?? edit.range.column }, text: edit.text })),
+    () => null,
+  )
+  model.pushStackElement()
+  return true
+}
+
+export { applyEditsToText } from './text-utils'

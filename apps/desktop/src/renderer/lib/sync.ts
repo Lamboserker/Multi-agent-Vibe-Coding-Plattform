@@ -2,7 +2,8 @@ import type { AppEvent, RuntimeStatus } from '../../shared/bridge'
 import { api, bridge } from './api'
 import * as actions from './actions'
 import * as persistence from './persistence'
-import { appStore, jobsStore, liveStore, sessionStore, type BottomTab, type SideView, type Theme, type UiState } from './stores'
+import { planningProgressForEvent } from './planning-progress'
+import { appStore, editorStore, jobsStore, liveStore, planProgressStore, pluginStore, sessionStore, type LiveLine, type BottomTab, type SideView, type Theme, type UiState } from './stores'
 import type { Project, VersionedSettings } from './types'
 
 /*
@@ -13,7 +14,7 @@ import type { Project, VersionedSettings } from './types'
  *  - one event subscription that keeps the stores current
  */
 
-const SIDE_VIEWS: SideView[] = ['projects', 'explorer', 'git', 'tasks', 'agents', 'models', 'usage', 'settings']
+const SIDE_VIEWS: SideView[] = ['projects', 'explorer', 'search', 'git', 'tasks', 'agents', 'models', 'plugins', 'skills', 'mcp', 'usage', 'diagnostics', 'settings']
 const BOTTOM_TABS: BottomTab[] = ['terminal', 'logs', 'tests', 'diff', 'run', 'problems']
 
 function throttle(fn: () => unknown, ms: number) {
@@ -32,6 +33,8 @@ let runtimeWasReady = false
 let booting: Promise<void> | undefined
 let uiRestored: Promise<void> = Promise.resolve()
 
+const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 10000
+
 /** Restores the window layout before anything is rendered with defaults. */
 async function restoreUi() {
   await bridge().state.hello(persistence.epoch).catch(() => undefined)
@@ -43,18 +46,41 @@ async function restoreUi() {
         sideView: SIDE_VIEWS.includes(saved.sideView as SideView) ? (saved.sideView as SideView) : state.ui.sideView,
         bottomTab: BOTTOM_TABS.includes(saved.bottomTab as BottomTab) ? (saved.bottomTab as BottomTab) : state.ui.bottomTab,
         bottomOpen: typeof saved.bottomOpen === 'boolean' ? saved.bottomOpen : state.ui.bottomOpen,
+        bottomMaximized: saved.bottomMaximized === true,
+        sideOpen: saved.sideOpen !== false,
+        chatOpen: saved.chatOpen !== false,
+        sideWidths: Object.fromEntries(Object.entries(saved.sideWidths ?? {}).filter(([view, width]) => SIDE_VIEWS.includes(view as SideView) && isSize(width))),
+        chatWidth: isSize(saved.chatWidth) ? saved.chatWidth : undefined,
+        bottomHeight: isSize(saved.bottomHeight) ? saved.bottomHeight : undefined,
         lastProjectId: typeof saved.lastProjectId === 'string' ? saved.lastProjectId : undefined,
+        lastProject: saved.lastProject && typeof saved.lastProject.repoPath === 'string' && typeof saved.lastProject.id === 'string' ? saved.lastProject : undefined,
       },
     }))
   }
   document.documentElement.dataset.theme = appStore.get().ui.theme
+  await showCachedShell()
+}
+
+/**
+ * Stale-while-revalidate start: with the settings and project of the last session the workspace is
+ * shown immediately, while the runtime starts (~0.5 s). API calls made meanwhile wait in the main
+ * process until the runtime is ready; boot() then reloads everything from the runtime.
+ */
+async function showCachedShell() {
+  const settings = await persistence.loadDocument<VersionedSettings>('settings-cache')
+  if (!settings?.onboarding?.completed || appStore.get().settings) return
+  const lastProject = appStore.get().ui.lastProject
+  appStore.set({ settings: { ...settings, version: -1 }, ...(lastProject ? { project: { ...lastProject } } : {}), booted: true })
+  if (lastProject) editorStore.set({ restoring: true })
+  performance.mark('mac:ide-shown')
 }
 
 export function startApp() {
   if (started || !window.mac) return
   started = true
   document.documentElement.dataset.theme = appStore.get().ui.theme
-  uiRestored = restoreUi()
+  performance.mark('mac:start')
+  uiRestored = restoreUi().then(() => void performance.mark('mac:ui-restored'))
   bridge().onEvent(handleEvent)
   bridge().runtime.onStatus(onRuntimeStatus)
   bridge().terminal.onChanged(throttle(() => actions.refreshTerminals(), 150))
@@ -62,6 +88,7 @@ export function startApp() {
 }
 
 function onRuntimeStatus(status: RuntimeStatus) {
+  if (status.state === 'ready' && !runtimeWasReady) performance.mark('mac:runtime-ready')
   appStore.set({ runtime: status })
   if (status.state === 'ready') {
     if (!runtimeWasReady) {
@@ -76,21 +103,33 @@ function onRuntimeStatus(status: RuntimeStatus) {
   }
 }
 
-async function openLastProject(settings: VersionedSettings) {
+async function openLastProject(settings: VersionedSettings, onShown: () => void) {
+  const cached = appStore.get().ui.lastProject
   const projectId = appStore.get().ui.lastProjectId ?? settings.lastProjectId
   if (!projectId) return
-  const project = await api.get<Project>(`/projects/${projectId}`).catch(() => undefined)
-  if (!project || project.exists === false) return
-  const opened = await api.post<Project>('/projects/open', { path: project.repoPath, name: project.name }).catch(() => undefined)
-  if (opened) await actions.activateProject(opened)
+  // The cached path saves a lookup (which also starts a git process); open validates the folder.
+  const known = cached?.id === projectId ? cached : await api.get<Project>(`/projects/${projectId}`).catch(() => undefined)
+  if (!known || (known as Project).exists === false) {
+    editorStore.set({ restoring: false })
+    return
+  }
+  const opened = await api.post<Project>('/projects/open', { path: known.repoPath, name: known.name }).catch(() => undefined)
+  if (opened) await actions.activateProject(opened, { onShown })
+  else {
+    // folder gone: the cached shell must not keep showing it
+    appStore.set({ project: undefined })
+    editorStore.set({ restoring: false })
+  }
 }
 
 async function boot() {
   const started = performance.now()
   await uiRestored
+  performance.mark('mac:boot')
   // Settings are required to render anything; a transient failure (runtime still recovering,
   // database busy) is retried instead of leaving the splash screen up.
-  for (let attempt = 0; !appStore.get().settings; attempt += 1) {
+  // Always from the runtime: cached settings (showCachedShell) are only a placeholder (version -1).
+  for (let attempt = 0; (appStore.get().settings?.version ?? -1) < 0; attempt += 1) {
     try {
       await actions.loadSettings()
     } catch (error) {
@@ -98,16 +137,29 @@ async function boot() {
       await new Promise((resolve) => setTimeout(resolve, Math.min(4000, 250 * 2 ** attempt)))
     }
   }
+  // The IDE is shown as soon as the last project is known (or there is none); the rest of the
+  // workspace (tabs, sessions, terminals) fills in progressively.
+  performance.mark('mac:settings')
+  const show = () => {
+    if (!appStore.get().booted) performance.mark('mac:ide-shown')
+    else performance.mark('mac:workspace-restored')
+    appStore.set({ booted: true })
+  }
+  const background = Promise.all([actions.loadActivity(), actions.loadModelJobs()])
   try {
-    await openLastProject(appStore.get().settings!)
+    await openLastProject(appStore.get().settings!, show)
   } catch (error) {
     actions.notify(error instanceof Error ? error.message : String(error), 'error')
   }
-  await Promise.all([actions.loadActivity(), actions.loadModelJobs(), actions.refreshTerminals()])
+  await Promise.all([background, actions.refreshTerminals()])
   // Persistence starts only after the restore, so default values never overwrite saved state.
   persistence.startPersistence()
-  appStore.set({ booted: true })
+  show()
   performance.measure('mac:restore', { start: started, end: performance.now() })
+  // Monaco is the largest chunk; it is loaded when the app is idle so the first file opens fast.
+  const preload = () => void import('./editor-models').then((module) => module.loadMonaco()).catch(() => undefined)
+  if ('requestIdleCallback' in window) window.requestIdleCallback(preload, { timeout: 3000 })
+  else setTimeout(preload, 1500)
 }
 
 /** The runtime restarted (crash/backoff): re-read everything that lives there. Nothing is reset. */
@@ -138,6 +190,28 @@ const TASK_EVENTS = new Set(['plan_requested', 'planning_started', 'planned', 'e
 const ACTIVITY_EVENTS = new Set(['plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'run_paused', 'run_resumed', 'discarded', 'applied'])
 const MAX_LIVE_LINES = 2000
 
+// Live lines are appended once per delivered event batch (the main process sends batches of up to
+// 250 events), not once per event: one store update and one array copy instead of hundreds.
+let pendingLive: { executionId: string; lines: LiveLine[] } | undefined
+function appendLive(executionId: string, line: LiveLine) {
+  if (!pendingLive || pendingLive.executionId !== executionId) {
+    flushLive()
+    pendingLive = { executionId, lines: [] }
+    queueMicrotask(flushLive)
+  }
+  pendingLive.lines.push(line)
+}
+function flushLive() {
+  const batch = pendingLive
+  pendingLive = undefined
+  if (!batch?.lines.length) return
+  liveStore.set((state) => {
+    const previous = state.executionId === batch.executionId ? state.lines : []
+    const lines = previous.length + batch.lines.length > MAX_LIVE_LINES ? [...previous, ...batch.lines].slice(-MAX_LIVE_LINES) : [...previous, ...batch.lines]
+    return { executionId: batch.executionId, lines }
+  })
+}
+
 function handleEvent(event: AppEvent) {
   const data = event.data as Record<string, unknown>
   const { project, workspace, settings } = appStore.get()
@@ -146,6 +220,7 @@ function handleEvent(event: AppEvent) {
   switch (event.channel) {
     case 'system':
       if (event.type === 'settings_changed' && Number(data.version) > (settings?.version ?? -1)) refreshSettings()
+      if (/^(plugin|skills|skill|mcp|agents)_/.test(event.type)) pluginStore.set((state) => ({ revision: state.revision + 1, lastEvent: { id: data.id as string | undefined, type: event.type, status: data.status as string | undefined, error: data.error as string | undefined } }))
       return
     case 'project':
       if (event.type === 'files_changed' && typeof data.projectId === 'string') actions.onFilesChanged(data.projectId, (data.files as string[]) ?? [])
@@ -163,14 +238,10 @@ function handleEvent(event: AppEvent) {
     case 'run': {
       const executionId = data.executionId as string | undefined
       if (executionId && executionId === session.execution?.id) {
-        if (typeof data.message === 'string') {
-          liveStore.set((state) => ({
-            executionId,
-            lines: [...(state.executionId === executionId ? state.lines.slice(-(MAX_LIVE_LINES - 1)) : []), { ts: event.ts, level: String(data.level ?? 'info'), type: event.type, message: data.message as string, subtaskId: data.subtaskId as string | undefined }],
-          }))
-        }
+        if (typeof data.message === 'string') appendLive(executionId, { ts: event.ts, level: String(data.level ?? 'info'), type: event.type, message: data.message as string, subtaskId: data.subtaskId as string | undefined })
         if (event.type !== 'check_output' && event.type !== 'tool_call' && !event.type.startsWith('orchestrator_')) refreshExecution()
       }
+      planProgressStore.set((state) => ({ tasks: planningProgressForEvent(state.tasks, event) }))
       if (TASK_EVENTS.has(event.type) && (data.taskId === session.task?.id || (executionId && executionId === session.execution?.id))) refreshTask()
       if (event.type === 'execution_created' && data.taskId === session.task?.id) refreshTask()
       if (ACTIVITY_EVENTS.has(event.type) || (event.type === 'run_updated' && data.status)) refreshActivity()

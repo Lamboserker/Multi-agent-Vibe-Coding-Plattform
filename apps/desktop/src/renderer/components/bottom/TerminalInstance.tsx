@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
+import { SearchAddon } from '@xterm/addon-search'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalInfo } from '../../../shared/bridge'
@@ -20,7 +21,10 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
   const host = useRef<HTMLDivElement>(null)
   const fitRef = useRef<FitAddon | undefined>(undefined)
   const termRef = useRef<Terminal | undefined>(undefined)
+  const searchRef = useRef<SearchAddon | undefined>(undefined)
+  const [search, setSearch] = useState<{ open: boolean; query: string; caseSensitive: boolean; found?: boolean }>({ open: false, query: '', caseSensitive: false })
   const theme = useAppState((state) => state.ui.theme)
+  const [history, setHistory] = useState<string[] | null>(null)
   const onExitRef = useRef(onExit)
   onExitRef.current = onExit
 
@@ -30,6 +34,17 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
     const fit = new FitAddon()
     fitRef.current = fit
     terminal.loadAddon(fit)
+    const searchAddon = new SearchAddon()
+    searchRef.current = searchAddon
+    terminal.loadAddon(searchAddon)
+    // Ctrl+F opens the search bar of this terminal (instead of sending ^F to the shell)
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        setSearch((current) => ({ ...current, open: true }))
+        return false
+      }
+      return true
+    })
     terminal.open(host.current!)
     let attached = false
     const buffered: string[] = []
@@ -87,7 +102,9 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
     const timer = window.setTimeout(() => {
       try {
         fitRef.current?.fit()
-        termRef.current?.focus()
+        // never take the focus from an input the user is typing in (palette, chat, editor …)
+        const focused = document.activeElement
+        if (!focused || focused === document.body || host.current?.contains(focused)) termRef.current?.focus()
       } catch {
         // not laid out yet
       }
@@ -95,7 +112,62 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
     return () => window.clearTimeout(timer)
   }, [visible])
 
-  return <div ref={host} className="terminal-host" data-testid="terminal-host" data-terminal-id={terminalId} style={{ display: visible ? 'block' : 'none' }} />
+  const find = (direction: 'next' | 'previous', query = search.query) => {
+    if (!query) return
+    // the match is selected (decorations would need xterm's proposed API)
+    const options = { caseSensitive: search.caseSensitive }
+    const found = direction === 'next' ? searchRef.current?.findNext(query, options) : searchRef.current?.findPrevious(query, options)
+    setSearch((current) => ({ ...current, found }))
+  }
+  const closeSearch = () => {
+    searchRef.current?.clearDecorations()
+    setSearch((current) => ({ ...current, open: false, found: undefined }))
+    termRef.current?.focus()
+  }
+
+  return (
+    <div className="terminal-wrapper" style={{ display: visible ? 'flex' : 'none' }}>
+      <div className="row"><button className="btn small" onClick={() => void bridge().terminal.history(terminalId).then(setHistory)}>Befehlshistorie</button></div>
+      {history ? <div className="stack" style={{ maxHeight: 160, overflow: 'auto' }}>
+        <button className="btn small" onClick={() => setHistory(null)}>Schließen</button>
+        {history.length ? history.slice().reverse().map((command, index) => <button key={index} className="btn small mono" onClick={() => { bridge().terminal.write(terminalId, command); setHistory(null); termRef.current?.focus() }}>{command}</button>) : <span className="muted">Noch keine Shell-Befehle erfasst.</span>}
+      </div> : null}
+      {search.open ? (
+        <div className="terminal-search" role="search">
+          <input
+            autoFocus
+            className="input"
+            placeholder="Im Terminal suchen"
+            aria-label="Im Terminal suchen"
+            value={search.query}
+            onChange={(event) => {
+              const query = event.target.value
+              setSearch((current) => ({ ...current, query }))
+              find('next', query)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') find(event.shiftKey ? 'previous' : 'next')
+              if (event.key === 'Escape') closeSearch()
+            }}
+          />
+          <button className={`toggle-btn ${search.caseSensitive ? 'on' : ''}`} title="Groß-/Kleinschreibung" onClick={() => setSearch((current) => ({ ...current, caseSensitive: !current.caseSensitive }))}>
+            Aa
+          </button>
+          <button className="btn small" title="Vorheriger Treffer (Umschalt+Enter)" onClick={() => find('previous')}>
+            ↑
+          </button>
+          <button className="btn small" title="Nächster Treffer (Enter)" onClick={() => find('next')}>
+            ↓
+          </button>
+          <span className="faint">{search.found === false ? 'nicht gefunden' : ''}</span>
+          <button className="btn small ghost" onClick={closeSearch}>
+            ✕
+          </button>
+        </div>
+      ) : null}
+      <div ref={host} className="terminal-host" data-testid="terminal-host" data-terminal-id={terminalId} style={{ flex: 1, minHeight: 0 }} />
+    </div>
+  )
 }
 
 const commandTerminals = new Map<string, Promise<TerminalInfo | undefined>>()

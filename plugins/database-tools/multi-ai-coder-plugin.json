@@ -1,0 +1,38 @@
+{
+  "id": "database-tools",
+  "name": "Database Tools",
+  "version": "1.0.0",
+  "description": "SQLite-Dateien des Projekts und PostgreSQL-Datenbanken abfragen: Schema-Browser, SQL-Konsole, schreibende Abfragen nur nach Bestätigung, Lesezugriff für Agenten.",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["Datenbanken"],
+  "permissions": {
+    "fs": "project-write",
+    "secrets": ["postgresUrl"],
+    "native": true
+  },
+  "contributes": {
+    "views": [{ "id": "main", "title": "Datenbank" }],
+    "commands": [
+      { "id": "query", "title": "SQL ausführen" },
+      { "id": "schema", "title": "Schema anzeigen" },
+      { "id": "table", "title": "Tabelle anzeigen" },
+      { "id": "schemaToChat", "title": "Schema in den Chat übernehmen" }
+    ],
+    "settings": [
+      { "key": "connection", "title": "Verbindung", "type": "select", "options": ["sqlite", "postgres"], "default": "sqlite" },
+      { "key": "sqliteFile", "title": "SQLite-Datei (relativ zum Projekt)", "type": "string", "description": "z. B. prisma/dev.db" },
+      { "key": "postgresUrl", "title": "PostgreSQL-URL", "type": "secret", "description": "postgres://benutzer:passwort@host:5432/datenbank (sslmode=require für TLS)" },
+      { "key": "maxRows", "title": "Max. Zeilen", "type": "number", "default": 500 }
+    ],
+    "agentTools": [
+      { "name": "db_schema", "description": "Returns tables and columns of the configured database.", "inputSchema": { "type": "object", "properties": {} } },
+      {
+        "name": "db_query",
+        "description": "Runs a read-only SQL query (SELECT/WITH/EXPLAIN/SHOW/PRAGMA) against the configured database and returns up to 100 rows.",
+        "inputSchema": { "type": "object", "properties": { "sql": { "type": "string" } }, "required": ["sql"] }
+      }
+    ]
+  }
+}

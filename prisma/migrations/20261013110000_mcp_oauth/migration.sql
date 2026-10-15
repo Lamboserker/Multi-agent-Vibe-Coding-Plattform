@@ -1,0 +1,1 @@
+ALTER TABLE "McpServer" ADD COLUMN "oauth" JSONB NOT NULL DEFAULT '{}';

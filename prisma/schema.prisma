@@ -288,6 +288,10 @@ model Subtask {
   priority            Int           @default(0)
   attempts            Int           @default(0)
   manualModel         String?
+  /// Agent profile (agent manager) assigned automatically at planning or chosen by the user.
+  agentId             String?
+  /// Fast-path tool (deterministic, no model call) tried before the agents.
+  fastPath            Json?
   worktreePath        String?
   branchName          String?
   commitSha           String?
@@ -597,4 +601,114 @@ model AppSetting {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+// Installed plugin (code lives in the app data folder or ships with the app). See packages/plugin-sdk.
+model Plugin {
+  id          String   @id
+  name        String
+  version     String
+  /// builtin | folder | git
+  source      String
+  /// Folder path or git URL the plugin was installed from.
+  sourceRef   String?
+  /// trusted (ships with the app) | untrusted (installed by the user)
+  trust       String   @default("untrusted")
+  enabled     Boolean  @default(false)
+  /// Permissions the user granted (subset of the manifest's permissions).
+  granted     Json     @default("{}")
+  /// SHA-256 per file at install time; checked before every activation.
+  integrity   Json     @default("{}")
+  manifest    Json     @default("{}")
+  settings    Json     @default("{}")
+  storage     Json     @default("{}")
+  /// installed | active | disabled | crashed | error
+  status      String   @default("installed")
+  lastError   String?
+  installedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// MCP server configured by the user (Phase 0.3, E). Secrets (tokens, env values) live in the
+/// shell's encrypted vault under the scope "mcp:<id>"; only their names are stored here.
+model McpServer {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  /// stdio | http
+  transport   String
+  command     String?
+  args        Json      @default("[]")
+  /// Non-secret environment variables.
+  env         Json      @default("{}")
+  /// Names of environment variables filled from the vault.
+  secretEnv   Json      @default("[]")
+  cwd         String?
+  url         String?
+  /// Non-secret HTTP headers.
+  headers     Json      @default("{}")
+  /// [{ header, secret, prefix }]: headers filled from the vault (e.g. Authorization: Bearer …).
+  secretHeaders Json    @default("[]")
+  /// OAuth public configuration only; credentials live in the encrypted vault.
+  oauth       Json      @default("{}")
+  enabled     Boolean   @default(true)
+  timeoutMs   Int       @default(60000)
+  /// toolName -> allow | confirm | off (tools without an entry use the default policy)
+  toolPolicies Json     @default("{}")
+  /// allow | confirm | off
+  defaultPolicy String  @default("confirm")
+  /// Agent roles that may use the server's tools: "*" or planner | coder | chat
+  agents      Json      @default("[\"*\"]")
+  /// Cached tool list from the last discovery (lazy: agents get definitions without connecting).
+  tools       Json?
+  toolsAt     DateTime?
+  /// idle | connecting | connected | error | disabled
+  status      String    @default("idle")
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// User decisions about a discovered skill (the skill itself is a folder with SKILL.md).
+model SkillState {
+  /// "<source>:<name>" e.g. "user:react-testing", "project:<projectId>:deploy", "builtin:code-review"
+  key            String   @id
+  enabled        Boolean  @default(true)
+  /// Scripts may run only after an explicit approval; bound to the hash of the scripts folder.
+  scriptsApprovedHash String?
+  agents         Json     @default("[\"*\"]")
+  updatedAt      DateTime @updatedAt
+}
+
+/// Agent profile (agent manager, Phase 0.3 F): which local model, skills, MCP servers and plugin tools a
+/// coder agent uses for matching subtasks, with its limits and escalation rule.
+model AgentProfile {
+  id           String   @id @default(cuid())
+  name         String
+  description  String   @default("")
+  /// coder (executes subtasks)
+  role         String   @default("coder")
+  /// null = all projects
+  projectId    String?
+  /// Local model; null = the router chooses by complexity/role.
+  model        String?
+  /// Task categories / keywords the agent handles (matched against category, title, description, files).
+  categories   Json     @default("[]")
+  /// Skill names; empty = all skills assigned to the role.
+  skills       Json     @default("[]")
+  /// MCP server ids or "*"; empty = none.
+  mcpServers   Json     @default("[\"*\"]")
+  pluginTools  Boolean  @default(true)
+  /// premium | local | none
+  escalation   String   @default("premium")
+  maxSteps     Int?
+  maxRepairs   Int?
+  maxContextTokens Int?
+  permissions  Json     @default("{}")
+  resources    Json     @default("{}")
+  instructions String   @default("")
+  enabled      Boolean  @default(true)
+  priority     Int      @default(0)
+  template     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }

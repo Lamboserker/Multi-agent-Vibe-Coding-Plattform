@@ -59,19 +59,19 @@ export class TasksService {
       take: 50,
       include: {
         project: true,
-        subtasks: { orderBy: { createdAt: 'asc' } },
+        subtasks: { orderBy: [{ createdAt: 'asc' }, { priority: 'desc' }] },
         executions: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
     })
   }
 
   async findOne(id: string) {
-    return this.prisma.task.findUniqueOrThrow({
+    const task = await this.prisma.task.findUniqueOrThrow({
       where: { id },
       include: {
         project: true,
         contexts: { orderBy: { createdAt: 'desc' }, take: 3 },
-        subtasks: { orderBy: { createdAt: 'asc' } },
+        subtasks: { orderBy: [{ createdAt: 'asc' }, { priority: 'desc' }] },
         runs: { orderBy: { createdAt: 'desc' }, take: 100, include: { provider: true, reviews: true } },
         feedback: { orderBy: { createdAt: 'desc' }, take: 10 },
         chatMessages: { orderBy: { createdAt: 'asc' }, take: 200 },
@@ -79,6 +79,7 @@ export class TasksService {
         executions: { orderBy: { createdAt: 'desc' }, take: 5, include: { applyRecords: { orderBy: { createdAt: 'desc' } } } },
       },
     })
+    return task.currentStep === 'planning' ? { ...task, planning: await this.executions.planningStatus(id) } : task
   }
 
   /** Deterministic pre-analysis (no model call): classification, legacy routing hint and context snapshot. */
@@ -182,7 +183,7 @@ export class TasksService {
   }
 
   async subtasks(id: string) {
-    return this.prisma.subtask.findMany({ where: { taskId: id }, orderBy: { createdAt: 'asc' } })
+    return this.prisma.subtask.findMany({ where: { taskId: id }, orderBy: [{ createdAt: 'asc' }, { priority: 'desc' }] })
   }
 
   private latestExecution(taskId: string) {

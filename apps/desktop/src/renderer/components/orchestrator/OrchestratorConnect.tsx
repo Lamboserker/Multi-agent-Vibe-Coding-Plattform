@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ExternalLink, LogIn, LogOut, RefreshCw, Stethoscope } from 'lucide-react'
 import { api, bridge, errorMessage } from '../../lib/api'
 import { useLoader } from '../../lib/hooks'
@@ -14,7 +14,22 @@ const DESCRIPTIONS: Record<OrchestratorId, string> = {
 
 export function OrchestratorConnect({ onRunCommand, onChanged }: { onRunCommand: (command: string[], title: string) => void; onChanged?: (overview: OrchestratorOverview) => void }) {
   const { notify, settings, updateSettings } = useApp()
-  const { data: overview, reload, loading } = useLoader(() => api.get<OrchestratorOverview>('/orchestrator?refresh=1'), [])
+  // Cached status first (instant), then a background refresh of the CLI login state.
+  const { data: overview, reload, loading, setData } = useLoader(() => api.get<OrchestratorOverview>('/orchestrator'), [])
+  const [refreshing, setRefreshing] = useState(false)
+  const refresh = async () => {
+    setRefreshing(true)
+    try {
+      setData(await api.get<OrchestratorOverview>('/orchestrator?refresh=1'))
+    } finally {
+      setRefreshing(false)
+    }
+  }
+  useEffect(() => {
+    void refresh().catch(() => undefined)
+    // once per mount (the view stays mounted while hidden)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [diagnosis, setDiagnosis] = useState<DiagnosticReport>()
   const [liveCall, setLiveCall] = useState(false)
   const { data: capabilities } = useLoader(async () => (settings?.orchestrator ? api.get<{ models: Array<{ id: string; label: string }>; sandbox: string }>(`/orchestrator/${settings.orchestrator}/capabilities`) : undefined), [settings?.orchestrator])
@@ -65,8 +80,8 @@ export function OrchestratorConnect({ onRunCommand, onChanged }: { onRunCommand:
             <div className="row">
               <strong>{entry.displayName}</strong>
               <span className="spacer" />
-              <button className="icon-btn" title="Status neu prüfen" onClick={() => void reload()}>
-                {loading ? <Spinner /> : <RefreshCw size={14} />}
+              <button className="icon-btn" title="Status neu prüfen" onClick={() => void refresh()}>
+                {loading || refreshing ? <Spinner /> : <RefreshCw size={14} />}
               </button>
             </div>
             <div className="muted">{status.message}</div>

@@ -112,6 +112,9 @@ export function routeTask(task: RoutableTask, models: LocalModelProfile[], polic
   if (policy.costMode === 'quality' && tier !== 'premium' && task.complexity >= 3) {
     tier = shift(tier, 1)
     reasons.push('Quality mode raises the tier by one.')
+  } else if (policy.costMode === 'quality' && tier === 'fast') {
+    tier = 'balanced'
+    reasons.push('Quality mode does not use the fast tier for implementation tasks.')
   }
   if (policy.costMode === 'cheapest' && tier === 'premium' && task.risk < 4 && task.complexity < 5) {
     tier = 'advanced'

@@ -67,6 +67,9 @@ export interface OllamaChatResult {
   doneReason?: string
 }
 
+/** Actual first streamed model output; no prompt/response contents are retained. */
+export const inferenceTimings: Array<{ model: string; firstTokenMs: number; at: string }> = []
+
 export interface PullProgress {
   status: string
   digest?: string
@@ -77,7 +80,7 @@ export interface PullProgress {
 export class OllamaError extends Error {
   constructor(
     message: string,
-    readonly kind: 'unreachable' | 'not_found' | 'out_of_memory' | 'timeout' | 'stalled' | 'aborted' | 'http' | 'invalid_response',
+    readonly kind: 'unreachable' | 'not_found' | 'out_of_memory' | 'timeout' | 'stalled' | 'aborted' | 'http' | 'invalid_response' | 'resource_limit',
     readonly status?: number,
   ) {
     super(message)
@@ -189,6 +192,8 @@ export class OllamaClient {
    * that stops producing tokens is detected (`idleTimeoutMs`) instead of hanging forever.
    */
   async chat(request: OllamaChatRequest, options: { signal?: AbortSignal; idleTimeoutMs?: number; timeoutMs?: number; onToken?: (text: string) => void } = {}): Promise<OllamaChatResult> {
+    const started = performance.now()
+    let firstToken = false
     const controller = new AbortController()
     const signals = [controller.signal]
     if (options.signal) signals.push(options.signal)
@@ -215,6 +220,11 @@ export class OllamaClient {
         for await (const line of ndjsonLines(response.body, AbortSignal.any(signals), options.idleTimeoutMs ?? 180_000)) {
           const chunk = line as { message?: OllamaMessage; done?: boolean; error?: string } & Record<string, unknown>
           if (chunk.error) throw classifyErrorText(chunk.error)
+          if (!firstToken && (chunk.message?.content || chunk.message?.thinking || chunk.message?.tool_calls?.length)) {
+            firstToken = true
+            inferenceTimings.push({ model: request.model, firstTokenMs: Math.round(performance.now() - started), at: new Date().toISOString() })
+            if (inferenceTimings.length > 200) inferenceTimings.shift()
+          }
           if (chunk.message?.content) {
             content += chunk.message.content
             options.onToken?.(chunk.message.content)

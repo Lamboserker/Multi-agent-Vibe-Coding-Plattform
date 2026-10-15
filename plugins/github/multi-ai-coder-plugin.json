@@ -1,0 +1,46 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "1.0.0",
+  "description": "Pull Requests und Issues des Projekts auf GitHub ansehen, Issues anlegen und PRs/Issues als Kontext an den Orchestrator geben.",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["Git", "Zusammenarbeit"],
+  "permissions": {
+    "network": ["api.github.com"],
+    "processes": ["git"],
+    "secrets": ["token"]
+  },
+  "contributes": {
+    "views": [{ "id": "main", "title": "GitHub" }],
+    "commands": [
+      { "id": "repositories", "title": "Repositories anzeigen" },
+      { "id": "branches", "title": "Branches anzeigen" },
+      { "id": "reviews", "title": "Reviews anzeigen" },
+      { "id": "createReview", "title": "Review veröffentlichen", "confirm": "Review auf GitHub veröffentlichen?" },
+      { "id": "pullRequest", "title": "Pull Request anzeigen" },
+      { "id": "issue", "title": "Issue anzeigen" },
+      { "id": "toChat", "title": "Als Kontext in den Chat übernehmen" },
+      { "id": "createIssue", "title": "Issue anlegen", "confirm": "Issue auf GitHub anlegen?" }
+    ],
+    "settings": [
+      { "key": "apiUrl", "title": "GitHub API-URL", "type": "string", "default": "https://api.github.com", "description": "Für GitHub Enterprise oder einen Testserver; der hier eingetragene Host wird damit für dieses Plugin freigegeben.", "grantsHost": true },
+      { "key": "repository", "title": "Repository (owner/name)", "type": "string", "description": "Leer = aus dem git-Remote \"origin\" ermittelt." },
+      { "key": "token", "title": "Access Token", "type": "secret", "description": "Fine-grained Token (Issues/Pull requests: read, für \"Issue anlegen\": write). Ohne Token nur öffentliche Repositories (60 Anfragen/Stunde)." }
+    ],
+    "agentTools": [
+      {
+        "name": "github_issues",
+        "description": "Lists open issues of the project's GitHub repository (number, title, labels).",
+        "inputSchema": { "type": "object", "properties": { "query": { "type": "string", "description": "Optional text filter" } } }
+      },
+      {
+        "name": "github_pull_request",
+        "description": "Returns title, description, changed files and review comments of a pull request.",
+        "inputSchema": { "type": "object", "properties": { "number": { "type": "number" } }, "required": ["number"] }
+      }
+    ],
+    "contextProviders": [{ "id": "referenced-issues", "title": "Erwähnte Issues (#123) als Planungskontext" }]
+  }
+}

@@ -4,10 +4,12 @@ import { gitVersion } from '@multi-ai-coder/engine'
 import { str, bool } from '../common/validate.js'
 import { EventBusService, type EventChannel } from './event-bus.service.js'
 import { JobQueueService } from './job-queue.service.js'
+import { DiagnosticsService } from './diagnostics.service.js'
 import { runtimeConfig } from './runtime-config.js'
 import { SettingsService, type AppSettings } from './settings.service.js'
 
 const SETTINGS_VALIDATORS: Partial<Record<keyof AppSettings, (value: unknown) => boolean>> = {
+  languageServers: (value) => Array.isArray(value) && value.length <= 20 && value.every((entry) => entry && typeof entry.command === 'string' && Array.isArray(entry.args) && entry.args.every((arg: unknown) => typeof arg === 'string') && Array.isArray(entry.extensions) && entry.extensions.every((ext: unknown) => typeof ext === 'string' && /^[a-z0-9]+$/i.test(ext)) && typeof entry.languageId === 'string'),
   orchestrator: (value) => value === null || value === 'claude-code' || value === 'codex',
   claudeModel: (value) => typeof value === 'string' && /^[\w.:-]{0,80}$/.test(value),
   codexModel: (value) => typeof value === 'string' && /^[\w.:-]{0,80}$/.test(value),
@@ -17,6 +19,7 @@ const SETTINGS_VALIDATORS: Partial<Record<keyof AppSettings, (value: unknown) =>
   premiumExecutionAllowed: (value) => typeof value === 'boolean',
   premiumReviewPolicy: (value) => value === 'risk_based' || value === 'always' || value === 'never',
   planApproval: (value) => typeof value === 'boolean',
+  autoStartSmallPlans: (value) => typeof value === 'boolean',
   maxTasks: (value) => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 20,
   maxLocalRepairs: (value) => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 4,
   maxEscalationSteps: (value) => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 3,
@@ -26,6 +29,10 @@ const SETTINGS_VALIDATORS: Partial<Record<keyof AppSettings, (value: unknown) =>
   ollamaBaseUrl: (value) => typeof value === 'string' && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{2,5}\/?$/.test(value),
   ollamaModelsDir: (value) => value === null || (typeof value === 'string' && value.length < 1000 && /^([a-zA-Z]:[\\/]|\/)/.test(value) && !value.includes('\0')),
   numCtx: (value) => Number.isInteger(value) && Number(value) >= 2048 && Number(value) <= 262_144,
+  modelWarmup: (value) => typeof value === 'boolean',
+  fastPath: (value) => typeof value === 'boolean',
+  formatOnSave: (value) => typeof value === 'boolean',
+  keepAliveMinutes: (value) => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 240,
   taskTimeoutMinutes: (value) => Number.isInteger(value) && Number(value) >= 2 && Number(value) <= 120,
   allowProjectCode: (value) => typeof value === 'boolean',
   approvedCommands: (value) => Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length < 300),
@@ -43,7 +50,14 @@ export class SystemController {
     private readonly settings: SettingsService,
     private readonly events: EventBusService,
     private readonly jobs: JobQueueService,
+    private readonly diagnostics: DiagnosticsService,
   ) {}
+
+  /** Performance and health snapshot (diagnostics view, exportable; contains no secrets). */
+  @Get('system/diagnostics')
+  diagnosticsSnapshot() {
+    return this.diagnostics.collect()
+  }
 
   @Get('system/health')
   health() {

@@ -1,8 +1,9 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { resolveExecutable, runProcess } from '../util/process.js'
+import { killProcessTree, resolveExecutable, runProcess } from '../util/process.js'
+import { windowsJobCommand } from '../util/windows-job.js'
 import { OllamaClient } from './client.js'
 
 export interface OllamaInstallation {
@@ -57,24 +58,66 @@ export async function detectOllama(baseUrl: string): Promise<OllamaInstallation>
  * OLLAMA_HOST/OLLAMA_MODELS are only set when explicitly configured.
  */
 export async function startOllamaServer(input: { baseUrl: string; modelsDir?: string; timeoutMs?: number }): Promise<{ started: boolean; pid?: number; message: string }> {
+  const key = new URL(input.baseUrl).origin
+  const pending = starts.get(key)
+  if (pending) return pending
+  const promise = startOwnedOllama(input).finally(() => starts.delete(key))
+  starts.set(key, promise)
+  return promise
+}
+
+const ownedServers = new Map<string, ChildProcess>()
+const starts = new Map<string, Promise<{ started: boolean; pid?: number; message: string }>>()
+let ownershipEpoch = 0
+
+/** Stops only process handles created by this runtime, never a discovered external server. */
+export async function stopOwnedOllamaServers(): Promise<void> {
+  ownershipEpoch++
+  await Promise.all([...ownedServers.values()].map(async (child) => {
+    const closed = new Promise<void>((resolve) => { if (child.exitCode !== null) resolve(); else child.once('close', () => resolve()) })
+    killProcessTree(child)
+    await Promise.race([closed, new Promise<void>((resolve) => { const timer = setTimeout(resolve, 5000); timer.unref() })])
+  }))
+  ownedServers.clear()
+}
+
+async function startOwnedOllama(input: { baseUrl: string; modelsDir?: string; timeoutMs?: number }): Promise<{ started: boolean; pid?: number; message: string }> {
+  const epoch = ownershipEpoch
   const client = new OllamaClient(input.baseUrl)
   if (await client.isReachable()) return { started: false, message: 'Ollama is already running.' }
+  const key = new URL(input.baseUrl).origin
+  if (ownedServers.has(key)) return { started: false, pid: ownedServers.get(key)?.pid, message: 'An owned Ollama start is already active; no duplicate was started.' }
   const binary = findOllamaBinary()
   if (!binary) return { started: false, message: 'Ollama is not installed.' }
 
   const url = new URL(input.baseUrl)
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return { started: false, message: 'An unreachable remote Ollama endpoint cannot be started locally.' }
   const env: NodeJS.ProcessEnv = { ...process.env, OLLAMA_HOST: `${url.hostname}:${url.port || '11434'}` }
   if (input.modelsDir) env.OLLAMA_MODELS = input.modelsDir
-  const child = spawn(binary, ['serve'], { env, detached: true, stdio: 'ignore', windowsHide: true })
+  if (epoch !== ownershipEpoch) return { started: false, message: 'Ollama startup cancelled by runtime shutdown.' }
+  const command = process.platform === 'win32' ? windowsJobCommand(binary, ['serve']) : { file: binary, args: ['serve'] }
+  const child = spawn(command.file, command.args, { env, detached: process.platform !== 'win32', stdio: 'ignore', windowsHide: true })
+  ownedServers.set(key, child)
+  let spawnError: string | undefined
+  child.on('error', (error) => { spawnError = error.message; if (ownedServers.get(key) === child) ownedServers.delete(key) })
+  child.once('close', () => { if (ownedServers.get(key) === child) ownedServers.delete(key) })
   child.unref()
 
   const deadline = Date.now() + (input.timeoutMs ?? 25_000)
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 500))
-    if (await client.isReachable()) return { started: true, pid: child.pid, message: 'Ollama server started.' }
+    if (spawnError) return { started: false, message: `Ollama could not be started: ${spawnError}` }
     if (child.exitCode !== null) return { started: false, message: `ollama serve exited with code ${child.exitCode}.` }
+    if (await client.isReachable()) return { started: true, pid: child.pid, message: 'Ollama server started (owned by this runtime).' }
   }
-  return { started: false, pid: child.pid, message: 'Ollama did not become reachable in time.' }
+  await stopOwnedServer(key, child)
+  return { started: false, message: 'Ollama did not become reachable in time; the owned process was stopped.' }
+}
+
+async function stopOwnedServer(key: string, child: ChildProcess) {
+  killProcessTree(child)
+  await Promise.race([new Promise<void>((resolve) => { if (child.exitCode !== null) resolve(); else child.once('close', () => resolve()) }), new Promise<void>((resolve) => { const timer = setTimeout(resolve, 5000); timer.unref() })])
+  if (ownedServers.get(key) === child) ownedServers.delete(key)
 }
 
 export async function ollamaInstallPlan(): Promise<OllamaInstallPlan> {

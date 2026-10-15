@@ -11,6 +11,7 @@ export type OrchestratorErrorKind =
   | 'cancelled'
   | 'invalid_output'
   | 'process_failed'
+  | 'resource_limit'
 
 export class OrchestratorError extends Error {
   constructor(
@@ -109,6 +110,12 @@ export type OrchestratorEvent =
   | { type: 'error'; message: string }
 
 export interface CallContext {
+  /** Hard per-call limits. CLIs must reject unsupported limits before invoking the model. */
+  limits?: { maxContextTokens?: number; maxOutputTokens?: number }
+  /** Session-scoped, policy-filtered MCP gateway. No upstream credentials enter the CLI. */
+  mcpGateway?: { url: string }
+  mcpRole?: string
+  mcpServers?: string[]
   /** Identifies the process so cancelRun(runId) can stop it. */
   runId: string
   signal?: AbortSignal
@@ -130,7 +137,7 @@ export interface RepoContextDigest {
   /** Compact deterministic repository description (stack, structure, scripts, conventions). */
   summary: string
   /** Paths + short symbol outlines of the most relevant files. */
-  relevantFiles: Array<{ path: string; outline: string; excerpt?: string }>
+  relevantFiles: Array<{ path: string; outline: string; excerpt?: string; /** The excerpt is the whole file. */ complete?: boolean }>
   validationCommands: string[]
 }
 
@@ -235,6 +242,12 @@ export interface ChatInput {
   question: string
   context: RepoContextDigest
   history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  /**
+   * CLI session of an earlier answer in the same conversation. When set, only the question is sent
+   * (the session already holds the repository context and history); if the session cannot be
+   * resumed, the adapter falls back to a full prompt.
+   */
+  resumeSessionId?: string
 }
 
 /** Common contract for premium orchestrators (Claude Code, Codex). */

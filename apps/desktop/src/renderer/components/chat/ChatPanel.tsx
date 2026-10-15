@@ -1,13 +1,12 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { MessageSquarePlus, RotateCcw, Send, X } from 'lucide-react'
 import * as actions from '../../lib/actions'
-import { api } from '../../lib/api'
 import { shallowEqual } from '../../lib/store/core'
 import { useAppState, useSessionState } from '../../lib/store'
 import type { PendingMessage } from '../../lib/stores'
-import type { ChatMessage, CostMode, TaskPlan } from '../../lib/types'
+import type { ChatMessage, CostMode } from '../../lib/types'
 import { AsyncButton, Badge, Markdown, PanelHeader, Spinner, StatusDot } from '../common'
-import { AppliedBox, ApprovalBox } from './ApprovalBox'
+import { WorkflowPanel } from '../workflow/WorkflowPanel'
 
 const EMPTY_DRAFT = { text: '', mode: 'task' as const, autoRun: false }
 
@@ -15,39 +14,66 @@ export function ChatPanel() {
   const project = useAppState((state) => state.project)
   const costMode = useAppState((state) => state.settings?.costMode)
   const sessionId = useAppState((state) => state.workspace.activeSessionId)
+  const chatView = useAppState((state) => state.workspace.chatView ?? 'workflow')
   const storedDraft = useAppState((state) => state.workspace.composer[actions.composerKey(state.workspace.activeSessionId)]) ?? EMPTY_DRAFT
   const { active, pending, task, execution } = useSessionState((state) => ({ active: state.active, pending: state.pending, task: state.task, execution: state.execution }), shallowEqual)
   const [text, setText] = useState(storedDraft.text)
-  const [replanOpen, setReplanOpen] = useState(false)
-  const [feedback, setFeedback] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const syncTimer = useRef<number | undefined>(undefined)
 
   // The composer text is a persisted draft per session: switching sessions or views keeps it.
+  // Drafts prepared elsewhere (editor AI, context, task from a problem) replace the text as well;
+  // the user's own typing is not echoed back.
+  const ownDraft = useRef(storedDraft.text)
   useEffect(() => {
+    ownDraft.current = storedDraft.text
     setText(storedDraft.text)
     // only when another session is shown
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
+  useEffect(() => {
+    if (storedDraft.text === ownDraft.current) return
+    // a pending (older) debounced write of the user's typing must not overwrite the new draft
+    if (syncTimer.current !== undefined) window.clearTimeout(syncTimer.current)
+    ownDraft.current = storedDraft.text
+    setText(storedDraft.text)
+  }, [storedDraft.text])
   const updateText = (value: string) => {
+    ownDraft.current = value
     setText(value)
     if (syncTimer.current !== undefined) window.clearTimeout(syncTimer.current)
-    syncTimer.current = window.setTimeout(() => actions.setComposerDraft(sessionId, { text: value }), 250)
+    syncTimer.current = window.setTimeout(() => {
+      syncTimer.current = undefined
+      actions.setComposerDraft(sessionId, { text: value })
+    }, 250)
   }
   useEffect(() => () => window.clearTimeout(syncTimer.current), [])
+  useEffect(() => {
+    actions.registerComposerFlush(() => {
+      if (syncTimer.current === undefined) return
+      window.clearTimeout(syncTimer.current)
+      syncTimer.current = undefined
+      actions.setComposerDraft(sessionId, { text: ownDraft.current })
+    })
+    return () => actions.registerComposerFlush(undefined)
+  }, [sessionId])
 
-  const messages = active?.id === sessionId ? active?.messages ?? [] : []
+  const older = useSessionState((state) => state.older)
+  const messages = useMemo(() => {
+    if (active?.id !== sessionId || !active) return []
+    const loaded = older?.sessionId === active.id ? older.messages : []
+    const ids = new Set(active.messages.map((message) => message.id))
+    return [...loaded.filter((message) => !ids.has(message.id)), ...active.messages]
+  }, [active, older, sessionId])
+  const hasOlder = Boolean(active && active.id === sessionId && (older && older.sessionId === active.id ? older.hasMore : active.hasMore))
   const sessionPending = pending.filter((message) => (message.sessionId ?? undefined) === sessionId || (!message.sessionId && !sessionId))
   const pendingAsk = Boolean(active?.recovery?.pendingAsk)
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' })
-  }, [messages.length, sessionPending.length, execution?.status, pendingAsk])
+    if (chatView === 'history') endRef.current?.scrollIntoView({ block: 'end' })
+  // follow new messages at the end; loading older pages in front does not jump
+  }, [messages.at(-1)?.id, sessionPending.length, pendingAsk, chatView])
 
-  const plan: TaskPlan | undefined = task?.plans?.[0]
-  const awaitingPlan = task && task.subtasks.length > 0 && !execution && ['planned', 'awaiting_plan_approval'].includes(task.currentStep)
-  const planning = task?.currentStep === 'planning'
-  const planInterrupted = task?.currentStep === 'plan_interrupted'
   const finishedTask = task && (['completed', 'cancelled'].includes(task.status) || execution?.status === 'applied')
   const sending = sessionPending.some((message) => message.status === 'sending')
 
@@ -55,6 +81,7 @@ export function ChatPanel() {
     const content = text.trim()
     if (!content || !project || sending) return
     if (syncTimer.current !== undefined) window.clearTimeout(syncTimer.current)
+    ownDraft.current = ''
     setText('')
     void actions.sendMessage(content, storedDraft.mode, storedDraft.autoRun)
   }
@@ -63,16 +90,28 @@ export function ChatPanel() {
     <aside className="chat-panel" data-testid="chat-panel">
       <PanelHeader title={active?.title && sessionId ? active.title : 'Neue Sitzung'}>
         {active && sessionId ? <StatusDot status={active.status === 'active' ? 'ok' : active.status} /> : null}
-        {execution ? (
-          <button className="btn small ghost" onClick={() => actions.setSideView('agents')}>
-            <StatusDot status={execution.status} /> Agenten
-          </button>
-        ) : null}
         <button className="icon-btn" title="Neue Sitzung" aria-label="Neue Sitzung" onClick={() => actions.newSession()}>
           <MessageSquarePlus size={16} />
         </button>
       </PanelHeader>
-      <div className="chat-messages" data-testid="chat-messages">
+      <div className="session-tabs" role="tablist" aria-label="Sitzungsansicht" onKeyDown={(event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+        event.preventDefault()
+        const next = event.key === 'Home' ? 'workflow' : event.key === 'End' ? 'history' : chatView === 'workflow' ? 'history' : 'workflow'
+        actions.updateWorkspace({ chatView: next })
+        requestAnimationFrame(() => document.getElementById(next === 'workflow' ? 'workflow-tab' : 'history-tab')?.focus())
+      }}>
+        <button id="workflow-tab" role="tab" tabIndex={chatView === 'workflow' ? 0 : -1} aria-selected={chatView === 'workflow'} aria-controls="workflow-view" onClick={() => actions.updateWorkspace({ chatView: 'workflow' })}>
+          Arbeitsablauf {execution?.status === 'awaiting_approval' ? <Badge kind="warn">Freigabe</Badge> : null}
+        </button>
+        <button id="history-tab" role="tab" tabIndex={chatView === 'history' ? 0 : -1} aria-selected={chatView === 'history'} aria-controls="history-view" onClick={() => actions.updateWorkspace({ chatView: 'history' })}>
+          Verlauf {pendingAsk ? <Spinner /> : null}
+        </button>
+      </div>
+      <div id="workflow-view" role="tabpanel" aria-labelledby="workflow-tab" className="workflow-scroll" style={{ display: chatView === 'workflow' ? 'block' : 'none' }}>
+        <WorkflowPanel key={task?.id ?? 'new'} />
+      </div>
+      <div id="history-view" role="tabpanel" aria-labelledby="history-tab" className="chat-messages" data-testid="chat-messages" style={{ display: chatView === 'history' ? 'flex' : 'none' }}>
         {!project ? <div className="empty">Öffne zuerst ein Projekt.</div> : null}
         {project && !messages.length && !sessionPending.length ? (
           <div className="msg system">
@@ -80,7 +119,11 @@ export function ChatPanel() {
             {'\n\n'}Mit „Frage“ kannst du Architektur besprechen oder Code erklären lassen, ohne etwas auszuführen. Die Sitzung bleibt erhalten, auch wenn du die Ansicht wechselst oder die App neu startest.
           </div>
         ) : null}
-        {active?.hasMore ? <div className="faint" style={{ textAlign: 'center', fontSize: 11 }}>Ältere Nachrichten: im Sitzungsexport</div> : null}
+        {hasOlder ? (
+          <div style={{ textAlign: 'center' }}>
+            <AsyncButton className="btn small ghost" onClick={() => actions.loadOlderMessages()}>Ältere Nachrichten laden</AsyncButton>
+          </div>
+        ) : null}
         {messages.map((message) => <Message key={message.id} message={message} />)}
         {sessionPending.map((message) => <PendingBubble key={message.clientId} message={message} />)}
         {pendingAsk ? (
@@ -88,85 +131,15 @@ export function ChatPanel() {
             <Spinner /> Orchestrator antwortet …
           </div>
         ) : null}
-        {planning ? (
-          <div className="msg system row">
-            <Spinner /> Plan wird erstellt …
-          </div>
-        ) : null}
-        {planInterrupted && sessionId ? (
-          <div className="callout warn stack">
-            Die Planung wurde unterbrochen.
-            <AsyncButton className="btn small" onClick={() => actions.retryPlan(sessionId)}>
-              <RotateCcw size={13} /> Erneut planen
-            </AsyncButton>
-          </div>
-        ) : null}
-        {awaitingPlan && plan ? (
-          <div className="card stack">
-            <div className="row">
-              <strong>Modellzuordnung</strong>
-              <span className="spacer" />
-              <Badge kind={plan.source === 'deterministic-fallback' ? 'warn' : 'premium'}>{plan.source === 'deterministic-fallback' ? 'Fallback-Plan' : plan.source}</Badge>
-            </div>
-            {task!.subtasks.map((subtask) => (
-              <div key={subtask.id} className="row" style={{ fontSize: 12 }}>
-                <span className="mono faint">{subtask.key}</span>
-                <span className="truncate" style={{ flex: 1 }}>{subtask.title}</span>
-                <Badge kind={subtask.selectedModelClass === 'premium_llm' ? 'premium' : subtask.selectedModelClass === 'local_llm' ? 'local' : 'error'}>
-                  {subtask.selectedModelName ?? (subtask.selectedModelClass === 'no_llm' ? 'blockiert' : '?')}
-                </Badge>
-              </div>
-            ))}
-            {plan.dag?.warnings?.length ? plan.dag.warnings.map((warning, index) => <div key={index} className="callout warn">{warning}</div>) : null}
-            <div className="row wrap">
-              <AsyncButton className="btn primary" onClick={async () => { await api.post(`/tasks/${task!.id}/execute`); await actions.reloadTask(); void actions.loadActivity() }}>
-                Ausführung starten
-              </AsyncButton>
-              <button className="btn" onClick={() => setReplanOpen((open) => !open)}>
-                Neu planen
-              </button>
-            </div>
-            {replanOpen ? (
-              <div className="stack">
-                <textarea className="textarea" rows={2} placeholder="Was soll am Plan anders sein?" value={feedback} onChange={(event) => setFeedback(event.target.value)} />
-                <AsyncButton className="btn" disabled={!feedback.trim()} onClick={async () => { await api.post(`/tasks/${task!.id}/plan-with-orchestrator`, { feedback }); setFeedback(''); setReplanOpen(false); await actions.reloadTask() }}>
-                  Mit Feedback neu planen
-                </AsyncButton>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {execution && ['pending', 'running', 'integrating', 'paused'].includes(execution.status) ? (
-          <div className="msg system row" data-testid="run-running">
-            <Spinner /> Ausführung {execution.status === 'paused' ? 'pausiert' : 'läuft'} – Details in der Agentenansicht.
-          </div>
-        ) : null}
-        {execution?.status === 'awaiting_approval' ? <ApprovalBox execution={execution} /> : null}
-        {execution?.status === 'applied' ? <AppliedBox execution={execution} /> : null}
-        {execution && ['failed', 'interrupted'].includes(execution.status) ? (
-          <div className={`callout ${execution.status === 'interrupted' ? 'warn' : 'error'} stack`}>
-            {execution.status === 'interrupted' ? 'Die Ausführung wurde unterbrochen (App beendet oder Laufzeit neu gestartet). Bereits integrierte Teilaufgaben bleiben erhalten und werden beim Fortsetzen nicht erneut ausgeführt.' : execution.errorMessage ?? 'Die Ausführung ist fehlgeschlagen.'}
-            {execution.integrationBranch ? (
-              <AsyncButton className="btn small" onClick={async () => { await api.post(`/executions/${execution.id}/continue`); await actions.reloadExecution(); void actions.loadActivity() }}>
-                <RotateCcw size={13} /> Ausführung fortsetzen
-              </AsyncButton>
-            ) : task ? (
-              // interrupted before anything was integrated: nothing to resume, the plan can run again
-              <AsyncButton className="btn small" onClick={async () => { await api.post(`/tasks/${task.id}/execute`); await actions.reloadTask(); void actions.loadActivity() }}>
-                <RotateCcw size={13} /> Erneut ausführen
-              </AsyncButton>
-            ) : null}
-          </div>
-        ) : null}
         <div ref={endRef} />
       </div>
       <div className="composer">
         <div className="row">
           <div className="segmented">
-            <button className={storedDraft.mode === 'task' ? 'active' : ''} onClick={() => actions.setComposerDraft(sessionId, { mode: 'task' })}>
+            <button className={storedDraft.mode === 'task' ? 'active' : ''} onClick={() => { actions.setComposerDraft(sessionId, { mode: 'task' }); actions.updateWorkspace({ chatView: 'workflow' }) }}>
               Aufgabe
             </button>
-            <button className={storedDraft.mode === 'ask' ? 'active' : ''} onClick={() => actions.setComposerDraft(sessionId, { mode: 'ask' })}>
+            <button className={storedDraft.mode === 'ask' ? 'active' : ''} onClick={() => { actions.setComposerDraft(sessionId, { mode: 'ask' }); actions.updateWorkspace({ chatView: 'history' }) }}>
               Frage
             </button>
           </div>
@@ -210,7 +183,6 @@ export function ChatPanel() {
     </aside>
   )
 }
-
 const WHO: Record<ChatMessage['role'], string> = { user: 'Du', assistant: 'Orchestrator', agent: 'Agenten', system: 'System' }
 
 const Message = memo(function Message({ message }: { message: ChatMessage }) {

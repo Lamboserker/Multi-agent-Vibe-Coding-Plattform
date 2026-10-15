@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "dev": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/agents build && pnpm --filter @multi-ai-coder/engine build && node --watch --loader ts-node/esm src/main.ts",
+    "dev": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/plugin-sdk build && pnpm --filter @multi-ai-coder/agents build && pnpm --filter @multi-ai-coder/engine build && node --watch --loader ts-node/esm src/main.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "lint": "tsc -p tsconfig.json --noEmit",
@@ -13,7 +13,10 @@
     "test": "vitest run --passWithNoTests src"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.1",
     "@multi-ai-coder/agents": "workspace:*",
+    "@multi-ai-coder/engine": "workspace:*",
+    "@multi-ai-coder/plugin-sdk": "workspace:*",
     "@multi-ai-coder/shared": "workspace:*",
     "@nestjs/common": "^11.1.21",
     "@nestjs/core": "^11.1.21",
@@ -21,7 +24,8 @@
     "@prisma/client": "6.19.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "@multi-ai-coder/engine": "workspace:*"
+    "typescript-language-server": "^6.0.2",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

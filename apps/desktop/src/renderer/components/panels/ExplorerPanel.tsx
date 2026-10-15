@@ -7,6 +7,7 @@ import { useAppState, useEditorState } from '../../lib/store'
 import type { GitStatus, TreeEntry } from '../../lib/types'
 import { Confirm, Empty, PanelHeader, PromptDialog } from '../common'
 import { ProjectSetup } from './ProjectsPanel'
+import { VirtualList } from '../VirtualList'
 
 function setExplorer(patch: { expanded?: string[]; selected?: string }) {
   actions.updateWorkspace((workspace) => ({ explorer: { ...workspace.explorer, ...patch } }))
@@ -78,6 +79,19 @@ export function ExplorerPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFile])
 
+  // the expanded tree as flat rows: rendered as a windowed list (1,000+ entries stay cheap)
+  const rows = useMemo(() => {
+    const flat: Array<{ entry: TreeEntry; depth: number }> = []
+    const walk = (dir: string, depth: number) => {
+      for (const entry of children[dir] ?? []) {
+        flat.push({ entry, depth })
+        if (entry.type === 'directory' && expanded.has(entry.path)) walk(entry.path, depth + 1)
+      }
+    }
+    walk('', 0)
+    return flat
+  }, [children, expanded])
+
   if (!project) {
     return (
       <>
@@ -139,9 +153,8 @@ export function ExplorerPanel() {
     }
   }
 
-  const renderDir = (dir: string, depth: number) =>
-    (children[dir] ?? []).map((entry) => (
-      <div key={entry.path}>
+
+  const renderRow = ({ entry, depth }: { entry: TreeEntry; depth: number }) => (
         <div
           className={`tree-item ${selected === entry.path ? 'selected' : ''}`}
           style={{ paddingLeft: 6 + depth * 12 }}
@@ -158,9 +171,7 @@ export function ExplorerPanel() {
           <span className={`name ${entry.heavy ? 'faint' : ''}`}>{entry.name}</span>
           {gitMarks[entry.path] ? <span className={`git-mark ${gitMarks[entry.path]}`}>{gitMarks[entry.path]}</span> : null}
         </div>
-        {entry.type === 'directory' && expanded.has(entry.path) ? renderDir(entry.path, depth + 1) : null}
-      </div>
-    ))
+  )
 
   return (
     <>
@@ -184,7 +195,7 @@ export function ExplorerPanel() {
           <Search size={15} />
         </button>
       </div>
-      <div className="panel-body" data-testid="explorer-tree">
+      <div className="panel-body" data-testid="explorer-tree" style={results ? undefined : { display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingRight: 0 }}>
         {results ? (
           <div className="stack" style={{ gap: 2 }}>
             <div className="row">
@@ -206,7 +217,7 @@ export function ExplorerPanel() {
             ))}
           </div>
         ) : (
-          renderDir('', 0)
+          <VirtualList items={rows} estimate={24} itemKey={(row) => row.entry.path} render={renderRow} testId="explorer-rows" />
         )}
       </div>
       {creating ? (

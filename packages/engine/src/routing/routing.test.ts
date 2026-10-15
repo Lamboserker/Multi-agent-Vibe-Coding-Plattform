@@ -42,6 +42,11 @@ describe('routeTask', () => {
     expect(routeTask({ ...baseTask, complexity: 5 }, models, policy).executor).toBe('premium')
   })
 
+  it('never uses the fast tier in quality mode', () => {
+    expect(routeTask(baseTask, models, { ...policy, costMode: 'quality' }).model).toBe('mid:7b')
+    expect(routeTask(baseTask, models, { ...policy, costMode: 'cheapest' }).model).toBe('small:1b')
+  })
+
   it('sends security-critical work to premium and keeps it local in cheapest mode only when risk allows', () => {
     expect(routeTask({ ...baseTask, category: 'auth-security', risk: 4 }, models, policy).executor).toBe('premium')
     expect(routeTask({ ...baseTask, complexity: 5, risk: 2 }, models, { ...policy, costMode: 'cheapest' }).executor).toBe('premium')

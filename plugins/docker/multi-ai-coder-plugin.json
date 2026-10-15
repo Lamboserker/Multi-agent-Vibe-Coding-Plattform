@@ -1,0 +1,36 @@
+{
+  "id": "docker",
+  "name": "Docker",
+  "version": "1.0.0",
+  "description": "Container und Images verwalten (starten, stoppen, Logs), docker compose des Projekts ausführen und Container-Logs an Agenten geben.",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["Container", "Laufzeit"],
+  "permissions": {
+    "processes": ["docker"],
+    "fs": "project-read"
+  },
+  "contributes": {
+    "views": [{ "id": "main", "title": "Docker" }],
+    "commands": [
+      { "id": "devcontainer", "title": "Entwicklungscontainer starten", "confirm": "Devcontainer bauen und starten?" },
+      { "id": "start", "title": "Container starten" },
+      { "id": "stop", "title": "Container stoppen" },
+      { "id": "restart", "title": "Container neu starten" },
+      { "id": "remove", "title": "Container entfernen", "confirm": "Container wirklich entfernen?" },
+      { "id": "logs", "title": "Container-Logs anzeigen" },
+      { "id": "logsToChat", "title": "Container-Logs in den Chat übernehmen" },
+      { "id": "composeUp", "title": "docker compose up -d", "confirm": "docker compose up -d im Projekt ausführen?" },
+      { "id": "composeDown", "title": "docker compose down", "confirm": "docker compose down im Projekt ausführen?" }
+    ],
+    "agentTools": [
+      { "name": "docker_containers", "description": "Lists Docker containers (name, image, state, ports).", "inputSchema": { "type": "object", "properties": {} } },
+      {
+        "name": "docker_logs",
+        "description": "Returns the last lines of a container's log.",
+        "inputSchema": { "type": "object", "properties": { "container": { "type": "string" }, "lines": { "type": "number" } }, "required": ["container"] }
+      }
+    ]
+  }
+}

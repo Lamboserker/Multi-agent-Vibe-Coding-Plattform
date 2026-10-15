@@ -18,9 +18,21 @@ export type LocalAgentEvent =
   | { type: 'text'; text: string }
   | { type: 'usage'; promptTokens: number; completionTokens: number }
 
+/** A tool provided by the application (MCP server, plugin, skill loader) next to the file tools. */
+export interface AgentTool {
+  name: string
+  description: string
+  /** JSON schema of the arguments. */
+  parameters: Record<string, unknown>
+  /** Returns the text handed back to the model (truncated by the agent loop). */
+  execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<string>
+}
+
 export interface LocalAgentInput {
-  client: OllamaClient
+  client: Pick<OllamaClient, 'chat'>
   model: string
+  /** Ollama keep_alive for the agent's calls (default 15m). */
+  keepAlive?: string
   supportsTools: boolean
   supportsThinking?: boolean
   workspace: WorkspaceFiles
@@ -30,10 +42,15 @@ export interface LocalAgentInput {
   previousFailures?: string
   search?: (query: string) => Promise<SearchHit[]>
   maxSteps?: number
+  maxOutputTokens?: number
   numCtx?: number
   timeoutMs?: number
   signal?: AbortSignal
   onEvent?: (event: LocalAgentEvent) => void
+  /** Additional tools (only offered in tool-calling mode). */
+  extraTools?: AgentTool[]
+  /** Appended to the system prompt (e.g. the index of available skills). */
+  extraInstructions?: string
 }
 
 export interface LocalAgentResult {
@@ -193,7 +210,7 @@ const TOOL_NAMES = new Set(LOCAL_AGENT_TOOLS.map((tool) => tool.function.name))
  * instead of the structured tool_calls field. Recovers such calls – plain JSON, fenced JSON or
  * <tool_call> blocks – for known tool names only. Recovered calls are validated like native ones.
  */
-export function recoverTextToolCalls(content: string): OllamaToolCall[] {
+export function recoverTextToolCalls(content: string, extraNames: ReadonlySet<string> = new Set()): OllamaToolCall[] {
   const text = content.trim()
   if (!text) return []
   const candidates: string[] = []
@@ -205,8 +222,9 @@ export function recoverTextToolCalls(content: string): OllamaToolCall[] {
     if (!value || typeof value !== 'object') return
     const item = value as { name?: unknown; arguments?: unknown; parameters?: unknown; function?: { name?: unknown; arguments?: unknown } }
     const name = typeof item.name === 'string' ? item.name : typeof item.function?.name === 'string' ? item.function.name : undefined
-    const args = item.arguments ?? item.parameters ?? item.function?.arguments
-    if (!name || !TOOL_NAMES.has(name) || !args || (typeof args !== 'object' && typeof args !== 'string')) return
+    // tools without parameters (common for MCP tools) may be written without an arguments field
+    const args = item.arguments ?? item.parameters ?? item.function?.arguments ?? (name && extraNames.has(name) ? {} : undefined)
+    if (!name || !(TOOL_NAMES.has(name) || extraNames.has(name)) || !args || (typeof args !== 'object' && typeof args !== 'string')) return
     calls.push({ function: { name, arguments: args as Record<string, unknown> | string } })
   }
   for (const candidate of candidates) {
@@ -273,6 +291,8 @@ export async function executeToolCall(
   call: OllamaToolCall,
   workspace: WorkspaceFiles,
   search?: (query: string) => Promise<SearchHit[]>,
+  extraTools: AgentTool[] = [],
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; output: string; finished?: string }> {
   const name = call.function?.name
   try {
@@ -301,8 +321,11 @@ export async function executeToolCall(
       }
       case 'finish':
         return { ok: true, output: 'Finished.', finished: typeof args.summary === 'string' ? args.summary : 'Task completed.' }
-      default:
-        return { ok: false, output: `Unknown tool "${name}". Available: read_file, list_files, search_code, write_file, edit_file, finish.` }
+      default: {
+        const extra = extraTools.find((tool) => tool.name === name)
+        if (extra) return { ok: true, output: await extra.execute(args, signal) }
+        return { ok: false, output: `Unknown tool "${name}". Available: ${[...LOCAL_AGENT_TOOLS.map((tool) => tool.function.name), ...extraTools.map((tool) => tool.name)].join(', ')}.` }
+      }
     }
   } catch (error) {
     if (error instanceof ToolInputError || error instanceof PathViolationError) return { ok: false, output: `Error: ${error.message}` }
@@ -316,6 +339,9 @@ export async function executeToolCall(
  */
 export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentResult> {
   const started = Date.now()
+  const callerSignal = input.signal
+  const deadlineSignal = AbortSignal.timeout(input.timeoutMs ?? 15 * 60_000)
+  input = { ...input, signal: AbortSignal.any([deadlineSignal, ...(callerSignal ? [callerSignal] : [])]) }
   const numCtx = input.numCtx ?? 16_384
   // Repair rounds also show the files created by the previous attempt (still present in the worktree).
   const preloadTargets = [...new Set([...input.task.relevantFiles, ...(input.previousFailures ? input.task.newFiles : [])])]
@@ -334,34 +360,43 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
     filesTouched: [],
   }
   const deadline = started + (input.timeoutMs ?? 15 * 60_000)
-  const remaining = () => Math.max(10_000, deadline - Date.now())
+  const remaining = () => Math.max(1, deadline - Date.now())
   // A slightly higher temperature on repairs avoids repeating the identical failing output.
-  const options = { num_ctx: numCtx, temperature: input.previousFailures ? 0.35 : 0.15 }
+  const options = { num_ctx: numCtx, temperature: input.previousFailures ? 0.35 : 0.15, ...(input.maxOutputTokens ? { num_predict: input.maxOutputTokens } : {}) }
   const think = input.supportsThinking ? false : undefined
+
+  const systemPrompt = input.extraInstructions ? `${SYSTEM_PROMPT}\n\n${input.extraInstructions}` : SYSTEM_PROMPT
+  // file tools keep their names; application tools must not shadow them
+  const extraTools = (input.extraTools ?? []).filter((tool) => !TOOL_NAMES.has(tool.name))
+  const extraNames = new Set(extraTools.map((tool) => tool.name))
+  const tools: OllamaToolDefinition[] = [...LOCAL_AGENT_TOOLS, ...extraTools.map((tool) => ({ type: 'function' as const, function: { name: tool.name, description: tool.description, parameters: tool.parameters } }))]
 
   try {
     if (input.supportsTools) {
       const messages: OllamaMessage[] = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: taskPrompt(input, preloaded) },
       ]
       const maxSteps = input.maxSteps ?? 16
       let nudged = false
       for (let step = 1; step <= maxSteps; step += 1) {
         if (Date.now() > deadline) throw new OllamaError('Task time limit reached.', 'timeout')
+        if (input.maxOutputTokens && result.completionTokens >= input.maxOutputTokens) throw new OllamaError('Agent output token resource limit reached.', 'resource_limit')
+        if (input.maxOutputTokens) options.num_predict = input.maxOutputTokens - result.completionTokens
         result.steps = step
         input.onEvent?.({ type: 'step', step, mode: 'tools' })
         const response = await input.client.chat(
-          { model: input.model, messages, tools: LOCAL_AGENT_TOOLS, options, keep_alive: '15m', think },
+          { model: input.model, messages, tools, options, keep_alive: input.keepAlive ?? '15m', think },
           { signal: input.signal, timeoutMs: remaining(), idleTimeoutMs: 180_000 },
         )
         result.promptTokens += response.promptTokens
         result.completionTokens += response.completionTokens
+        if (response.promptTokens > numCtx || (input.maxOutputTokens && result.completionTokens > input.maxOutputTokens)) throw new OllamaError('Model exceeded the agent context/output token limit; response discarded before applying tools.', 'resource_limit')
         input.onEvent?.({ type: 'usage', promptTokens: response.promptTokens, completionTokens: response.completionTokens })
         messages.push(response.message)
         let calls = response.message.tool_calls ?? []
         if (!calls.length) {
-          calls = recoverTextToolCalls(response.message.content)
+          calls = recoverTextToolCalls(response.message.content, extraNames)
           if (calls.length) {
             result.recoveredToolCalls += calls.length
             // Keep the conversation well-formed for the chat template: a real tool-call turn.
@@ -393,7 +428,7 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
         let finished: string | undefined
         for (const call of calls) {
           result.toolCalls += 1
-          const outcome = await executeToolCall(call, input.workspace, input.search)
+          const outcome = await executeToolCall(call, input.workspace, input.search, extraTools, input.signal)
           if (!outcome.ok) result.invalidToolCalls += 1
           input.onEvent?.({ type: 'tool_call', name: call.function?.name ?? '?', args: summarizeArgs(call), ok: outcome.ok, result: outcome.output.slice(0, 300) })
           messages.push({ role: 'tool', content: outcome.output.slice(0, 12_000), tool_name: call.function?.name })
@@ -414,6 +449,11 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
       // Structured output mode: up to two rounds (second round gets apply errors back).
       let feedback = ''
       for (let round = 1; round <= 2; round += 1) {
+        if (input.maxOutputTokens) {
+          const left = input.maxOutputTokens - result.completionTokens
+          if (left <= 0) throw new OllamaError('Agent output token resource limit reached.', 'resource_limit')
+          options.num_predict = left
+        }
         result.steps = round
         input.onEvent?.({ type: 'step', step: round, mode: 'structured' })
         const response = await input.client.chat(
@@ -422,13 +462,13 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
             messages: [
               {
                 role: 'system',
-                content: `${SYSTEM_PROMPT}\nYou cannot call tools. Respond ONLY with JSON: {"summary": string, "operations": [{"action":"write"|"edit","path":string,"content":string,"search":string,"replace":string}]}. For "write" give the complete file in content; for "edit" give an exact unique search snippet and its replacement.`,
+                content: `${systemPrompt}\nYou cannot call tools. Respond ONLY with JSON: {"summary": string, "operations": [{"action":"write"|"edit","path":string,"content":string,"search":string,"replace":string}]}. For "write" give the complete file in content; for "edit" give an exact unique search snippet and its replacement.`,
               },
               { role: 'user', content: taskPrompt(input, preloaded) + (feedback ? `\n\n## Your previous operations failed\n${feedback}` : '') },
             ],
             format: STRUCTURED_PATCH_SCHEMA,
             options,
-            keep_alive: '15m',
+            keep_alive: input.keepAlive ?? '15m',
             think,
           },
           { signal: input.signal, timeoutMs: remaining(), idleTimeoutMs: 180_000 },
@@ -437,6 +477,7 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
         result.completionTokens += response.completionTokens
         input.onEvent?.({ type: 'usage', promptTokens: response.promptTokens, completionTokens: response.completionTokens })
         let parsed: { summary?: unknown; operations?: unknown }
+        if (response.promptTokens > numCtx || (input.maxOutputTokens && result.completionTokens > input.maxOutputTokens)) throw new OllamaError('Model exceeded the agent context/output token limit; response discarded before applying operations.', 'resource_limit')
         try {
           parsed = JSON.parse(response.message.content) as typeof parsed
         } catch {
@@ -474,6 +515,7 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error)
     result.errorKind = error instanceof OllamaError ? error.kind : undefined
+    if (deadlineSignal.aborted && !callerSignal?.aborted) { result.error = 'Agent task time limit reached.'; result.errorKind = 'timeout' }
   }
 
   result.filesTouched = [...input.workspace.touched]

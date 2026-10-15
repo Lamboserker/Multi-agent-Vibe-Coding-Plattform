@@ -48,8 +48,8 @@ export class ExecutionController {
   }
 
   @Get('executions/:id/events')
-  events(@Param('id') id: string, @Query('after') after?: string) {
-    return this.executions.events_(id, after)
+  events(@Param('id') id: string, @Query('after') after?: string, @Query('afterId') afterId?: string, @Query('limit') limit?: string) {
+    return this.executions.events_(id, after || undefined, limit ? Number(limit) || 500 : 500, afterId || undefined)
   }
 
   @Post('executions/:id/pause')

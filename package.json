@@ -10,7 +10,7 @@
     "dev:web": "pnpm --parallel --filter @multi-ai-coder/api --filter @multi-ai-coder/web dev",
     "build": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" build",
     "lint": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/agents build && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" lint",
-    "typecheck": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/agents build && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" typecheck",
+    "typecheck": "pnpm --filter @multi-ai-coder/shared build && pnpm --filter @multi-ai-coder/plugin-sdk build && pnpm --filter @multi-ai-coder/agents build && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" typecheck",
     "test": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" test",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

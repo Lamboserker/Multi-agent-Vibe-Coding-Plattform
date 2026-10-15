@@ -35,6 +35,7 @@ export class RuntimeManager {
   private crashTimes: number[] = []
   private readyWaiters: Array<(port: number) => void> = []
   private sseAbort?: AbortController
+  private shellHandler?: (method: string, params: Record<string, unknown>) => unknown
 
   constructor(private readonly dataDir: string) {
     const logsDir = path.join(dataDir, 'logs')
@@ -53,6 +54,11 @@ export class RuntimeManager {
   onStatus(listener: Listener) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  /** Answers requests the runtime sends to the shell (e.g. secrets that only the shell can decrypt). */
+  onShellRequest(handler: (method: string, params: Record<string, unknown>) => unknown) {
+    this.shellHandler = handler
   }
 
   onEvent(listener: EventListener) {
@@ -95,6 +101,8 @@ export class RuntimeManager {
       MAC_PORT: '0',
       MAC_DATA_DIR: this.dataDir,
       MAC_MIGRATIONS_DIR: paths.migrationsDir,
+      MAC_BUILTIN_PLUGINS_DIR: paths.pluginsDir,
+      MAC_BUILTIN_SKILLS_DIR: paths.skillsDir,
       NODE_ENV: app.isPackaged ? 'production' : 'development',
     })
     delete env.DATABASE_URL // the runtime always uses the per-user SQLite database
@@ -108,7 +116,20 @@ export class RuntimeManager {
     child.stderr?.on('data', (chunk: Buffer) => {
       for (const line of chunk.toString('utf8').split(/\r?\n/).filter(Boolean)) this.writeLog(`ERR ${line}`)
     })
-    child.on('message', (message: { type?: string; port?: number }) => {
+    child.on('message', (message: { type?: string; port?: number; id?: number; method?: string; params?: Record<string, unknown> }) => {
+      if (message?.type === 'shell-request' && typeof message.id === 'number') {
+        const id = message.id
+        void Promise.resolve()
+          .then(() => {
+            if (!this.shellHandler) throw new Error('No shell handler.')
+            return this.shellHandler(String(message.method), message.params ?? {})
+          })
+          .then(
+            (value) => child.postMessage({ type: 'shell-response', id, ok: true, value: value ?? null }),
+            (error: unknown) => child.postMessage({ type: 'shell-response', id, ok: false, error: error instanceof Error ? error.message : String(error) }),
+          )
+        return
+      }
       if (message?.type === 'ready' && message.port) {
         this.setStatus({ state: 'ready', port: message.port, pid: child.pid })
         this.writeLog(`runtime ready on 127.0.0.1:${message.port}`)

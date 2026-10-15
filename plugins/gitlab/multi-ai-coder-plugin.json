@@ -1,0 +1,41 @@
+{
+  "id": "gitlab",
+  "name": "GitLab",
+  "version": "1.0.0",
+  "description": "Merge Requests, Issues und Pipelines des Projekts auf gitlab.com ansehen und als Kontext an den Orchestrator geben.",
+  "apiVersion": 1,
+  "main": "index.cjs",
+  "publisher": "Multi-AI Coder",
+  "categories": ["Git", "Zusammenarbeit", "CI"],
+  "permissions": {
+    "network": ["gitlab.com"],
+    "processes": ["git"],
+    "secrets": ["token"]
+  },
+  "contributes": {
+    "views": [{ "id": "main", "title": "GitLab" }],
+    "commands": [
+      { "id": "projects", "title": "Projekte anzeigen" },
+      { "id": "mergeRequest", "title": "Merge Request anzeigen" },
+      { "id": "pipelineJobs", "title": "Pipeline-Jobs anzeigen" },
+      { "id": "toChat", "title": "Als Kontext in den Chat übernehmen" }
+    ],
+    "settings": [
+      { "key": "apiUrl", "title": "GitLab API-URL", "type": "string", "default": "https://gitlab.com/api/v4", "description": "Für eigene GitLab-Server; der hier eingetragene Host wird damit für dieses Plugin freigegeben.", "grantsHost": true },
+      { "key": "project", "title": "Projektpfad (gruppe/projekt)", "type": "string", "description": "Leer = aus dem git-Remote \"origin\" ermittelt." },
+      { "key": "token", "title": "Personal Access Token", "type": "secret", "description": "Scope read_api. Ohne Token nur öffentliche Projekte." }
+    ],
+    "agentTools": [
+      {
+        "name": "gitlab_merge_request",
+        "description": "Returns title, description and changed files of a GitLab merge request.",
+        "inputSchema": { "type": "object", "properties": { "iid": { "type": "number" } }, "required": ["iid"] }
+      },
+      {
+        "name": "gitlab_failed_jobs",
+        "description": "Returns the failed jobs (with the end of their log) of the latest pipeline.",
+        "inputSchema": { "type": "object", "properties": {} }
+      }
+    ]
+  }
+}

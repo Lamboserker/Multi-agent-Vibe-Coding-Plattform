@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, Optional } from '@nestjs/common'
+import { LocalHistoryService } from '../ide/local-history.service.js'
 import { existsSync, promises as fs, watch, type FSWatcher } from 'node:fs'
 import path from 'node:path'
 import {
@@ -20,6 +21,7 @@ import {
 } from '@multi-ai-coder/engine'
 import { PrismaService } from '../common/prisma.service.js'
 import { EventBusService } from '../runtime/event-bus.service.js'
+import { PluginsService } from '../plugins/plugins.service.js'
 
 const MAX_EDITOR_FILE = 5 * 1024 * 1024
 const HIDDEN = new Set(['.git'])
@@ -38,6 +40,12 @@ export interface TreeEntry {
  * The user's own editor may open any file inside the project except .git internals;
  * the stricter agent rules (no secrets, task scope) live in the engine's WorkspaceFiles.
  */
+/** A git integration plugin answered: accept only the shape the UI expects. */
+function gitResult<T>(value: T, valid: (value: any) => boolean): T {
+  if (!valid(value)) throw new BadRequestException('Git integration plugin returned an invalid result.')
+  return value
+}
+
 @Injectable()
 export class WorkspaceFsService implements OnModuleDestroy {
   private watchers = new Map<string, { watcher: FSWatcher; timer?: NodeJS.Timeout; changed: Set<string> }>()
@@ -45,6 +53,8 @@ export class WorkspaceFsService implements OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventBusService,
+    @Optional() private readonly history?: LocalHistoryService,
+    @Optional() private readonly plugins?: PluginsService,
   ) {}
 
   async root(projectId: string): Promise<string> {
@@ -95,7 +105,7 @@ export class WorkspaceFsService implements OnModuleDestroy {
   }
 
   /** Writes a file; when expectedMtimeMs is given and the file changed on disk meanwhile, a conflict is reported. */
-  async writeFile(projectId: string, file: string, content: string, expectedMtimeMs?: number) {
+  async writeFile(projectId: string, file: string, content: string, expectedMtimeMs?: number, reason = 'save') {
     if (typeof content !== 'string') throw new BadRequestException('content must be a string.')
     if (Buffer.byteLength(content) > MAX_EDITOR_FILE) throw new BadRequestException('File is too large for the editor.')
     const root = await this.root(projectId)
@@ -105,6 +115,11 @@ export class WorkspaceFsService implements OnModuleDestroy {
       throw new ConflictException('The file was changed outside the editor. Reload it or overwrite explicitly.')
     }
     await fs.mkdir(path.dirname(absolute), { recursive: true })
+    // local history: keep what is about to be overwritten (failures never block the save)
+    if (stat?.isFile() && this.history && stat.size <= MAX_EDITOR_FILE) {
+      const previous = await fs.readFile(absolute, 'utf8').catch(() => undefined)
+      if (previous !== undefined && previous !== content) await this.history.record(projectId, relative, previous, reason).catch(() => undefined)
+    }
     await fs.writeFile(absolute, content, 'utf8')
     const next = await fs.stat(absolute)
     return { path: relative, mtimeMs: next.mtimeMs, size: next.size }
@@ -179,6 +194,8 @@ export class WorkspaceFsService implements OnModuleDestroy {
 
   async gitStatus(projectId: string) {
     const root = await this.root(projectId)
+    const extension = await this.plugins?.invokeSelected<{ isRepo: false } | { isRepo: true; branch: string; head: string; entries: Awaited<ReturnType<typeof status>> }>('gitIntegrations', 'request', { project: { id: projectId, name: path.basename(root), repoPath: root }, operation: 'status', args: {} })
+    if (extension != null && !(extension as { unsupported?: unknown }).unsupported) return gitResult(extension, (value) => typeof value.isRepo === 'boolean' && (!value.isRepo || (typeof value.branch === 'string' && Array.isArray(value.entries))))
     if (!(await isGitRepository(root))) return { isRepo: false as const }
     const [entries, branch, head] = await Promise.all([status(root), currentBranch(root), headCommit(root)])
     return { isRepo: true as const, branch, head, entries }
@@ -186,6 +203,9 @@ export class WorkspaceFsService implements OnModuleDestroy {
 
   async gitDiff(projectId: string, file?: string, staged = false) {
     const root = await this.root(projectId)
+    if (file) this.resolve(root, file)
+    const extension = await this.plugins?.invokeSelected<{ diff: string }>('gitIntegrations', 'request', { project: { id: projectId, name: path.basename(root), repoPath: root }, operation: 'diff', args: { file, staged } })
+    if (extension != null && !(extension as { unsupported?: unknown }).unsupported) return gitResult(extension, (value) => typeof value.diff === 'string')
     const args = ['diff', '--no-color', '--no-ext-diff']
     if (staged) args.push('--cached')
     if (file) args.push('--', normalizeRelative(this.resolve(root, file).relative))
@@ -199,6 +219,9 @@ export class WorkspaceFsService implements OnModuleDestroy {
   }
 
   async branches(projectId: string) {
+    const root = await this.root(projectId)
+    const extension = await this.plugins?.invokeSelected<Awaited<ReturnType<typeof listBranches>>>('gitIntegrations', 'request', { project: { id: projectId, name: path.basename(root), repoPath: root }, operation: 'branches', args: {} })
+    if (extension != null && !(extension as { unsupported?: unknown }).unsupported) return gitResult(extension, (value) => Array.isArray(value) && value.every((branch) => typeof branch?.name === 'string'))
     return listBranches(await this.root(projectId))
   }
 
@@ -305,17 +328,24 @@ export class WorkspaceFsService implements OnModuleDestroy {
           state.changed.add(relative)
           if (state.timer) clearTimeout(state.timer)
           state.timer = setTimeout(() => {
-            const files = [...state.changed].slice(0, 200)
+            const all = [...state.changed]
             state.changed.clear()
-            this.events.publish('project', 'files_changed', { projectId, files }, projectId)
+            // truncated = the list is incomplete; consumers that track changes (repo index) rescan fully
+            this.events.publish('project', 'files_changed', { projectId, files: all.slice(0, 200), truncated: all.length > 200 }, projectId)
           }, 300)
         }),
       }
       state.watcher.on('error', () => this.unwatch(projectId))
       this.watchers.set(projectId, state)
+      // lets the repo index warm up while the user is still typing (first plan skips the full scan)
+      this.events.publish('project', 'watch_started', { projectId, repoPath: root }, projectId)
     } catch {
       // Recursive watching is unsupported on some platforms/file systems; the UI falls back to refresh.
     }
+  }
+
+  isWatching(projectId: string) {
+    return this.watchers.has(projectId)
   }
 
   unwatch(projectId: string) {

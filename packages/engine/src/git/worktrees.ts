@@ -53,9 +53,11 @@ export class WorktreeManager {
    * Creates an isolated worktree on a fresh branch at `baseCommit`. The user's checkout,
    * index and uncommitted changes are untouched.
    */
-  async create(repoPath: string, input: { projectKey: string; name: string; branch: string; baseCommit: string }): Promise<WorktreeHandle> {
+  async create(repoPath: string, input: { projectKey: string; name: string; branch: string; baseCommit: string; pooled?: boolean }): Promise<WorktreeHandle> {
     if (!(await isGitRepository(repoPath))) throw new GitError('Project is not a git repository.')
-    if ((this.options.poolSize ?? 0) > 0) {
+    // Long-lived worktrees (the integration worktree) must not live in a pool slot: after a restart
+    // the slot is no longer leased and could be handed to another task.
+    if (input.pooled !== false && (this.options.poolSize ?? 0) > 0) {
       const pooled = await this.acquirePooled(repoPath, input)
       if (pooled) return pooled
     }
@@ -65,6 +67,36 @@ export class WorktreeManager {
     await git(repoPath, ['worktree', 'add', '-q', '-b', input.branch, target, input.baseCommit], { internal: true })
     await this.linkDependencyFolders(repoPath, target)
     return { path: target, branch: input.branch, baseCommit: input.baseCommit }
+  }
+
+  /**
+   * Creates missing idle pool slots (detached at HEAD) ahead of a run, e.g. while the planner is
+   * still working. A later create() then only switches the files that differ instead of checking
+   * out the whole repository. Never touches leased or existing slots; failures are ignored.
+   */
+  async prewarm(repoPath: string, projectKey: string, count: number): Promise<number> {
+    const slots = Math.min(count, this.options.poolSize ?? 0)
+    if (slots <= 0 || !(await isGitRepository(repoPath))) return 0
+    const dir = this.poolDir(projectKey)
+    return poolLock.run(dir.toLowerCase(), async () => {
+      const registered = new Set((await this.listManaged(repoPath)).map((entry) => path.resolve(entry.path).toLowerCase()))
+      let created = 0
+      for (let index = 0; index < slots; index += 1) {
+        const candidate = path.join(dir, `${POOL_PREFIX}${index}`)
+        const key = path.resolve(candidate).toLowerCase()
+        if (leased.has(key) || (registered.has(key) && existsSync(path.join(candidate, '.git')))) continue
+        try {
+          await this.removeDirectory(repoPath, candidate)
+          await fs.mkdir(dir, { recursive: true })
+          await git(repoPath, ['worktree', 'add', '-q', '--detach', candidate, 'HEAD'], { internal: true })
+          await this.linkDependencyFolders(repoPath, candidate)
+          created += 1
+        } catch {
+          await this.removeDirectory(repoPath, candidate).catch(() => undefined)
+        }
+      }
+      return created
+    })
   }
 
   private poolDir(projectKey: string) {
@@ -149,6 +181,17 @@ export class WorktreeManager {
       if (head) return { path: target, branch: input.branch, baseCommit: head }
     }
     await git(repoPath, ['worktree', 'prune'], { internal: true, allowFailure: true })
+    // git refuses to check out a branch twice. Runs created before integration worktrees were kept out
+    // of the pool have the branch in a pool slot: return that slot to the pool and move the branch here.
+    const holder = (await this.listManaged(repoPath)).find((entry) => entry.branch === input.branch && path.resolve(entry.path).toLowerCase() !== path.resolve(target).toLowerCase())
+    if (holder) {
+      if (this.isPoolPath(holder.path)) {
+        await this.releasePooled(repoPath, holder.path, input.branch, false)
+      } else if (existsSync(path.join(holder.path, '.git'))) {
+        const head = await headCommit(holder.path)
+        if (head) return { path: holder.path, branch: input.branch, baseCommit: head }
+      }
+    }
     await fs.rm(target, { recursive: true, force: true })
     await fs.mkdir(path.dirname(target), { recursive: true })
     await git(repoPath, ['worktree', 'add', '-q', target, input.branch], { internal: true })

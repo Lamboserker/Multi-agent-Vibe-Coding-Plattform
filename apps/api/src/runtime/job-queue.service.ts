@@ -30,6 +30,8 @@ export class JobQueueService implements OnApplicationShutdown {
   private readonly running = new Map<string, { type: string; controller: AbortController; promise: Promise<void> }>()
   /** Last progress report per active job, so a UI that (re)connects sees the current state immediately. */
   private readonly lastProgress = new Map<string, Record<string, unknown>>()
+  /** Queue wait (created → claimed) and run time of the last jobs (diagnostics). */
+  readonly timings: Array<{ type: string; waitMs: number; runMs?: number; status?: string; at: string }> = []
   private readonly recoveredListeners: Array<(job: Job, outcome: 'requeued' | 'interrupted') => Promise<void> | void> = []
   private timer?: NodeJS.Timeout
   private stopping = false
@@ -140,6 +142,8 @@ export class JobQueueService implements OnApplicationShutdown {
           // Atomic claim: only one tick can move the job from queued to running.
           const claimed = await this.prisma.job.updateMany({ where: { id: job.id, status: 'queued' }, data: { status: 'running', lockedAt: new Date(), attempts: { increment: 1 } } })
           if (claimed.count !== 1) continue
+          this.timings.push({ type: job.type, waitMs: Math.max(0, Date.now() - new Date(job.runAfter > job.createdAt ? job.runAfter : job.createdAt).getTime()), at: new Date().toISOString() })
+          if (this.timings.length > 200) this.timings.shift()
           this.execute({ ...job, attempts: job.attempts + 1, status: 'running' })
         }
       }
@@ -156,6 +160,8 @@ export class JobQueueService implements OnApplicationShutdown {
     const registration = this.handlers.get(job.type)
     if (!registration) return
     const controller = new AbortController()
+    const timing = [...this.timings].reverse().find((entry) => entry.type === job.type && entry.runMs === undefined)
+    const begin = Date.now()
     const promise = (async () => {
       this.events.publish('jobs', 'started', { jobId: job.id, type: job.type })
       try {
@@ -183,6 +189,7 @@ export class JobQueueService implements OnApplicationShutdown {
         this.events.publish('jobs', 'failed', { jobId: job.id, type: job.type, error: message, retry })
         this.logger.error(`Job ${job.id} (${job.type}) failed: ${message}`)
       } finally {
+        if (timing) timing.runMs = Date.now() - begin
         this.running.delete(job.id)
         this.lastProgress.delete(job.id)
         void this.tick()

@@ -16,7 +16,7 @@ export function renderContext(context: RepoContextDigest, maxChars = 24_000): st
   if (context.relevantFiles.length) {
     parts.push(
       `## Relevant files (outlines)\n${context.relevantFiles
-        .map((file) => `### ${file.path}\n${file.outline}${file.excerpt ? `\n\`\`\`\n${file.excerpt}\n\`\`\`` : ''}`)
+        .map((file) => `### ${file.path}${file.complete ? ' (complete content below – no need to read it)' : ''}\n${file.outline}${file.excerpt ? `\n\`\`\`\n${file.excerpt}\n\`\`\`` : ''}`)
         .join('\n')}`,
     )
   }
@@ -46,8 +46,18 @@ ${input.feedback ? `\n# Feedback from the user on the previous attempt\n${input.
 ${models}
 
 # Planning rules
-- Cost mode: ${input.costMode}. ${input.costMode === 'cheapest' ? 'Use premium execution only when a local model would very likely fail.' : input.costMode === 'quality' ? 'Prefer premium execution for anything non-trivial.' : 'Delegate routine work locally; reserve premium for genuinely hard or risky tasks.'}
-- At most ${input.maxTasks} tasks. One task = one coherent change a single agent can finish and verify (typically 1-4 files).
+- Cost mode: ${input.costMode}. ${input.costMode === 'cheapest' ? 'Use premium execution only when a local model would very likely fail.' : input.costMode === 'quality' ? 'Use premium execution for work that cannot be made precise enough for a local model (unclear root cause, security, cross-cutting design decisions); decompose everything else into precise local tasks.' : 'Delegate routine work locally; reserve premium for genuinely hard or risky tasks.'}
+- At most ${input.maxTasks} tasks. One task = one coherent change a single agent can finish and verify.
+- Local models are small: a "local" task modifies exactly ONE existing file (plus files it creates) and its description lists the concrete edits –
+  which element/function/selector, what to replace with what (e.g. the exact class or API mapping). Never just restate the overall goal.
+  Only "premium" tasks may span several files.
+- Large conversions (a CSS framework, a library, a language feature across the project): first one setup task (dependencies, configuration,
+  global entry), then one task per file that depends on it. If there are more files than tasks allowed, group the smallest files of one kind.
+- Every description must say what replaces removed code; a task must never only delete code.
+- Write compactly: a description is at most ~150 words – one sentence of intent, then the concrete edits as short
+  "old → new" lines. No prose, no repetition of the goal, no code blocks longer than a few lines.
+- The files marked "complete content" below are the full files: do not read them again.
+- Return the plan only as the structured output. Do not write it out as text first – that doubles the answer time.
 - Do not create separate tasks for "run the tests" or "review" – validation and review are done automatically after each task.
 - Two tasks must not modify the same file unless one depends on the other.
 - "dependsOn" lists ids of tasks that must be integrated first. Keep independent work independent so it can run in parallel.
@@ -57,8 +67,10 @@ ${models}
   "premium" for security-critical logic, complex multi-file refactors, unclear root causes, critical migrations.
 - "expectedInputTokens": estimate of the context the agent needs to read.
 - "capabilities": e.g. "typescript", "react", "nestjs", "prisma", "css", "testing".
+- Plan from the repository context below. Read files only to resolve a concrete doubt (a few targeted reads at most);
+  do not explore the repository broadly – the executing agents read the files themselves. Answer quickly.
 
-${renderContext(input.context)}`
+${renderContext(input.context, 80_000)}`
 }
 
 export function reviewPrompt(input: ReviewInput, maxDiffChars = 40_000): string {
@@ -102,6 +114,13 @@ ${input.previousFailures ? `\n# Previous attempt failed – fix these problems\n
 - Do not modify .env files, credentials, CI workflows or lockfiles.
 - Do not commit; the engine commits and validates your changes.
 - When finished, reply with a short summary, the changed files and any open issues.`
+}
+
+/** Follow-up in a resumed CLI session: context and earlier turns are already part of the session. */
+export function chatFollowUpPrompt(input: ChatInput): string {
+  return `Follow-up question in this conversation about the same repository (answer concisely, markdown allowed; use the read-only tools only if needed):
+
+${input.question}`
 }
 
 export function chatPrompt(input: ChatInput): string {

@@ -83,7 +83,7 @@ export function TasksPanel() {
               </button>
             </div>
             {hits.map((hit) => (
-              <div key={hit.messageId} className="tree-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }} onClick={() => void actions.selectSession(hit.sessionId)}>
+              <div key={hit.messageId} className="tree-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }} onClick={async () => { await actions.selectSession(hit.sessionId); actions.setLayout({ chatOpen: true }); actions.updateWorkspace({ chatView: 'history' }) }}>
                 <strong className="truncate" style={{ maxWidth: '100%' }}>{hit.sessionTitle}</strong>
                 <span className="faint" style={{ fontSize: 11 }}>{hit.excerpt}</span>
               </div>
@@ -93,7 +93,7 @@ export function TasksPanel() {
         {project && listLoaded && !list.length && !hits ? <Empty>Noch keine Sitzungen. Beschreibe im Chat rechts, was umgesetzt werden soll.</Empty> : null}
         {!hits &&
           list.map((session) => (
-            <div key={session.id} className={`tree-item session-item ${session.id === activeSessionId ? 'selected' : ''}`} data-testid="session-item" data-session-id={session.id} onClick={() => void actions.selectSession(session.id)}>
+            <div key={session.id} className={`tree-item session-item ${session.id === activeSessionId ? 'selected' : ''}`} data-testid="session-item" data-session-id={session.id} onClick={() => void actions.openWorkflow(session.id)}>
               <div className="row">
                 <StatusDot status={session.status === 'active' ? 'ok' : session.status} />
                 {session.pinned ? <Pin size={11} className="faint" /> : null}

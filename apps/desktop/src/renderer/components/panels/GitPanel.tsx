@@ -113,6 +113,7 @@ export function GitPanel() {
             onChange={async (event) => {
               try {
                 setStatus(await api.post<GitStatus>(`/projects/${project.id}/git/checkout`, { branch: event.target.value }))
+                window.dispatchEvent(new Event('mac:git-changed'))
                 await load()
               } catch (error) {
                 notify(errorMessage(error), 'error')
@@ -133,6 +134,7 @@ export function GitPanel() {
             disabled={!message.trim() || !staged.length}
             onClick={async () => {
               await api.post(`/projects/${project.id}/git/commit`, { message })
+              window.dispatchEvent(new Event('mac:git-changed'))
               setMessage('')
               await load()
               notify('Commit erstellt.', 'success')

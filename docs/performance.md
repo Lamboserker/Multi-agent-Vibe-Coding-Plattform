@@ -88,3 +88,115 @@ React-Komponente + Test 29,4 s inkl. Validierung (Typecheck + Vitest im Worktree
 
 Weitere gemessene Punkte mit geringerem Einfluss: Start bis IDE 1,1 s (Ziel erreicht), Renderer-Arbeit pro
 Logevent (317 ms CPU je 2 000 Events), Planung ohne Modell 0,16 s.
+
+## 4. Umgesetzte Optimierungen (Phase C) und Ergebnisse
+
+### 4.1 Maßnahmen
+
+| Engpass | Maßnahme | Ort |
+|---|---|---|
+| 1 Modell-Kaltstart | Speicherbewusstes Vorwärmen der geplanten lokalen Modelle während Planung (Standardrolle), nach dem Plan (zugewiesene Modelle) und beim Run-Start; gleiches `num_ctx` wie der Agent (sonst lädt Ollama neu); nur wenn das Modell neben den bereits geladenen in 85 % des VRAM passt; `keep_alive` konfigurierbar (`keepAliveMinutes`), abschaltbar (`modelWarmup`) | `LocalModelsService.warmup`, `ExecutionService` |
+| 2 Worktrees | Worktree-Pool (3 Slots/Projekt): Wiederverwendung per `checkout -B` + `reset --hard` + `clean -fdx -e node_modules` statt vollständigem Checkout; Fallback auf frischen Worktree; Recovery-kompatibel | `WorktreeManager` |
+| 3 Repository-Index | Invalidierung über Datei-Watcher + Git-HEAD: ohne Änderung kein Datei-I/O, gemeldete Pfade einzeln (`refreshRepoIndex`), Vollscan nur bei HEAD-Wechsel, unvollständiger Meldung oder ohne Watcher; Cache nur bei Änderung, asynchron | `RepoContextService`, `repo-index.ts` |
+| 4 CLI-Erkennung | Erkennungs-Cache (10 min, invalidiert bei Login/Logout/Verbinden/Refresh); Einstellungen zeigen erst den gecachten Status, Refresh im Hintergrund | `OrchestratorService`, `OrchestratorConnect` |
+| 5 Modelle-Ansicht | Hardware-Profil und Registry-Daten auf Platte gecacht (stale-while-revalidate) | `LocalModelsService` |
+| Start | IDE erscheint sofort aus dem zuletzt bekannten Zustand (gecachte Einstellungen, letztes Projekt); Laufzeitaufrufe warten im Main-Prozess, danach Abgleich; ein Lookup (inkl. Git-Prozess) weniger; NestJS-Startlog gefiltert | `sync.showCachedShell`, `main.ts` |
+| Editor | Monaco wird im Leerlauf vorgeladen (Lazy-Load ohne Wartezeit beim ersten Öffnen) | `sync.boot` |
+| Logs | Live-Logzeilen pro Event-Batch statt pro Event angehängt | `sync.appendLive` |
+
+### 4.2 Ergebnisse (gleiche Bedingungen, `perf-before-rerun-2026-10-12T08-25-25-243Z.json` → `perf-after-phaseC-2026-10-12T08-35-50-517Z.json`)
+
+| Vorgang | vorher p50 / p95 | nachher p50 / p95 | Veränderung (p95 bzw. Wert) |
+|---|---:|---:|---:|
+| Navigation zwischen Ansichten | 2,4 / **712 ms** | 3,8 / **8,7 ms** | −98,8 % |
+| Modelle-Ansicht nach App-Neustart | **2 959** / 3 163 ms | **15** / 109 ms | −99,5 % (p50) |
+| `GET /orchestrator` | **152** / 171 ms | **0,8** / 1,9 ms | −99,5 % (p50) |
+| Erste Datei nach Start öffnen | 109 ms | 87 ms | −20 % |
+| Kleine Datei öffnen | 18,6 / 25,9 ms | 15,6 / 22,3 ms | −16 % |
+| Tab-Wechsel bis Inhalt sichtbar | 14,4 / 26,6 ms | 11,6 / 16,5 ms | −38 % (p95) |
+| Geladenen Chat öffnen | 5,1 / 6,6 ms | 3,6 / 14,6 ms | ≈ (beide < 15 ms) |
+| Chat-Eingabe | 4,9 / 6,2 ms | 4,8 / 6,1 ms | ≈ |
+| 2 000 Logevents: Renderer-CPU | 257 ms | 176 ms | −32 % |
+| Start → IDE sichtbar | 1 111 ms | **319 ms** | −71 % |
+| Start → Arbeitsstand wiederhergestellt | – (Tabs/Session gingen verloren) | 800 ms | neu |
+| Reload → IDE / → Tabs wieder da | 66 ms / – | 54 / 139 ms | Tabs neu wiederhergestellt |
+| Laufzeit-Start | 573 ms | 528 ms | −8 % |
+
+Engine (`engine-baseline-…` → `engine-phaseC-…`, 5 000 Dateien):
+
+| Vorgang | vorher | nachher | Veränderung |
+|---|---:|---:|---:|
+| Index-Aktualisierung ohne Änderung | 647 ms (Vollscan) | ~30 ms (nur HEAD-Prüfung) | −95 % |
+| Index nach einer geänderten Datei | 596 ms | 26 ms | −96 % |
+| Worktree anlegen pro Teilaufgabe | 2 768 ms | 358–388 ms (Pool) | −86 % |
+| Worktree entfernen pro Teilaufgabe | 1 525 ms | 350–376 ms (Pool) | −75 % |
+| Erster lokaler Agentenaufruf (7B) | 21,7 s (Kaltstart, Datei-Cache kalt) bzw. 16 s | 0,30 s nach Vorwärmen | Ladezeit läuft parallel zur Planung |
+
+Nicht verbessert / offen: Erstbesuch der Modelle-Ansicht in einem **neuen** Profil (~2,6 s, Hardware-Erkennung
+und Registry ohne Cache); Laufzeit-Start ~0,5 s (Nest + Prisma + Recovery) – durch die sofort sichtbare IDE nicht
+mehr wahrnehmungsrelevant. Premium-Aufrufe (Claude/Codex) wurden nicht gemessen (Abo-Kontingent).
+
+## 5. Weitere Beschleuniger aus Phase C (Kurzbeschreibung)
+
+**Fast Path** (`packages/engine/src/fastpath/fast-path.ts`, Einstellung „Fast Path“, Standard an): Vor der
+Premium-Planung wird die Anfrage regelbasiert klassifiziert (keine Modellaufrufe):
+
+| Regel | Ergebnis |
+|---|---|
+| „formatieren/format“ + benannte Dateien, Prettier im Projekt | deterministisches Werkzeug `prettier --write` |
+| „lint/eslint … fix“ + benannte Dateien, ESLint im Projekt | `eslint --fix` |
+| „Importe organisieren/organize imports“ + TS/JS-Datei | TypeScript-LanguageService `organizeImports` |
+| „umbenennen/rename X in/zu Y“ (Funktion, Variable, Komponente, Typ, Interface …) | TypeScript-LanguageService `findRenameLocations` |
+| genau eine benannte Datei, kurze Anfrage ohne Architektur-/Sicherheits-/Mehrdatei-Signale, Kostenmodus ≠ quality, lokales Modell verfügbar | ein lokaler Agent ohne Premium-Planung |
+| sonst | normale Planung |
+
+Werkzeug-Teilaufgaben laufen ohne Modell (Ausführer „deterministic“) mit voller Validierung; scheitert ein
+Werkzeug, übernimmt ein Agent. GUI-Test: `e2e/fast-path.test.mjs` (Umbenennen in 5,75 s inkl. Typecheck und Tests,
+0 Modellaufrufe).
+
+**Diagnose-Dashboard** (Aktivitätsleiste → „Diagnose & Performance“): nur gemessene Werte – Laufzeit (RSS, Heap, CPU),
+System (CPU-Last, RAM, GPU/VRAM über `nvidia-smi`), geladene Modelle, Tokens/s je Modell, Vorwärmungen,
+CLI-Statuszeiten, Premium-Aufrufdauern, Job-Warte-/Laufzeiten, Validierungsdauern, Cache-Trefferquoten,
+p50/p95 je API-Route, langsame Operationen (≥ 200 ms), Renderer-Long-Tasks und Startmarken; exportierbar als
+JSON-Bericht ohne Geheimnisse: keine Umgebungsvariablen, Tokens, Prompts oder Dateiinhalte; API-Routen ohne
+Query-Parameter (dort stünden Dateipfade) und mit maskierten IDs; App-Angaben ohne Datenordner.
+
+**Chat-Sitzungen der Orchestrator-CLIs**: Folgefragen einer Sitzung setzen die CLI-Sitzung fort
+(`--resume` / Codex-Thread) statt Kontext und Verlauf erneut zu senden; schlägt die Fortsetzung fehl, wird
+automatisch ohne sie neu gefragt.
+
+## 6. Leistungsprüfung nach den Erweiterungen (Phasen D–F)
+
+Nach Plugins, Skills, MCP und IDE-Funktionen wurde dieselbe Messung wiederholt. Sie zeigte **echte Rückschritte**,
+die behoben wurden, bevor die Phasen als abgeschlossen galten:
+
+| Messung (p50) | Phase C | nach D–F, vor Korrektur | Ursache | Korrektur |
+|---|---:|---:|---|---|
+| Laufzeit-Start | 528 ms | 676 ms | 14-MB-Bundle wird bei jedem Start von V8 kompiliert (≈ 160 ms im CPU-Profil); MCP-SDK beim Start ausgewertet; Plugin-Registrierung vor `listen` | **V8-Compile-Cache** im Datenordner (`boot.cjs` aktiviert ihn, Flush nach dem Start; Messung: 520 → 356 ms bei warmem Cache), MCP-SDK erst beim ersten Verbindungsaufbau, Plugins 1,5 s nach der Bereitmeldung; außerdem griff der Nest-Startlog-Filter wegen umbenannter Klassen (`_RouterExplorer`) nicht – behoben |
+| Erste Datei öffnen | 87 ms | 188 ms | TypeScript-Programmaufbau (Live-Diagnosen) lief synchron im Laufzeit-Thread und blockierte andere Anfragen | Sprachdienst in einem **Worker-Thread** (`ts-worker`), eigener Compile-Cache |
+| Start → Arbeitsstand | 800 ms | 970 ms | beide oben | beide oben |
+
+Verworfen nach Messung: Lazy-Loading der Seitenpanels. Es verkleinerte das Start-Bundle (833 → 721 KB), brachte
+beim Start aber keinen messbaren Gewinn und verlangsamte den ersten Besuch einer Ansicht um ~300 ms – zurückgenommen.
+
+Endstand (drei Läufe nacheinander, `perf-final-1/-2/-3-2026-10-12…json`; die Streuung zwischen Läufen auf diesem
+Rechner beträgt bis ±15 %, deshalb Spannbreiten):
+
+| Vorgang | Phase C | Endstand (3 Läufe) |
+|---|---:|---:|
+| Laufzeit-Start | 528 ms | 438 / 464 / 517 ms |
+| Start → IDE sichtbar | 319 ms | 319 / 356 / 388 ms |
+| Start → Arbeitsstand wiederhergestellt | 800 ms | 716 / 762 / 908 ms |
+| Erste Datei öffnen | 87 ms | 95 / 91 / 124 ms |
+| Navigation p95 | 8,7 ms | 10,4 / 10,8 / 10,9 ms |
+| Reload → Tabs wieder da (p50) | 139 ms | 143 / 151 / 179 ms |
+| 2 000 Logevents: Renderer-CPU | 176 ms | 163 / 200 / 218 ms |
+| Modelle nach Neustart (p50) | 15 ms | 14 / 14 / 45 ms |
+
+Bewertung: Der Laufzeitstart ist schneller als nach Phase C; die übrigen Werte liegen im Bereich der Messstreuung,
+im Mittel leicht darüber (Start → IDE sichtbar im Mittel +11 %, Navigation p95 +2 ms). Gegenüber der ursprünglichen
+Baseline bleiben alle Verbesserungen aus Abschnitt 4 erhalten (z. B. Start → IDE 1 111 → 319–388 ms, Navigation
+p95 712 → ~11 ms).
+
+Gepackte App (`e2e/packaged-smoke.test.mjs`, NSIS-Build, frisches Profil, Kaltstart ohne Compile-Cache):
+Laufzeit bereit nach 927 ms ab Prozessstart.

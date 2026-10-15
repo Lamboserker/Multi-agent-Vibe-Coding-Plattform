@@ -1,0 +1,18 @@
+{
+  "name": "@multi-ai-coder/plugin-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Versioned plugin API of Multi-AI Coder (types, manifest validation, view model).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.15"
+  }
+}

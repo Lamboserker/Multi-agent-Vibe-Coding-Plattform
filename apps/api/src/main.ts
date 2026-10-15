@@ -28,11 +28,29 @@ async function bootstrap() {
   const { ExecutionService } = await import('./execution/execution.service.js')
   const { JobQueueService } = await import('./runtime/job-queue.service.js')
   const { SessionsService } = await import('./sessions/sessions.service.js')
+  const { PluginsService } = await import('./plugins/plugins.service.js')
 
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: ['log', 'warn', 'error'] })
+  const { ConsoleLogger } = await import('@nestjs/common')
+  // Nest logs one line per module and route at startup; in desktop mode only our own log lines,
+  // warnings and errors reach the shell's log file.
+  class StartupQuietLogger extends ConsoleLogger {
+    override log(message: unknown, context?: string) {
+      // the bundler may prefix class names ("_RouterExplorer")
+      if (context && ['InstanceLoader', 'RoutesResolver', 'RouterExplorer', 'NestFactory', 'NestApplication'].includes(context.replace(/^_+/, ''))) return
+      super.log(message, context)
+    }
+  }
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: config.desktop ? new StartupQuietLogger() : ['log', 'warn', 'error'] })
   app.enableShutdownHooks()
   if (!config.desktop) app.enableCors({ origin: [/^http:\/\/localhost:\d+$/, /^http:\/\/127\.0\.0\.1:\d+$/] })
   app.useBodyParser('json', { limit: '8mb' })
+  const { recordRequest, routeOf } = await import('./runtime/diagnostics.service.js')
+  app.use((request: { method: string; originalUrl: string }, response: { statusCode: number; on: (event: string, listener: () => void) => void }, next: () => void) => {
+    if (request.originalUrl.startsWith('/events')) return next() // long-lived stream
+    const started = performance.now()
+    response.on('finish', () => recordRequest({ method: request.method, route: routeOf(request.originalUrl), status: response.statusCode, ms: Math.round((performance.now() - started) * 10) / 10, at: new Date().toISOString() }))
+    next()
+  })
 
   // Recovery order: runs (interrupted), then jobs (plan/ask jobs report their interruption to the
   // sessions), then sessions (statuses recomputed from what is actually running now).
@@ -59,6 +77,11 @@ async function bootstrap() {
   const address = app.getHttpServer().address() as { port: number }
   console.log(`MAC_RUNTIME_READY port=${address.port}`)
   parentPort?.postMessage({ type: 'ready', port: address.port })
+  // persist V8's compile cache now (enabled by boot.cjs); otherwise it is only written at a clean exit
+  const nodeModule = (await import('node:module')) as { flushCompileCache?: () => void }
+  setTimeout(() => nodeModule.flushCompileCache?.(), 3000).unref()
+  // plugins start after the UI got its first data (separate processes; a failing plugin never blocks startup)
+  setTimeout(() => void app.get(PluginsService).start(), 1500)
 }
 
 bootstrap().catch((error: unknown) => {
