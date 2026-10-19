@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, OnApplicationShutdown, OnModul
 import { PluginsService } from '../plugins/plugins.service.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import {
   candidateModelNames,
   CATALOG_RESEARCHED_AT,
@@ -19,6 +20,8 @@ import {
   startOllamaServer,
   stopOwnedOllamaServers,
   usableVramMb,
+  estimateRuntimeMemory,
+  runtimeContextTokens,
   type HardwareProfile,
   type LocalModelRuntime,
   type LocalRole,
@@ -111,6 +114,24 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
     const installation = await detectOllama(settings.ollamaBaseUrl)
     return { ...installation, installPlan: installation.installed ? undefined : await ollamaInstallPlan() }
   }
+
+  /** Starts Ollama when it is installed but not reachable (local models are needed right now). */
+  async ensureOllama() {
+    const client = await this.client()
+    if (await client.isReachable()) return true
+    // a failed start (not installed, port taken) is not retried on every plan/run
+    if (Date.now() - this.ollamaStartFailedAt < 60_000) return false
+    const started = await this.startOllama()
+    if (started.started || (await client.isReachable())) {
+      this.invalidateInstalled()
+      return true
+    }
+    this.ollamaStartFailedAt = Date.now()
+    this.logger.warn(`Ollama could not be started: ${started.message}`)
+    return false
+  }
+
+  private ollamaStartFailedAt = 0
 
   async startOllama() {
     const settings = await this.settings.get()
@@ -400,6 +421,8 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
   }
 
   private readonly warming = new Map<string, Promise<void>>()
+  private readonly warmupReservations = new Map<string, number>()
+  private warmupQueue: Promise<unknown> = Promise.resolve()
   /** Model load times measured by warm-ups (diagnostics). */
   readonly warmups: Array<{ model: string; reason: string; loadMs?: number; skipped?: string; at: string }> = []
 
@@ -410,6 +433,13 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
    * context size equals the one the agent uses – a different num_ctx would make Ollama reload.
    */
   async warmup(models: Array<string | null | undefined>, reason: string): Promise<string[]> {
+    // Serialize only preparation/reservation, never the background model load itself.
+    const next = this.warmupQueue.then(() => this.prepareWarmup(models, reason))
+    this.warmupQueue = next.catch(() => undefined)
+    return next
+  }
+
+  private async prepareWarmup(models: Array<string | null | undefined>, reason: string): Promise<string[]> {
     const settings = await this.settings.get()
     const wanted = [...new Set(models.filter((model): model is string => Boolean(model)))]
     if (!settings.modelWarmup || !wanted.length) return []
@@ -418,20 +448,26 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
     const [running, profiles, installed, hardware] = await Promise.all([client.running().catch(() => []), this.engineProfiles(), this.installed().catch(() => [] as InstalledModel[]), this.hardware()])
     const vramMb = usableVramMb(hardware)
     let usedMb = running.reduce((sum, entry) => sum + (entry.size_vram ?? 0), 0) / 1024 / 1024
+    let pendingMb = 0
+    for (const [model, bytes] of this.warmupReservations) if (!running.some(entry => entry.name === model)) pendingMb += bytes / 1024 ** 2
+    usedMb += pendingMb
     const started: string[] = []
     for (const model of wanted) {
       if (running.some((entry) => entry.name === model) || this.warming.has(model)) continue
       const sizeMb = (installed.find((entry) => entry.name === model)?.sizeBytes ?? 0) / 1024 / 1024
       if (!sizeMb) continue
-      const needMb = sizeMb * 1.2
-      const fits = vramMb ? usedMb + needMb <= vramMb * 0.85 : hardware.memory.freeBytes / 1024 / 1024 > needMb + 4096
+      const numCtx = profiles.find((profile) => profile.model === model)?.contextWindow ?? settings.numCtx
+      const needBytes = estimateRuntimeMemory(sizeMb * 1024 ** 2, numCtx)
+      const needMb = needBytes / 1024 ** 2
+      const fits = vramMb ? usedMb + needMb <= vramMb * 0.85 : os.freemem() / 1024 ** 2 > pendingMb + needMb + 4096
       if (!fits) {
         this.events.publish('models', 'warmup_skipped', { model, reason, cause: 'memory' }, model)
         this.warmups.push({ model, reason, skipped: 'memory', at: new Date().toISOString() })
         continue
       }
       usedMb += needMb
-      const numCtx = profiles.find((profile) => profile.model === model)?.contextWindow ?? settings.numCtx
+      pendingMb += needMb
+      this.warmupReservations.set(model, needBytes)
       const begin = Date.now()
       this.events.publish('models', 'warmup_started', { model, reason }, model)
       const promise = client
@@ -442,7 +478,7 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
           this.events.publish('models', 'warmup_finished', { model, reason, loadMs: Date.now() - begin }, model)
         })
         .catch((error: unknown) => this.events.publish('models', 'warmup_failed', { model, reason, error: error instanceof Error ? error.message : String(error) }, model))
-        .finally(() => this.warming.delete(model))
+        .finally(() => { this.warming.delete(model); this.warmupReservations.delete(model) })
       this.warming.set(model, promise)
       started.push(model)
     }
@@ -458,6 +494,9 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
       if (!Array.isArray(models) || models.some((model) => typeof model.id !== 'string' || !Number.isSafeInteger(model.contextTokens) || model.contextTokens < 1024)) throw new BadRequestException('Model provider returned an invalid model catalog.')
       return models.map((model) => ({ model: `plugin:${provider.plugin}:${provider.id}:${model.id}`, roles: ['balanced'], toolCalling: false, contextWindow: model.contextTokens, available: true }))
     }
+    // roles are assigned but Ollama is not running (e.g. the app's own instance ended with the
+    // previous app session): start it like a download does, instead of routing everything away
+    if (Object.values(settings.modelRoles).some(Boolean)) await this.ensureOllama().catch(() => undefined)
     let installed: InstalledModel[] = []
     try {
       installed = await this.installed()
@@ -465,6 +504,7 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
       return []
     }
     const byModel = new Map<string, LocalModelRuntime>()
+    const hardware = await this.hardware()
     for (const role of ['fast', 'balanced', 'advanced'] as const) {
       const name = settings.modelRoles[role]
       if (!name) continue
@@ -481,7 +521,8 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
         // template capability AND (if tested) a successful real tool call
         toolCalling: Boolean(model?.capabilities.includes('tools')) && selfTest?.toolCalling !== 'failed',
         thinking: Boolean(model?.capabilities.includes('thinking')),
-        contextWindow: Math.min(model?.contextLength ?? settings.numCtx, settings.numCtx),
+        structuredOutput: selfTest?.structuredOutput,
+        contextWindow: runtimeContextTokens(settings.numCtx, model?.contextLength, model?.sizeBytes ?? 0, hardware),
         available: Boolean(model),
       })
     }
@@ -520,7 +561,12 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
       return 1
     }
     const names = [...new Set(Object.values(settings.modelRoles).filter((value): value is string => Boolean(value)))]
-    const total = names.reduce((sum, name) => sum + (installed.find((model) => model.name === name)?.sizeBytes ?? Infinity) * 1.25, 0)
+    const total = names.reduce((sum, name) => {
+      const model = installed.find((entry) => entry.name === name)
+      if (!model) return Infinity
+      const context = runtimeContextTokens(settings.numCtx, model.contextLength, model.sizeBytes, profile)
+      return sum + estimateRuntimeMemory(model.sizeBytes, context)
+    }, 0)
     return names.length > 1 && total < vram * 1024 * 1024 * 0.9 ? Math.min(2, names.length) : 1
   }
 

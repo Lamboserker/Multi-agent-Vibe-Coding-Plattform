@@ -75,7 +75,7 @@ export class ExecutionController {
 
   @Post('executions/:id/approve')
   approve(@Param('id') id: string, @Body() body: unknown) {
-    return this.executions.approve(id, oneOf(body, 'mode', ['branch', 'working_tree', 'fast_forward'] as const))
+    return this.executions.approve(id, oneOf(body, 'mode', ['branch', 'working_tree', 'fast_forward', 'commit'] as const))
   }
 
   @Post('executions/:id/discard')

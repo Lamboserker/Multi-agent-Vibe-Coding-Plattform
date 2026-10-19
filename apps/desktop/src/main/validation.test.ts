@@ -5,6 +5,7 @@ import {
   IpcValidationError,
   validateApiRequest,
   validateExternalUrl,
+  validateLinkUrl,
   validateTerminalCreate,
   validateTerminalData,
   validateTerminalId,
@@ -64,6 +65,17 @@ describe('terminal validation', () => {
     expect(isAllowedCwd('C:\\work\\repo\\src', ['C:\\work\\repo'], normalize)).toBe(true)
     expect(isAllowedCwd('C:\\work\\repo-other', ['C:\\work\\repo'], normalize)).toBe(false)
     expect(isAllowedCwd('C:\\Windows', ['C:\\work\\repo'], normalize)).toBe(false)
+  })
+})
+
+describe('validateLinkUrl', () => {
+  it('opens http and https links from the terminal, nothing else', () => {
+    expect(validateLinkUrl('http://localhost:5173/')).toBe('http://localhost:5173/')
+    expect(validateLinkUrl('https://vitejs.dev/guide/')).toBe('https://vitejs.dev/guide/')
+    expect(() => validateLinkUrl('file:///C:/Windows/system32/calc.exe')).toThrow(/http/)
+    expect(() => validateLinkUrl('ms-settings:privacy')).toThrow(/http/)
+    expect(() => validateLinkUrl('http://user:secret@example.com')).toThrow(/credentials/)
+    expect(() => validateLinkUrl(42)).toThrow()
   })
 })
 

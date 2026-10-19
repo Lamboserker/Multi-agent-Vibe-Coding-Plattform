@@ -6,7 +6,7 @@ import { isGitRepository } from '@multi-ai-coder/engine'
 import { PrismaService } from '../common/prisma.service.js'
 import { RepoScannerService } from '../orchestrator/repo-scanner.service.js'
 import { SettingsService } from '../runtime/settings.service.js'
-import { WorkspaceFsService } from '../workspace-fs/workspace-fs.service.js'
+import { ensureRepository, WorkspaceFsService } from '../workspace-fs/workspace-fs.service.js'
 
 interface CreateProjectDto {
   name: string
@@ -45,12 +45,14 @@ export class ProjectsService {
   async open(folder: string, name?: string) {
     const repoPath = path.resolve(folder)
     if (!existsSync(repoPath) || !statSync(repoPath).isDirectory()) throw new BadRequestException(`Folder not found: ${folder}`)
+    // agents need a repository with a commit: set it up when a project is opened (never rewrites history)
+    const repository = await ensureRepository(repoPath).catch((error: unknown) => ({ initialized: false, committed: false, hasCommit: false, skipped: error instanceof Error ? error.message : String(error) }))
     const all = await this.prisma.project.findMany({ where: { repoPath } })
     let project = all[0] ?? (await this.create({ name: name ?? path.basename(repoPath), repoPath }))
     project = await this.prisma.project.update({ where: { id: project.id }, data: { lastOpenedAt: new Date() } })
     await this.settings.update({ lastProjectId: project.id })
     await this.files.watchProject(project.id)
-    return { ...project, isGit: await isGitRepository(repoPath) }
+    return { ...project, isGit: await isGitRepository(repoPath), repository }
   }
 
   async createNew(parentDir: string, name: string) {

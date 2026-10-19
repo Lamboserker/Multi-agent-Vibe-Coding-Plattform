@@ -10,12 +10,12 @@ import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { answerFolderDialog, launch, newProfile, percentiles, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { CHAT_MESSAGES, go, launch, newProfile, openProject, percentiles, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
 
 const live = process.env.MAC_E2E_LIVE === '1'
 const model = process.env.MAC_E2E_MODEL ?? 'qwen2.5-coder:7b'
 const ollamaUrl = process.env.MAC_E2E_OLLAMA_URL ?? 'http://127.0.0.1:11434'
-const VIEWS = ['Projekte', 'Explorer', 'Git', 'Sitzungen', 'Agenten', 'Modelle', 'Nutzung & Kosten', 'Einstellungen']
+const VIEWS = ['Code', 'Freigabe', 'Sitzungen', 'Modelle', 'Kosten', 'Setup', 'Code', 'Leitstand']
 const REQUEST =
   'Erstelle eine React-Komponente `Greeting` in `src/components/Greeting.tsx` mit der Prop `name: string`, die `<h1 className="greeting">Hallo, {name}!</h1>` rendert, ' +
   'und einen Vitest-Test in `src/components/Greeting.test.tsx` nach dem Muster von `src/components/Badge.test.tsx` (renderToStaticMarkup).'
@@ -43,10 +43,11 @@ test('a real run keeps running and stays in its session across navigation, reloa
     await api('POST', '/onboarding/complete')
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().waitFor({ timeout: 30_000 })
     step('configured and project opened', { model })
+    await go(page, 'Leitstand')
 
     // --- start a real run ---
     await page.locator('#chat-input').fill(REQUEST)
@@ -63,12 +64,12 @@ test('a real run keeps running and stays in its session across navigation, reloa
 
     const runStatus = async () => (await api('GET', `/executions/${executionId}`)).data.status
     const uiState = () =>
-      page.evaluate(() => ({
-        sessionTitle: document.querySelector('.chat-panel .panel-header h2')?.textContent,
-        messages: document.querySelectorAll('[data-testid="chat-messages"] .msg[data-role]').length,
-        runVisible: Boolean(document.querySelector('[data-testid="run-running"]')) || Boolean(document.querySelector('.chat-panel .card strong')),
+      page.evaluate((selector) => ({
+        sessionTitle: document.querySelector('[data-testid="session-title"]')?.textContent,
+        messages: document.querySelectorAll(selector).length,
+        runVisible: Boolean(document.querySelector('[data-testid="run-running"]')) || Boolean(document.querySelector('.approval-card')),
         activity: document.querySelector('.activity-indicator')?.textContent ?? document.querySelector('.status-bar')?.textContent,
-      }))
+      }), CHAT_MESSAGES)
     const initial = await uiState()
 
     // --- navigate at least 30 times while the run is active ---
@@ -76,8 +77,7 @@ test('a real run keeps running and stays in its session across navigation, reloa
     for (let index = 0; index < 40; index += 1) {
       const view = VIEWS[index % VIEWS.length]
       const started = Date.now()
-      await page.locator(`nav.activity-bar button[aria-label="${view}"]`).click()
-      await page.locator(`nav.activity-bar button[aria-label="${view}"].active`).waitFor()
+      await go(page, view)
       report.navigationMs.push(Date.now() - started)
       const status = await runStatus()
       if (ACTIVE.includes(status)) navigationsWhileRunning += 1
@@ -119,7 +119,7 @@ test('a real run keeps running and stays in its session across navigation, reloa
     })
     report.coding = { status: finalStatus, ok: ['awaiting_approval', 'completed'].includes(finalStatus), task: detail.tasks[0], attempts: run.agentRuns, finalValidation: run.finalValidation }
     assert.equal(run.usage?.premium.calls ?? 0, 0, 'no premium call happened')
-    if (finalStatus === 'awaiting_approval') await page.getByText('Änderungen bereit zur Freigabe').first().waitFor({ timeout: 20_000 })
+    if (finalStatus === 'awaiting_approval') await page.locator('[data-testid="workflow"][data-state="approval"]').waitFor({ timeout: 20_000 })
 
     // --- app restart: the session with its finished run is restored ---
     await quit(app)
@@ -129,7 +129,7 @@ test('a real run keeps running and stays in its session across navigation, reloa
     await waitUntil(async () => (await uiState()).sessionTitle === initial.sessionTitle, 30_000, 'session restored after restart')
     const restartedStatus = await runStatus()
     assert.equal(restartedStatus, finalStatus, 'a finished run keeps its status across restarts')
-    if (finalStatus === 'awaiting_approval') await page.getByText('Änderungen bereit zur Freigabe').first().waitFor({ timeout: 20_000 })
+    if (finalStatus === 'awaiting_approval') await page.locator('[data-testid="workflow"][data-state="approval"]').waitFor({ timeout: 20_000 })
     const activity = (await api('GET', '/activity')).data
     assert.equal(activity.executions.length, 0, 'nothing is shown as running after the restart')
     step('app restart', { restartedStatus })
@@ -157,8 +157,7 @@ test('an app restart during a real run marks it interrupted (not running) and it
     await api('POST', '/onboarding/complete')
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
     await page.locator('#chat-input').fill(REQUEST)
     await page.getByRole('button', { name: 'Senden' }).click()
     await page.getByRole('button', { name: 'Ausführung starten' }).waitFor({ timeout: 120_000 })
@@ -180,7 +179,7 @@ test('an app restart during a real run marks it interrupted (not running) and it
     assert.equal((await api('GET', `/executions/${executionId}`)).data.status, 'interrupted', 'a run whose process ended is shown as interrupted, never as running')
     assert.equal((await api('GET', '/activity')).data.executions.length, 0)
     await waitUntil(async () => (await api('GET', `/sessions/${sessionId}`)).data.status === 'interrupted', 10_000, 'session interrupted')
-    await page.getByRole('button', { name: 'Ausführung fortsetzen' }).click()
+    await page.locator('[data-testid="workflow"]').getByRole('button', { name: 'Ausführung fortsetzen' }).click()
     console.log('[e2e] resumed after restart')
     const finalStatus = await waitUntil(async () => {
       const status = (await api('GET', `/executions/${executionId}`)).data.status

@@ -5,6 +5,15 @@ const task = (id: string, overrides: Partial<SchedulableTask> = {}): Schedulable
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe('DagScheduler', () => {
+  it('keeps the last local model warm between serial tasks without crossing dependencies', async () => {
+    const order: string[] = []
+    const scheduler = new DagScheduler([task('a', { model: 'A', priority: 3 }), task('b', { model: 'B', priority: 2 }), task('c', { model: 'A', priority: 1 }), task('d', { model: 'A', dependsOn: ['b'] })], {
+      slots: { local: 1, premium: 1, none: 1 },
+      run: async current => { order.push(current.id); return 'succeeded' },
+    })
+    await scheduler.run()
+    expect(order).toEqual(['a', 'c', 'b', 'd'])
+  })
   it('runs independent tasks in parallel up to the slot limit and respects dependencies', async () => {
     let concurrent = 0
     let maxConcurrent = 0

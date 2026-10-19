@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { AppEvent, MacBridge } from '../shared/bridge.js'
+import type { AppEvent, MacBridge, PreviewEvent } from '../shared/bridge.js'
 
 /**
  * One ipcRenderer listener per channel, fanned out to any number of subscribers. Components can
@@ -24,6 +24,7 @@ const onTerminalData = fanOut<[string, string]>('terminal:data', (payload) => (A
 const onTerminalExit = fanOut<[string, number]>('terminal:exit', (payload) => [[(payload as { id: string }).id, (payload as { exitCode: number }).exitCode]])
 const onTerminalChanged = fanOut<[]>('terminal:changed', () => [[]])
 const onFlush = fanOut<[]>('app:flush', () => [[]])
+const onPreviewEvent = fanOut<[PreviewEvent]>('preview:event', (payload) => [[payload as PreviewEvent]])
 
 /** The only API the renderer can use. No Node.js or Electron objects are exposed. */
 const bridge: MacBridge = {
@@ -46,7 +47,17 @@ const bridge: MacBridge = {
   },
   shell: {
     openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+    openLink: (url) => ipcRenderer.invoke('shell:openLink', url),
     showItem: (target) => ipcRenderer.invoke('shell:showItem', target),
+  },
+  preview: {
+    show: (id, url, bounds) => ipcRenderer.invoke('preview:show', id, url, bounds),
+    hide: (id) => ipcRenderer.invoke('preview:hide', id),
+    capture: (id) => ipcRenderer.invoke('preview:capture', id),
+    reload: (id) => ipcRenderer.invoke('preview:reload', id),
+    devTools: (id) => ipcRenderer.invoke('preview:devtools', id),
+    close: (id) => ipcRenderer.invoke('preview:close', id),
+    onEvent: (listener) => onPreviewEvent(listener),
   },
   secrets: {
     set: (scope, name, value) => ipcRenderer.invoke('secrets:set', scope, name, value),

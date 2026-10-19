@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { answerFolderDialog, appDir, launch, newProfile, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { appDir, go, launch, newProfile, openProject, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
 
 const live = process.env.MAC_E2E_LIVE === '1'
 const model = process.env.MAC_E2E_MODEL ?? 'qwen2.5-coder:7b'
@@ -53,9 +53,10 @@ test('a local agent uses an assigned MCP tool and a matching skill in a real run
 
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().waitFor({ timeout: 30_000 })
+    await go(page, 'Leitstand')
 
     await page.locator('#chat-input').fill(REQUEST)
     await page.getByRole('button', { name: 'Senden' }).click()
@@ -78,7 +79,8 @@ test('a local agent uses an assigned MCP tool and a matching skill in a real run
     step('run finished', { finalStatus, started, toolCalls: toolCalls.slice(0, 20), premiumCalls: run.usage?.premium.calls, validation: run.finalValidation?.summary })
 
     assert.equal(run.usage?.premium.calls ?? 0, 0, 'no premium call happened')
-    assert.ok(started.some((message) => /Skills: .*magic-constants/.test(message) && /1 MCP-Werkzeug/.test(message)), `agent got the skill and the MCP tool: ${started.join(' | ')}`)
+    // The catalogue also contains the permission-checked result paging tool.
+    assert.ok(started.some((message) => /Skills: .*magic-constants/.test(message) && /[1-9]\d* MCP-Werkzeug/.test(message)), `agent got the skill and the MCP tool: ${started.join(' | ')}`)
     assert.ok(toolCalls.some((message) => message.includes('mcp_config_magic_number')), 'the agent called the MCP tool')
     const mcpLogs = (await api('GET', `/mcp/servers/${server.id}`)).data.logs.map((line) => line.message)
     assert.ok(mcpLogs.some((line) => line.startsWith('agent call magic_number')), 'the MCP server saw the agent call')

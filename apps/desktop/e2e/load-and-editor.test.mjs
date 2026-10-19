@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
-import { answerFolderDialog, launch, newProfile, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { CHAT_MESSAGES, go, launch, newProfile, openProject, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
 
 const palette = async (page, label) => {
   await page.keyboard.press('Control+Shift+P')
@@ -38,8 +38,8 @@ test('large lists stay bounded in the DOM, editor AI hand-offs reach the chat', 
       window.__loadLongTasks = []
       new PerformanceObserver((list) => { for (const entry of list.getEntries()) window.__loadLongTasks.push(entry.duration) }).observe({ type: 'longtask', buffered: false })
     })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="bulk"]').first().waitFor()
 
     // --- explorer: 1,000 files in one folder ---
@@ -117,18 +117,20 @@ test('large lists stay bounded in the DOM, editor AI hand-offs reach the chat', 
       window.__loadLongTasks = []
       new PerformanceObserver((list) => { for (const entry of list.getEntries()) window.__loadLongTasks.push(entry.duration) }).observe({ type: 'longtask', buffered: false })
     })
+    await go(page, 'Leitstand')
     started = Date.now()
-    await page.locator('.chat-messages .msg', { hasText: 'Nachricht 1999' }).first().waitFor({ timeout: 60_000 })
+    await page.locator(CHAT_MESSAGES, { hasText: 'Nachricht 1999' }).first().waitFor({ timeout: 60_000 })
     metrics.chat_open_ms = Date.now() - started
-    metrics.chat_dom_messages = await page.locator('.chat-messages .msg').count()
+    metrics.chat_dom_messages = await page.locator(CHAT_MESSAGES).count()
     assert.ok(metrics.chat_dom_messages <= 260, `first page only (${metrics.chat_dom_messages})`)
     started = Date.now()
     await page.getByRole('button', { name: 'Ältere Nachrichten laden' }).click()
-    await waitUntil(async () => (await page.locator('.chat-messages .msg').count()) > metrics.chat_dom_messages, 20_000, 'older page')
+    await waitUntil(async () => (await page.locator(CHAT_MESSAGES).count()) > metrics.chat_dom_messages, 20_000, 'older page')
     metrics.chat_older_page_ms = Date.now() - started
     // the view stays where the user is (no jump to the end) and the newest message is still there
-    assert.ok(await page.locator('.chat-messages .msg', { hasText: 'Nachricht 1999' }).count())
+    assert.ok(await page.locator(CHAT_MESSAGES, { hasText: 'Nachricht 1999' }).count())
 
+    await go(page, 'Code')
     await page.locator('.bottom-tabs button', { hasText: 'Logs' }).click()
     started = Date.now()
     await waitUntil(async () => Number(await page.getByTestId('log-lines').getAttribute('data-total')) >= 10_000, 60_000, '10,000 log lines loaded')

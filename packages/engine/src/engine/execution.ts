@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { runLocalAgent, type AgentTool, type LocalAgentResult } from '../agents/local-agent.js'
+import { requiredToolNames, runLocalAgent, type AgentTool, type LocalAgentResult } from '../agents/local-agent.js'
 import { commitStaged, git, hasStagedChanges, headCommit, integratedTaskCommits, squashSince, stageAll } from '../git/git.js'
 import { WorktreeManager, type WorktreeHandle } from '../git/worktrees.js'
 import { buildContextDigest, searchCode, type RepoIndex } from '../index/repo-index.js'
@@ -19,6 +19,7 @@ import { isSecurityCriticalPath } from '../security/paths.js'
 import { failureDigest, runValidationChecks, type ValidationCheck, type ValidationReport } from '../validation/checks.js'
 import { runProcess, sanitizedEnv } from '../util/process.js'
 import { runFastPathTool, type FastPathTool } from '../fastpath/fast-path.js'
+import { normalizeDesign } from '../ui/design-normalize.js'
 
 export type EngineTaskStatus = 'planned' | 'queued' | 'running' | 'validating' | 'repairing' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'blocked'
 
@@ -98,6 +99,8 @@ export interface EngineSettings {
   reviewFixRounds: number
   /** Ollama keep_alive for agent calls, e.g. '15m'. */
   keepAlive?: string
+  /** Auto uses one structured edit for small tasks with complete file context. */
+  localExecutionMode?: 'auto' | 'tools'
 }
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
@@ -213,6 +216,8 @@ export interface EngineStore {
 
 export interface LocalModelRuntime extends LocalModelProfile {
   thinking?: boolean
+  /** Explicitly failed structured self-test disables the automatic one-response path. */
+  structuredOutput?: boolean
 }
 
 export interface EngineDeps {
@@ -228,9 +233,9 @@ export interface EngineDeps {
   settings: EngineSettings
   /**
    * Skills, MCP and plugin tools assigned to the executing agent (provided by the application).
-   * Failures are logged and the agent runs with its file tools only.
+   * Loading failures fail the attempt rather than dropping required instructions.
    */
-  agentResources?: (input: { task: EngineTask; model: string; worktreePath: string; supportsTools: boolean }) => Promise<{ tools: AgentTool[]; instructions?: string; sources?: string[] }>
+  agentResources?: (input: { task: EngineTask; model: string; worktreePath: string; supportsTools: boolean }) => Promise<{ tools: AgentTool[]; instructions?: string; sources?: string[]; requiredTools?: string[] }>
 }
 
 export interface RunOutcome {
@@ -267,6 +272,7 @@ export class ExecutionRunner {
   private readonly controller = new AbortController()
   private readonly integrationMutex = new Mutex()
   private readonly unavailableModels = new Set<string>()
+  private readonly structuredUnavailableModels = new Set<string>()
   private premiumBlockedReason?: string
   private integrationWorktree?: WorktreeHandle
   private readonly decisions = new Map<string, RouteDecision>()
@@ -530,9 +536,19 @@ export class ExecutionRunner {
             })
             const started = Date.now()
             const logs: string[] = []
-            const agent = step.executor === 'local'
-              ? await this.runLocal(task, step.model!, worktree, previousFailures, signal, logs, round)
-              : await this.runPremium(task, worktree, previousFailures, signal, logs, round, sessionId)
+            const agent = await (step.executor === 'local'
+              ? this.runLocal(task, step.model!, worktree, previousFailures, signal, logs, round)
+              : this.runPremium(task, worktree, previousFailures, signal, logs, round, sessionId)
+            ).catch(async (error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error)
+              await store.finishAttempt(attemptId, {
+                outcome: signal.aborted ? 'cancelled' : 'error', status: signal.aborted ? 'cancelled' : 'failed',
+                durationMs: Date.now() - started, tokensMeasured: false, patchStatus: 'no_patch', logs, errorMessage: message, escalated: false,
+              })
+              task.status = signal.aborted ? 'cancelled' : 'failed'
+              await store.updateTask(task.id, { status: task.status, errorMessage: message })
+              throw error
+            })
             sessionId = agent.sessionId ?? sessionId
             lastSummary = agent.summary ?? lastSummary
 
@@ -554,8 +570,21 @@ export class ExecutionRunner {
               break // no repair for infrastructure failures; next escalation step
             }
 
-            // Commit the attempt and validate it.
+            if (agent.error) {
+              await store.finishAttempt(attemptId, {
+                outcome: 'error', status: 'failed', durationMs: Date.now() - started,
+                inputTokens: agent.inputTokens, outputTokens: agent.outputTokens, tokensMeasured: agent.tokensMeasured,
+                patchStatus: 'incomplete', logs, errorMessage: agent.error, escalated: false,
+              })
+              previousFailures = 'The previous response was incomplete: ' + agent.error + '. Inspect current files and finish the complete task.'
+              lastError = previousFailures
+              continue
+            }
+
+            // Commit the attempt and validate it – after the mechanical design fixes (see design-normalize.ts).
             await store.updateTask(task.id, { status: 'validating' })
+            const designFixes = await normalizeDesign(worktree.path).catch(() => [] as string[])
+            if (designFixes.length) this.event('info', 'design_fixed', `${task.key}: ${designFixes.join('; ')}`, undefined, task.id)
             const commit = await commitIfChanged(worktree.path, `${task.key}: ${task.title}`)
             if (!commit && !agent.error && agent.summary && task.acceptanceCriteria.includes(FILE_SCOPED_CRITERION)) {
               // a per-file task of a project-wide goal: the agent found nothing in its file to change
@@ -794,7 +823,7 @@ export class ExecutionRunner {
     const resources = this.deps.agentResources
       ? await this.deps.agentResources({ task, model, worktreePath: worktree.path, supportsTools: profile?.toolCalling ?? false }).catch((error: unknown) => {
           this.event('warn', 'agent_resources_failed', `${task.key}: skills/tools unavailable (${error instanceof Error ? error.message : String(error)}).`, undefined, task.id)
-          return undefined
+          throw error // Required instructions/tools must not be silently dropped.
         })
       : undefined
     this.event('info', 'agent_started', `${task.key}: ${task.agent ? `${task.agent.name} mit ` : ''}${model}${round ? ` (repair ${round})` : ''}, ${profile?.toolCalling ? 'tool calling' : 'structured output'}${resources?.sources?.length ? `, mit ${resources.sources.join(', ')}` : ''}.`, undefined, task.id)
@@ -802,6 +831,7 @@ export class ExecutionRunner {
       client: this.deps.localClientFor?.(model) ?? this.deps.ollama,
       model,
       supportsTools: profile?.toolCalling ?? false,
+      preferStructured: this.deps.settings.localExecutionMode !== 'tools' && profile?.structuredOutput !== false && !this.structuredUnavailableModels.has(model) && task.complexity <= 2 && task.risk <= 2 && ![...task.relevantFiles, ...task.newFiles].some(isSecurityCriticalPath),
       supportsThinking: profile?.thinking,
       workspace,
       task: { id: task.key, title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria, relevantFiles: task.relevantFiles, newFiles: task.newFiles },
@@ -809,6 +839,7 @@ export class ExecutionRunner {
       previousFailures: previousFailures || undefined,
       search: (query) => searchCode(worktree.path, query, { maxResults: 30 }),
       extraTools: task.agent?.permissions?.externalTools === false ? [] : resources?.tools,
+      requiredTools: [...(resources?.requiredTools ?? []), ...requiredToolNames(resources?.tools ?? [], this.run.goal)],
       extraInstructions: [task.agent?.instructions ? `## Your role: ${task.agent.name}\n${task.agent.instructions}` : '', resources?.instructions ?? ''].filter(Boolean).join('\n\n') || undefined,
       maxSteps: task.agent?.maxSteps,
       maxOutputTokens: task.agent?.resources?.maxOutputTokens,
@@ -827,6 +858,10 @@ export class ExecutionRunner {
       },
     })
     let peakMemoryMb: number | undefined
+    if (result.mode === 'structured' && (result.errorKind === 'invalid_output' || result.invalidToolCalls > 0)) {
+      this.structuredUnavailableModels.add(model)
+      this.event('info', 'structured_fallback', `${model}: structured operations could not be applied reliably; further attempts use its tool loop when available.`, undefined, task.id)
+    }
     try {
       const running = await this.deps.ollama.running()
       const loaded = running.find((entry) => entry.name === model || entry.model === model)
@@ -881,7 +916,15 @@ export class ExecutionRunner {
       this.event('error', 'agent_permission', `${task.key}: ${error}`, undefined, task.id)
       return { hardFailure: true, timedOut: false, error, inputTokens: 0, outputTokens: 0, tokensMeasured: true, sessionId: undefined as string | undefined, summary: undefined as string | undefined }
     }
-    this.event('info', 'agent_started', `${task.key}: ${orchestrator.displayName}${round ? ' (repair)' : ''}.`, undefined, task.id)
+    // the same role and skills a local agent gets (e.g. the UI design rules for a frontend task)
+    const resources = this.deps.agentResources
+      ? await this.deps.agentResources({ task, model: orchestrator.id, worktreePath: worktree.path, supportsTools: false }).catch((error: unknown) => {
+          this.event('warn', 'agent_resources_failed', `${task.key}: skills unavailable (${error instanceof Error ? error.message : String(error)}).`, undefined, task.id)
+          throw error // Required instructions must not be silently dropped.
+        })
+      : undefined
+    const guidance = [task.agent?.instructions ? `## Your role: ${task.agent.name}\n${task.agent.instructions}` : '', resources?.instructions ?? ''].filter(Boolean).join('\n\n') || undefined
+    this.event('info', 'agent_started', `${task.key}: ${orchestrator.displayName}${round ? ' (repair)' : ''}${resources?.sources?.length ? `, mit ${resources.sources.join(', ')}` : ''}.`, undefined, task.id)
     const started = Date.now()
     try {
       const { result, meta } = await orchestrator.executeComplexTask(
@@ -889,6 +932,7 @@ export class ExecutionRunner {
           taskId: task.key,
           title: task.title,
           instructions: task.description,
+          guidance,
           acceptanceCriteria: task.acceptanceCriteria,
           relevantFiles: [...task.relevantFiles, ...task.newFiles],
           previousFailures: previousFailures || undefined,
@@ -1012,7 +1056,7 @@ export class ExecutionRunner {
       }
     }
 
-    const ok = patch.ok
+    const ok = patch.ok && validation.ok
     await store.updateRun(this.run.id, {
       status: ok ? 'awaiting_approval' : 'failed',
       integrationCommit: head,
@@ -1020,9 +1064,9 @@ export class ExecutionRunner {
       finalValidation: validation,
       review,
       summary: `${this.tasks.length - failedTasks.length}/${this.tasks.length} task(s) integrated; ${patch.files.length} file(s), +${patch.linesAdded}/-${patch.linesDeleted}. Validation: ${validation.summary}`,
-      errorMessage: ok ? (failedTasks.length ? `Tasks not integrated: ${failedTasks.join(', ')}` : null) : patch.issues.filter((issue) => issue.severity === 'blocking').map((issue) => issue.message).join('; '),
+      errorMessage: ok ? (failedTasks.length ? `Tasks not integrated: ${failedTasks.join(', ')}` : null) : [patch.issues.filter((issue) => issue.severity === 'blocking').map((issue) => issue.message).join('; '), !validation.ok ? `Final validation failed: ${validation.summary}` : ''].filter(Boolean).join('; '),
     })
-    this.event(ok ? 'info' : 'error', 'run_ready', ok ? 'Run finished; waiting for approval.' : 'Final patch validation failed.')
+    this.event(ok ? 'info' : 'error', 'run_ready', ok ? 'Run finished; waiting for approval.' : 'Final validation failed.')
     return { ok, validation, review, patch }
   }
 

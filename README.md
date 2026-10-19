@@ -49,3 +49,7 @@ pnpm typecheck
 ```
 
 The live end-to-end test (real Ollama model + real orchestrator) is opt-in, see `apps/desktop/e2e/README.md`.
+
+Task-latency measurements, implementation details and hardware limits: [performance report](docs/performance-2026-10-15.md). The reproducible engine benchmark is `packages/engine/bench/task-latency.mjs`.
+
+Prepared local execution and the repeated real-UI comparison: [UI execution report](docs/benchmarks/ui-execution-optimization-2026-10-15.md).

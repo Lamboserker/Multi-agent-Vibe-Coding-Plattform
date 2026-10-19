@@ -1,0 +1,111 @@
+{
+  "folder": "comparison-after-slug-2026-10-15T13-28-15-706Z",
+  "phase": "after",
+  "scenario": "slug",
+  "success": true,
+  "error": null,
+  "totalMs": 89410.90014648438,
+  "localMs": 9818.287199999995,
+  "localOutputTokens": 480,
+  "allOutputTokens": 1641,
+  "modelCalls": 5,
+  "localModelCalls": 3,
+  "premiumModelCalls": 2,
+  "repairs": 2,
+  "controlledFaults": 0,
+  "agentCapabilities": [
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 1877,
+      "preferStructured": true
+    },
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 1877,
+      "preferStructured": true
+    },
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 1877,
+      "preferStructured": true
+    }
+  ],
+  "local": [
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 4025.9284000000007,
+      "outputTokens": 198,
+      "inputTokens": 3504,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 662
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.35,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 3017.616399999999,
+      "outputTokens": 142,
+      "inputTokens": 3991,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 484
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.35,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 2774.7423999999955,
+      "outputTokens": 140,
+      "inputTokens": 3706,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 459
+    }
+  ],
+  "premium": [
+    {
+      "name": "codex.createPlan.start",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "outputTokens": 539,
+      "durationMs": 21389.3934
+    },
+    {
+      "name": "codex.executeComplexTask.start",
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "outputTokens": 622,
+      "durationMs": 37838.113099999995
+    }
+  ]
+}

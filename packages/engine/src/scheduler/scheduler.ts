@@ -47,6 +47,7 @@ export class DagScheduler {
   private paused = false
   private cancelled = false
   private wake: (() => void) | undefined
+  private lastLocalModel?: string
 
   constructor(
     private readonly tasks: SchedulableTask[],
@@ -167,13 +168,14 @@ export class DagScheduler {
 
   private affinity(task: SchedulableTask): number {
     if (task.resource !== 'local' || !task.model) return 0
-    return [...this.running.values()].some((running) => running.model === task.model) ? 1 : 0
+    return [...this.running.values()].some((running) => running.model === task.model) || this.lastLocalModel === task.model ? 1 : 0
   }
 
   private async start(task: SchedulableTask): Promise<void> {
     const controller = new AbortController()
     this.controllers.set(task.id, controller)
     this.running.set(task.id, task)
+    if (task.resource === 'local' && task.model) this.lastLocalModel = task.model
     this.setState(task.id, 'running')
     try {
       const outcome = await this.options.run(task, controller.signal)

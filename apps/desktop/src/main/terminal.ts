@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { IPty } from '@lydell/node-pty'
+import { withoutPackageManagerContext } from '../shared/clean-env.js'
 
 type PtyModule = typeof import('@lydell/node-pty')
 
@@ -153,8 +154,8 @@ export class TerminalManager {
         args.push('-NoExit', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'))
       }
     }
-    const env: Record<string, string> = {}
-    for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith('MAC_') && key !== 'ELECTRON_RUN_AS_NODE') env[key] = value
+    // the project's shell: without the app's own variables and package-manager context (see clean-env)
+    const env = withoutPackageManagerContext(Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('MAC_') && key !== 'ELECTRON_RUN_AS_NODE')))
     env.TERM = 'xterm-256color'
     env.COLORTERM = 'truecolor'
     const cwd = options.cwd && existsSync(options.cwd) ? options.cwd : os.homedir()

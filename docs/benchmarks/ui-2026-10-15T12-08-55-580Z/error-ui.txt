@@ -1,0 +1,44 @@
+REPO
+src
+test
+package.json
+syntax.mjs
+Wähle eine Datei im Explorer oder beschreibe rechts eine Aufgabe.
+Strg+S speichert · Strg+P öffnet Dateien · Strg+B / Strg+J / Strg+Umschalt+B blenden Bereiche ein und aus
+Terminal
+Logs
+Tests
+Git-Diff
+Run-Details
+Probleme
+repo
+Befehlshistorie
+ 
+NEUE SITZUNG
+Arbeitsablauf
+Verlauf
+1
+Aufgabe
+2
+Plan
+3
+Ausführung
+4
+Freigabe
+Aufgabe beschreiben
+
+Beschreibe unten deine Aufgabe. Prüfe anschließend den Plan, starte die Ausführung und übernimm die geprüften Änderungen hier.
+
+Aufgabe
+Frage
+Cheapest
+Balanced
+Quality
+Plan direkt ausführen
+Senden
+repo
+Orchestrator: Codex
+Modus: balanced
+Freigabe: manuell
+⊗ 0 ⚠ 0
+Arbeitsablauf

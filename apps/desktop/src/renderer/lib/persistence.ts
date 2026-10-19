@@ -150,6 +150,7 @@ export async function loadWorkspace(projectId: string): Promise<{ workspace: Wor
   const workspace: WorkspaceState = {
     ...EMPTY_WORKSPACE,
     activeSessionId: typeof raw.activeSessionId === 'string' ? raw.activeSessionId : undefined,
+    closedSessionTabs: Array.isArray(raw.closedSessionTabs) ? raw.closedSessionTabs.filter((id): id is string => typeof id === 'string') : [],
       chatView: raw.chatView === 'history' ? 'history' : 'workflow',
     explorer: raw.explorer && typeof raw.explorer === 'object' ? { expanded: Array.isArray((raw.explorer as WorkspaceState['explorer']).expanded) ? (raw.explorer as WorkspaceState['explorer']).expanded : [''], selected: (raw.explorer as WorkspaceState['explorer']).selected } : EMPTY_WORKSPACE.explorer,
     composer: raw.composer && typeof raw.composer === 'object' ? (raw.composer as WorkspaceState['composer']) : {},

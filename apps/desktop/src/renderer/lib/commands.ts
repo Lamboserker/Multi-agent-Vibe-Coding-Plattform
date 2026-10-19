@@ -1,6 +1,6 @@
 import * as actions from './actions'
 import * as ide from './ide'
-import { appStore, dialogStore, editorStore, type SideView } from './stores'
+import { appStore, dialogStore, editorStore, type Screen, type SideView } from './stores'
 
 /** Commands of the command palette; the ones with a shortcut are also bound globally (App). */
 export interface Command {
@@ -17,12 +17,17 @@ export interface Command {
 
 const hasProject = () => Boolean(appStore.get().project)
 const hasFile = () => editorStore.get().tabs.some((tab) => tab.id === editorStore.get().activeTabId && tab.kind === 'file')
+const SCREENS: Array<[Screen, string]> = [['leitstand', 'Leitstand'], ['code', 'Code'], ['review', 'Freigabe'], ['sessions', 'Sitzungen'], ['models', 'Modelle'], ['usage', 'Nutzung & Kosten'], ['setup', 'Setup']]
+const inEditor = () => Boolean(document.activeElement?.closest('.monaco-editor'))
 const view = (id: SideView, label: string): Command => ({ id: `view.${id}`, label: `Ansicht: ${label}`, category: 'Ansicht', run: () => actions.setSideView(id) })
 
 export function commands(): Command[] {
   return [
     { id: 'palette.files', label: 'Datei öffnen (Quick Open) …', category: 'Navigation', shortcut: 'Strg+P', keys: { ctrl: true, key: 'p' }, run: () => dialogStore.set({ dialog: { kind: 'quick-open', mode: 'files' } }), enabled: hasProject },
     { id: 'palette.commands', label: 'Befehlspalette …', category: 'Navigation', shortcut: 'Strg+Umschalt+P', keys: { ctrl: true, shift: true, key: 'p' }, run: () => dialogStore.set({ dialog: { kind: 'quick-open', mode: 'commands' } }) },
+    // Strg+K outside the editor (inside Monaco it starts the editor's own chords)
+    { id: 'palette.k', label: 'Befehl oder Datei …', category: 'Navigation', shortcut: 'Strg+K', keys: { ctrl: true, key: 'k' }, run: () => dialogStore.set({ dialog: { kind: 'quick-open', mode: 'commands' } }), enabled: () => !inEditor() },
+    ...SCREENS.map(([id, label], index): Command => ({ id: `screen.${id}`, label: `Gehe zu: ${label}`, category: 'Ansicht', shortcut: `Strg+${index + 1}`, keys: { ctrl: true, key: String(index + 1) }, run: () => actions.setScreen(id), enabled: () => !inEditor() })),
     { id: 'editor.gotoLine', label: 'Gehe zu Zeile …', category: 'Navigation', shortcut: 'Strg+G', keys: { ctrl: true, key: 'g' }, run: () => dialogStore.set({ dialog: { kind: 'quick-open', mode: 'line' } }), enabled: hasFile },
     { id: 'search.open', label: 'In Dateien suchen', category: 'Suche', shortcut: 'Strg+Umschalt+F', keys: { ctrl: true, shift: true, key: 'f' }, run: () => actions.setSideView('search'), enabled: hasProject },
     { id: 'editor.save', label: 'Datei speichern', category: 'Datei', shortcut: 'Strg+S', run: () => editorStore.get().activeTabId && ide.saveWithFormat(editorStore.get().activeTabId!), enabled: hasFile },
@@ -110,7 +115,7 @@ export function commands(): Command[] {
       shortcut: 'Strg+L',
       keys: { ctrl: true, key: 'l' },
       run: () => {
-        actions.setLayout({ chatOpen: true })
+        actions.setScreen('leitstand')
         requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#chat-input')?.focus())
       },
     },
@@ -124,7 +129,7 @@ export function commands(): Command[] {
     },
     {
       id: 'layout.toggleChat',
-      label: 'Chat-Bereich ein-/ausblenden',
+      label: 'Code: Agenten-Spalte ein-/ausblenden',
       category: 'Ansicht',
       shortcut: 'Strg+Umschalt+B',
       keys: { ctrl: true, shift: true, key: 'b' },
@@ -133,9 +138,10 @@ export function commands(): Command[] {
     { id: 'layout.maximizeBottom', label: 'Unteres Panel maximieren / wiederherstellen', category: 'Ansicht', run: () => actions.toggleBottomMaximized() },
     {
       id: 'layout.focusEditor',
-      label: 'Fokus-Modus: nur Editor (Seitenleiste, Chat, Panel aus)',
+      label: 'Fokus-Modus: nur Editor (Seitenleiste, Agenten-Spalte, Panel aus)',
       category: 'Ansicht',
       run: () => {
+        actions.setScreen('code')
         actions.setLayout({ sideOpen: false, chatOpen: false })
         actions.setBottomOpen(false)
       },

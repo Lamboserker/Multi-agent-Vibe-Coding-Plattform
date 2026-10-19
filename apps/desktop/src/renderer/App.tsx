@@ -1,35 +1,21 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Activity as ActivityIcon, Bot, Boxes, Cable, Command as CommandIcon, Cpu, FolderGit2, FolderOpen, GitBranch, MessagesSquare, Moon, PanelBottom, PanelLeft, PanelRight, PiggyBank, Puzzle, Search, Settings as SettingsIcon, Sparkles, Sun } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import * as actions from './lib/actions'
 import { bridge } from './lib/api'
 import { useRuntimeStatus, VisibilityContext } from './lib/hooks'
-import { shallowEqual } from './lib/store/core'
-import { useAppState, useSessionState } from './lib/store'
-import type { SideView } from './lib/stores'
+import { useAppState } from './lib/store'
+import type { Screen } from './lib/stores'
+import { commandForEvent } from './lib/commands'
 import { Spinner, StatusDot, Toasts } from './components/common'
 import { Onboarding } from './components/onboarding/Onboarding'
-import { ProjectsPanel } from './components/panels/ProjectsPanel'
-import { ExplorerPanel } from './components/panels/ExplorerPanel'
-import { TasksPanel } from './components/panels/TasksPanel'
-import { commandForEvent } from './lib/commands'
-import { useStore } from './lib/store/core'
-import { dialogStore, problemsStore } from './lib/stores'
-import { EditorArea } from './components/editor/EditorArea'
-import { GitPanel } from './components/panels/GitPanel'
-import { AgentsPanel } from './components/panels/AgentsPanel'
-import { ModelsPanel } from './components/panels/ModelsPanel'
-import { UsagePanel } from './components/panels/UsagePanel'
-import { SettingsPanel } from './components/panels/SettingsPanel'
-import { DiagnosticsPanel } from './components/panels/DiagnosticsPanel'
-import { PluginsPanel } from './components/plugins/PluginsPanel'
-import { SkillsPanel } from './components/skills/SkillsPanel'
-import { McpPanel } from './components/mcp/McpPanel'
-import { SearchPanel } from './components/search/SearchPanel'
 import { EditorDialogs } from './components/editor/EditorDialogs'
-import { BottomPanel } from './components/bottom/BottomPanel'
-import { ChatPanel } from './components/chat/ChatPanel'
-import { Splitter } from './components/Splitter'
-import { workflowState } from './lib/workflow'
+import { Footer, Header, NavRail } from './components/shell/Shell'
+import { Leitstand } from './components/leitstand/Leitstand'
+import { CodeScreen } from './components/code/CodeScreen'
+import { ReviewScreen } from './components/review/ReviewScreen'
+import { SessionsScreen } from './components/sessions/SessionsScreen'
+import { ModelsScreen } from './components/models/ModelsScreen'
+import { UsageScreen } from './components/usage/UsageScreen'
+import { SetupScreen } from './components/setup/SetupScreen'
 
 export function App() {
   const booted = useAppState((state) => state.booted)
@@ -42,7 +28,7 @@ export function App() {
   if (!booted || !hasSettings) return <RuntimeSplash />
   return (
     <>
-      {onboardingDone ? <Ide /> : <Onboarding />}
+      {onboardingDone ? <Workbench /> : <Onboarding />}
       <ReconnectBanner />
       <Toasts />
     </>
@@ -99,118 +85,37 @@ function ReconnectBanner() {
   )
 }
 
-type ViewEntry = { id: SideView; label: string; icon: typeof FolderOpen }
-
-/** Daily work: top of the activity bar. */
-const WORK_VIEWS: ViewEntry[] = [
-  { id: 'projects', label: 'Projekte', icon: FolderGit2 },
-  { id: 'explorer', label: 'Explorer', icon: FolderOpen },
-  { id: 'search', label: 'Suchen', icon: Search },
-  { id: 'git', label: 'Git', icon: GitBranch },
-  { id: 'tasks', label: 'Sitzungen', icon: MessagesSquare },
-  { id: 'agents', label: 'Agenten', icon: Bot },
-]
-
-/** Set up once, rarely opened: grouped at the bottom next to the settings. */
-const SETUP_VIEWS: ViewEntry[] = [
-  { id: 'models', label: 'Modelle', icon: Cpu },
-  { id: 'plugins', label: 'Erweiterungen', icon: Puzzle },
-  { id: 'skills', label: 'Skills', icon: Sparkles },
-  { id: 'mcp', label: 'MCP-Server', icon: Cable },
-  { id: 'usage', label: 'Nutzung & Kosten', icon: PiggyBank },
-  { id: 'diagnostics', label: 'Diagnose & Performance', icon: ActivityIcon },
-]
-
-const PANELS: Record<SideView, () => ReactNode> = {
-  projects: () => <ProjectsPanel />,
-  explorer: () => <ExplorerPanel />,
-  search: () => <SearchPanel />,
-  git: () => <GitPanel />,
-  tasks: () => <TasksPanel />,
-  agents: () => <AgentsPanel />,
-  models: () => <ModelsPanel />,
-  plugins: () => <PluginsPanel />,
-  skills: () => <SkillsPanel />,
-  mcp: () => <McpPanel />,
-  usage: () => <UsagePanel />,
-  diagnostics: () => <DiagnosticsPanel />,
-  settings: () => <SettingsPanel />,
+const SCREENS: Record<Screen, (visible: boolean) => ReactNode> = {
+  leitstand: () => <Leitstand />,
+  code: (visible) => <CodeScreen visible={visible} />,
+  review: () => <ReviewScreen />,
+  sessions: () => <SessionsScreen />,
+  models: () => <ModelsScreen />,
+  usage: () => <UsageScreen />,
+  setup: () => <SetupScreen />,
 }
 
 /**
- * Side panels are mounted on first use and then kept mounted (hidden): switching views neither
- * re-initialises a view nor loses what was typed or expanded in it.
+ * Screens are mounted on first visit and then kept (hidden): the editor, terminals and forms keep
+ * their state, and switching back is instant.
  */
-function SidePanels({ view }: { view: SideView }) {
-  const [mounted, setMounted] = useState<SideView[]>([view])
-  useEffect(() => {
-    setMounted((current) => (current.includes(view) ? current : [...current, view]))
-  }, [view])
+function Screens({ screen }: { screen: Screen }) {
+  // the Leitstand holds the chat composer (drafts, flush before editor hand-offs): always mounted
+  const [mounted, setMounted] = useState<Screen[]>(() => [...new Set<Screen>(['leitstand', screen])])
+  useEffect(() => setMounted((current) => (current.includes(screen) ? current : [...current, screen])), [screen])
   return (
     <>
       {mounted.map((id) => (
-        <div key={id} className="side-panel-view" data-view={id} style={{ display: id === view ? 'flex' : 'none' }}>
-          <VisibilityContext.Provider value={id === view}>{PANELS[id]()}</VisibilityContext.Provider>
+        <div key={id} className="screen" data-screen={id} style={{ display: id === screen ? 'flex' : 'none' }}>
+          <VisibilityContext.Provider value={id === screen}>{SCREENS[id](id === screen)}</VisibilityContext.Provider>
         </div>
       ))}
     </>
   )
 }
 
-const ACTIVITY_WIDTH = 48
-const STATUS_HEIGHT = 24
-/** The editor column never gets narrower than this when side/chat panels are dragged. */
-const MIN_CENTER = 320
-const SIDE_MIN = 180
-const CHAT_MIN = 280
-const BOTTOM_MIN = 90
-const CHAT_DEFAULT = 400
-const BOTTOM_DEFAULT = 260
-const WIDE_VIEWS: SideView[] = ['models', 'plugins', 'skills', 'mcp', 'usage', 'settings', 'diagnostics']
-
-function defaultSideWidth(view: SideView) {
-  return WIDE_VIEWS.includes(view) ? 520 : view === 'agents' ? 360 : 290
-}
-
-function useWindowSize() {
-  const [size, setSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }))
-  useEffect(() => {
-    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight })
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-  return size
-}
-
-function Ide() {
-  const { sideView, theme, bottomOpen, project, settings, sideOpen, chatOpen, bottomMaximized, storedSide, storedChat, storedBottom } = useAppState(
-    (state) => ({
-      sideView: state.ui.sideView,
-      theme: state.ui.theme,
-      bottomOpen: state.ui.bottomOpen,
-      project: state.project,
-      settings: state.settings,
-      sideOpen: state.ui.sideOpen,
-      chatOpen: state.ui.chatOpen,
-      bottomMaximized: state.ui.bottomMaximized,
-      storedSide: state.ui.sideWidths[state.ui.sideView],
-      storedChat: state.ui.chatWidth,
-      storedBottom: state.ui.bottomHeight,
-    }),
-    shallowEqual,
-  )
-  const hasExecution = useSessionState((state) => Boolean(state.execution))
-  const ideRef = useRef<HTMLDivElement>(null)
-  const windowSize = useWindowSize()
-
-  // stored sizes are clamped to the current window so the editor column always stays usable
-  const free = windowSize.width - ACTIVITY_WIDTH - MIN_CENTER
-  const chatWidth = chatOpen ? Math.max(CHAT_MIN, Math.min(storedChat ?? CHAT_DEFAULT, free - (sideOpen ? SIDE_MIN : 0))) : 0
-  const sideWidth = sideOpen ? Math.max(SIDE_MIN, Math.min(storedSide ?? defaultSideWidth(sideView), free - chatWidth)) : 0
-  const bottomMax = () => windowSize.height - STATUS_HEIGHT - 120
-  const bottomHeight = Math.max(BOTTOM_MIN, Math.min(storedBottom ?? BOTTOM_DEFAULT, bottomMax()))
-  // while dragging only the CSS variable changes; the store (and a re-render) follows on release
-  const preview = (name: string) => (px: number) => ideRef.current?.style.setProperty(name, `${px}px`)
+function Workbench() {
+  const screen = useAppState((state) => state.ui.screen)
 
   // global shortcuts (command registry); editor-specific ones are bound inside Monaco
   useEffect(() => {
@@ -226,186 +131,14 @@ function Ide() {
   }, [])
 
   return (
-    <div
-      ref={ideRef}
-      className={`ide ${sideOpen ? '' : 'side-closed'} ${chatOpen ? '' : 'chat-closed'}`}
-      style={{ ['--side-width' as string]: `${sideWidth}px`, ['--chat-width' as string]: `${chatWidth}px`, ['--bottom-height' as string]: `${bottomHeight}px` }}
-    >
-      <nav className="activity-bar">
-        {WORK_VIEWS.map((view) => (
-          <ViewButton key={view.id} view={view} active={sideOpen && sideView === view.id}>
-            {view.id === 'agents' ? <AgentsIndicator hasExecution={hasExecution} /> : null}
-          </ViewButton>
-        ))}
-        <span className="spacer" />
-        {SETUP_VIEWS.map((view) => (
-          <ViewButton key={view.id} view={view} active={sideOpen && sideView === view.id} small />
-        ))}
-        <span className="activity-separator" />
-        <button title="Befehlspalette (Strg+Umschalt+P)" aria-label="Befehlspalette" onClick={() => dialogStore.set({ dialog: { kind: 'quick-open', mode: 'commands' } })}>
-          <CommandIcon size={18} />
-        </button>
-        <button title={theme === 'dark' ? 'Helles Design' : 'Dunkles Design'} onClick={() => actions.setTheme(theme === 'dark' ? 'light' : 'dark')}>
-          {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-        </button>
-        <button className={sideOpen && sideView === 'settings' ? 'active' : ''} title="Einstellungen" aria-label="Einstellungen" onClick={() => actions.toggleSideView('settings')}>
-          <SettingsIcon size={19} />
-        </button>
-      </nav>
-      <aside className="side-panel">
-        <SidePanels view={sideView} />
-      </aside>
-      {sideOpen ? (
-        <Splitter
-          axis="x"
-          direction={1}
-          className="splitter-side"
-          label="Seitenleiste"
-          size={sideWidth}
-          min={SIDE_MIN}
-          max={() => free - chatWidth}
-          onPreview={preview('--side-width')}
-          onCommit={(width) => actions.setSideWidth(sideView, width)}
-          onCollapse={() => actions.setLayout({ sideOpen: false })}
-          onReset={() => actions.setSideWidth(sideView, undefined)}
-        />
-      ) : null}
-      <section className={`center ${bottomOpen && bottomMaximized ? 'bottom-max' : ''}`} style={{ gridTemplateRows: !bottomOpen ? '1fr' : bottomMaximized ? '0 1fr' : '1fr auto' }}>
-        <EditorArea />
-        {/* The bottom panel stays mounted when hidden: terminals and logs keep their state. */}
-        <div style={{ display: bottomOpen ? 'contents' : 'none' }}>
-          <BottomPanel
-            resizer={
-              bottomMaximized ? null : (
-                <Splitter
-                  axis="y"
-                  direction={-1}
-                  className="splitter-bottom"
-                  label="Unteres Panel"
-                  size={bottomHeight}
-                  min={BOTTOM_MIN}
-                  max={bottomMax}
-                  onPreview={preview('--bottom-height')}
-                  onCommit={(height) => actions.setLayout({ bottomHeight: height })}
-                  onCollapse={() => actions.setBottomOpen(false)}
-                  onReset={() => actions.setLayout({ bottomHeight: undefined })}
-                />
-              )
-            }
-          />
-        </div>
-      </section>
-      {chatOpen ? (
-        <Splitter
-          axis="x"
-          direction={-1}
-          className="splitter-chat"
-          label="Chat-Bereich"
-          size={chatWidth}
-          min={CHAT_MIN}
-          max={() => free - sideWidth}
-          onPreview={preview('--chat-width')}
-          onCommit={(width) => actions.setLayout({ chatWidth: width })}
-          onCollapse={() => actions.setLayout({ chatOpen: false })}
-          onReset={() => actions.setLayout({ chatWidth: undefined })}
-        />
-      ) : null}
-      <ChatPanel />
-      <footer className="status-bar">
-        <span className="item">
-          <Boxes size={13} /> {project ? project.name : 'Kein Projekt'}
-        </span>
-        <span className="item">Orchestrator: {settings?.orchestrator === 'claude-code' ? 'Claude Code' : settings?.orchestrator === 'codex' ? 'Codex' : '–'}</span>
-        <span className="item">Modus: {settings?.costMode}</span>
-        <span className="item">Freigabe: {settings?.approvalMode === 'manual' ? 'manuell' : settings?.approvalMode}</span>
-        <span className="spacer" />
-        <ProblemsIndicator />
-        <RuntimeIndicator />
-        <ActivityIndicator />
-        <span className="layout-toggles">
-          <button className={`item ${sideOpen ? 'on' : ''}`} title="Seitenleiste ein-/ausblenden (Strg+B)" aria-label="Seitenleiste ein-/ausblenden" onClick={() => actions.setLayout({ sideOpen: !sideOpen })}>
-            <PanelLeft size={14} />
-          </button>
-          <button className={`item ${bottomOpen ? 'on' : ''}`} title="Unteres Panel ein-/ausblenden (Strg+J)" aria-label="Unteres Panel ein-/ausblenden" onClick={() => actions.setBottomOpen(!bottomOpen)}>
-            <PanelBottom size={14} />
-          </button>
-          <button className={`item ${chatOpen ? 'on' : ''}`} title="Chat ein-/ausblenden (Strg+Umschalt+B)" aria-label="Chat ein-/ausblenden" onClick={() => actions.setLayout({ chatOpen: !chatOpen })}>
-            <PanelRight size={14} />
-          </button>
-        </span>
-      </footer>
+    <div className="ide app-shell" data-screen={screen}>
+      <Header />
+      <NavRail />
+      <main className="app-main">
+        <Screens screen={screen} />
+      </main>
+      <Footer />
       <EditorDialogs />
     </div>
-  )
-}
-
-function ViewButton({ view, active, small, children }: { view: ViewEntry; active: boolean; small?: boolean; children?: ReactNode }) {
-  return (
-    <button className={`${active ? 'active' : ''} ${small ? 'small' : ''}`} title={active ? `${view.label} (erneut klicken zum Einklappen)` : view.label} aria-label={view.label} onClick={() => actions.toggleSideView(view.id)}>
-      <view.icon size={small ? 17 : 20} />
-      {children}
-    </button>
-  )
-}
-
-function ProblemsIndicator() {
-  const counts = useStore(problemsStore, (state) => {
-    const all = [...Object.values(state.files).flat(), ...(state.project?.problems ?? [])]
-    return `${all.filter((problem) => problem.severity === 'error').length}/${all.filter((problem) => problem.severity === 'warning').length}`
-  })
-  const [errors, warnings] = counts.split('/')
-  return (
-    <button
-      className="item"
-      title="Probleme anzeigen"
-      onClick={() => {
-        actions.setBottomOpen(true)
-        actions.setBottomTab('problems')
-      }}
-    >
-      ⊗ {errors} ⚠ {warnings}
-    </button>
-  )
-}
-
-function RuntimeIndicator() {
-  const runtime = useRuntimeStatus()
-  if (!runtime || runtime.state === 'ready') return null
-  return (
-    <span className="item">
-      <Spinner /> Laufzeit {runtime.state === 'failed' ? 'ausgefallen' : 'startet'} …
-    </span>
-  )
-}
-
-function AgentsIndicator({ hasExecution }: { hasExecution: boolean }) {
-  const running = useAppState((state) => state.activity.executions.length + state.activity.plans.length)
-  if (!running && !hasExecution) return null
-  return <span className={`dot indicator ${running ? 'running' : ''}`} />
-}
-
-/** Status and navigation to the selected workflow; background activity comes from the runtime. */
-function ActivityIndicator() {
-  const activity = useAppState((state) => state.activity)
-  const projectId = useAppState((state) => state.project?.id)
-  const { task, execution } = useSessionState((state) => ({ task: state.task, execution: state.execution }), shallowEqual)
-  const current = workflowState(task, execution)
-  const parts = [
-    activity.executions.length ? `${activity.executions.length} Ausführung(en)` : '',
-    activity.plans.length ? `${activity.plans.length} Planung(en)` : '',
-    activity.asks.length ? `${activity.asks.length} Frage(n)` : '',
-  ].filter(Boolean)
-  const first = activity.executions.find((entry) => entry.projectId === projectId) ?? activity.plans.find((entry) => entry.projectId === projectId)
-  return (
-    <button
-      className="item activity-indicator"
-      data-testid="workflow-entry"
-      title={['Arbeitsablauf öffnen (Strg+Umschalt+L)', ...activity.executions.map((entry) => `▶ ${entry.title} (${entry.status})`), ...activity.plans.map((entry) => `◔ Plan: ${entry.title}`)].join('\n')}
-      onClick={() => {
-        void actions.openWorkflow(task ? undefined : first?.sessionId ?? undefined)
-      }}
-    >
-      {parts.length ? <span className="dot running" /> : null} {task ? current.label : parts.length ? `${parts.join(' · ')} aktiv` : 'Arbeitsablauf'}
-    </button>
   )
 }

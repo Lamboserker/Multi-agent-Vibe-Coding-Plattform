@@ -6,6 +6,7 @@ and never write implementation code yourself unless explicitly asked to execute 
 Rules:
 - Base every statement on the repository context given to you. If something is unknown, say so; do not invent files or APIs.
 - Prefer small, independently verifiable tasks with explicit acceptance criteria.
+- Minimize time to a validated change: keep a small cohesive change in ONE task, including its tests. Split only for independent work or real complexity; each task costs a model call, worktree and validation.
 - Local models are weaker: give them precise, self-contained instructions, exact file paths and the conventions to follow.
 - Security, authentication, payments, data migrations and cross-cutting architecture changes are high risk.
 - Respond only with the requested structured output.`
@@ -48,9 +49,13 @@ ${models}
 # Planning rules
 - Cost mode: ${input.costMode}. ${input.costMode === 'cheapest' ? 'Use premium execution only when a local model would very likely fail.' : input.costMode === 'quality' ? 'Use premium execution for work that cannot be made precise enough for a local model (unclear root cause, security, cross-cutting design decisions); decompose everything else into precise local tasks.' : 'Delegate routine work locally; reserve premium for genuinely hard or risky tasks.'}
 - At most ${input.maxTasks} tasks. One task = one coherent change a single agent can finish and verify.
-- Local models are small: a "local" task modifies exactly ONE existing file (plus files it creates) and its description lists the concrete edits –
-  which element/function/selector, what to replace with what (e.g. the exact class or API mapping). Never just restate the overall goal.
-  Only "premium" tasks may span several files.
+- Local models are small, so every "local" task is narrow: it edits at most ONE existing file and/or creates a few small new files
+  (ideally one, at most three). Its description lists the concrete content: for an edit, which element/function/selector and what to
+  replace with what (e.g. the exact class or API mapping); for a new file, its exports, props, imports, CSS classes and the markup or
+  data to write. Never just restate the overall goal. Only "premium" tasks may edit several existing files at once.
+- New projects and empty or nearly empty repositories are no reason for premium: plan a local setup task first (package.json with the
+  exact scripts and dependency versions, framework config such as vite.config, index.html, the entry file), then one local task per
+  component, page, style file or test, each depending on the setup task. Use premium only for genuinely hard logic within it.
 - Large conversions (a CSS framework, a library, a language feature across the project): first one setup task (dependencies, configuration,
   global entry), then one task per file that depends on it. If there are more files than tasks allowed, group the smallest files of one kind.
 - Every description must say what replaces removed code; a task must never only delete code.
@@ -108,7 +113,7 @@ ${input.acceptanceCriteria.length ? input.acceptanceCriteria.map((criterion) => 
 
 # Relevant files
 ${input.relevantFiles.length ? input.relevantFiles.map((file) => `- ${file}`).join('\n') : '- (find them yourself; keep reads minimal)'}
-${input.previousFailures ? `\n# Previous attempt failed – fix these problems\n${input.previousFailures}\n` : ''}
+${input.guidance ? `\n# Guidance (follow it)\n${input.guidance}\n` : ''}${input.previousFailures ? `\n# Previous attempt failed – fix these problems\n${input.previousFailures}\n` : ''}
 # Rules
 - Change only what the task requires. Do not reformat unrelated code.
 - Do not modify .env files, credentials, CI workflows or lockfiles.

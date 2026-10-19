@@ -1,0 +1,89 @@
+{
+  "folder": "comparison-before-repair-2026-10-15T13-15-09-478Z",
+  "phase": "before",
+  "scenario": "repair",
+  "success": true,
+  "error": null,
+  "totalMs": 180664.5,
+  "localMs": 142030.9561,
+  "localOutputTokens": 9580,
+  "allOutputTokens": 10043,
+  "modelCalls": 3,
+  "localModelCalls": 2,
+  "premiumModelCalls": 1,
+  "repairs": 1,
+  "controlledFaults": 1,
+  "agentCapabilities": [
+    {
+      "availableTools": null,
+      "instructionChars": null,
+      "preferStructured": null
+    },
+    {
+      "availableTools": null,
+      "instructionChars": null,
+      "preferStructured": null
+    }
+  ],
+  "local": [
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "durationMs": 76437.8905,
+      "outputTokens": 5176,
+      "inputTokens": 3903,
+      "doneReason": "stop",
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "contentChars": 18573
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.35
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "durationMs": 65593.0656,
+      "outputTokens": 4404,
+      "inputTokens": 4294,
+      "doneReason": "stop",
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "contentChars": 15672
+    }
+  ],
+  "premium": [
+    {
+      "name": "codex.createPlan.start",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "outputTokens": 463,
+      "durationMs": 19936.645
+    }
+  ]
+}

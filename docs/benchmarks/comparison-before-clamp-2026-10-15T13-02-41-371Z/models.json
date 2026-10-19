@@ -1,0 +1,32 @@
+[
+  {
+    "name": "qwen2.5-coder:0.5b",
+    "sizeBytes": 397821516,
+    "family": "qwen2",
+    "parameterSize": "494.03M",
+    "quantization": "Q4_K_M",
+    "capabilities": [
+      "completion",
+      "tools",
+      "insert"
+    ],
+    "contextLength": 32768,
+    "loaded": false,
+    "roles": []
+  },
+  {
+    "name": "qwen3:4b",
+    "sizeBytes": 2497293931,
+    "family": "qwen3",
+    "parameterSize": "4.0B",
+    "quantization": "Q4_K_M",
+    "capabilities": [
+      "completion",
+      "tools",
+      "thinking"
+    ],
+    "contextLength": 262144,
+    "loaded": false,
+    "roles": []
+  }
+]

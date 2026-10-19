@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "audited": [
+    {
+      "folder": "comparison-before-slug-2026-10-15T12-56-59-665Z",
+      "success": true,
+      "fixtureSha256": "ae3cb150969ec736d8f81810a4463fc504abcceb2b608966a6c189e5bc0aa995",
+      "executedBackendSha256": "1890181239d67729cefd1e789dcc7c7fec151df69ba83a5f72cd71ae58d51654"
+    },
+    {
+      "folder": "comparison-before-slug-2026-10-15T13-09-47-939Z",
+      "success": true,
+      "fixtureSha256": "ae3cb150969ec736d8f81810a4463fc504abcceb2b608966a6c189e5bc0aa995",
+      "executedBackendSha256": "1890181239d67729cefd1e789dcc7c7fec151df69ba83a5f72cd71ae58d51654"
+    },
+    {
+      "folder": "comparison-before-clamp-2026-10-15T13-12-52-436Z",
+      "success": true,
+      "fixtureSha256": "54530cbc4420d67daed9532b4240466151c0895e89bc57ddcc7e82eb7c475f89",
+      "executedBackendSha256": "1890181239d67729cefd1e789dcc7c7fec151df69ba83a5f72cd71ae58d51654"
+    },
+    {
+      "folder": "comparison-before-clamp-2026-10-15T13-18-53-048Z",
+      "success": true,
+      "fixtureSha256": "54530cbc4420d67daed9532b4240466151c0895e89bc57ddcc7e82eb7c475f89",
+      "executedBackendSha256": "1890181239d67729cefd1e789dcc7c7fec151df69ba83a5f72cd71ae58d51654"
+    },
+    {
+      "folder": "comparison-before-repair-2026-10-15T13-04-15-297Z",
+      "success": true,
+      "fixtureSha256": "d9454903dfdc84d4de06cf1f14e26f0a66b2b42a66d3f77aad938ae22a3810e7",
+      "executedBackendSha256": "1890181239d67729cefd1e789dcc7c7fec151df69ba83a5f72cd71ae58d51654"
+    },
+    {
+      "folder": "comparison-before-repair-2026-10-15T13-15-09-478Z",
+      "success": true,
+      "fixtureSha256": "d9454903dfdc84d4de06cf1f14e26f0a66b2b42a66d3f77aad938ae22a3810e7",
+      "executedBackendSha256": "1890181239d67729cefd1e789dcc7c7fec151df69ba83a5f72cd71ae58d51654"
+    },
+    {
+      "folder": "comparison-after-clamp-2026-10-15T14-03-13-771Z",
+      "success": true,
+      "fixtureSha256": "54530cbc4420d67daed9532b4240466151c0895e89bc57ddcc7e82eb7c475f89",
+      "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4"
+    },
+    {
+      "folder": "comparison-after-clamp-2026-10-15T14-07-25-572Z",
+      "success": true,
+      "fixtureSha256": "54530cbc4420d67daed9532b4240466151c0895e89bc57ddcc7e82eb7c475f89",
+      "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4"
+    },
+    {
+      "folder": "comparison-after-repair-2026-10-15T14-04-33-619Z",
+      "success": true,
+      "fixtureSha256": "d9454903dfdc84d4de06cf1f14e26f0a66b2b42a66d3f77aad938ae22a3810e7",
+      "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4"
+    },
+    {
+      "folder": "comparison-after-repair-2026-10-15T14-08-46-334Z",
+      "success": true,
+      "fixtureSha256": "d9454903dfdc84d4de06cf1f14e26f0a66b2b42a66d3f77aad938ae22a3810e7",
+      "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4"
+    },
+    {
+      "folder": "comparison-after-slug-2026-10-15T14-01-49-442Z",
+      "success": true,
+      "fixtureSha256": "ae3cb150969ec736d8f81810a4463fc504abcceb2b608966a6c189e5bc0aa995",
+      "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4"
+    },
+    {
+      "folder": "comparison-after-slug-2026-10-15T14-05-59-270Z",
+      "success": true,
+      "fixtureSha256": "ae3cb150969ec736d8f81810a4463fc504abcceb2b608966a6c189e5bc0aa995",
+      "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4"
+    }
+  ]
+}

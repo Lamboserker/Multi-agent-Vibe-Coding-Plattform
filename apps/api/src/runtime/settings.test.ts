@@ -76,3 +76,15 @@ describe('SettingsService', () => {
     expect(result.changed).toEqual([])
   })
 })
+
+describe('approval mode migration', () => {
+  it('switches an existing installation to auto_commit once and keeps a mode chosen afterwards', async () => {
+    await prisma.appSetting.deleteMany({ where: { key: '__migration_auto_commit' } })
+    await prisma.appSetting.upsert({ where: { key: 'approvalMode' }, create: { key: 'approvalMode', value: 'manual' }, update: { value: 'manual' } })
+    const migrated = new SettingsService(prisma, events)
+    expect((await migrated.get()).approvalMode).toBe('auto_commit')
+    await migrated.updateVersioned({ approvalMode: 'manual' })
+    const restarted = new SettingsService(prisma, events)
+    expect((await restarted.get()).approvalMode).toBe('manual')
+  })
+})

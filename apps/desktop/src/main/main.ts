@@ -4,7 +4,10 @@ import { writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { adoptLoginShellPath } from './login-path.js'
 import { resourcePaths } from './paths.js'
+import type { PreviewEvent } from '../shared/bridge.js'
+import { PreviewManager, validatePreviewBounds, validatePreviewId, validatePreviewUrl } from './preview.js'
 import { RuntimeManager } from './runtime.js'
 import { SecretVault } from './secret-vault.js'
 import { isValidProjectKey, isValidStateKey, StateStore } from './state-store.js'
@@ -15,6 +18,7 @@ import {
   IpcValidationError,
   validateApiRequest,
   validateExternalUrl,
+  validateLinkUrl,
   validateTerminalCreate,
   validateTerminalData,
   validateTerminalId,
@@ -34,6 +38,8 @@ if (process.env.MAC_USER_DATA_DIR) app.setPath('userData', process.env.MAC_USER_
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 }
+// before the runtime, terminals or CLI probes inherit process.env
+if (app.isPackaged) adoptLoginShellPath()
 
 const dataDir = app.getPath('userData')
 const runtime = new RuntimeManager(dataDir)
@@ -54,6 +60,8 @@ runtime.onShellRequest((method, params) => {
   throw new Error(`Unknown shell request ${method}.`)
 })
 let mainWindow: BrowserWindow | undefined
+/** Local dev servers shown in the code screen (native views, own process). */
+const previews = new PreviewManager(() => mainWindow, (event: PreviewEvent) => mainWindow?.webContents.send('preview:event', event))
 
 // --- batched delivery to the renderer ------------------------------------------
 // Agents can emit hundreds of log events per second and terminals stream large outputs. Sending each
@@ -108,6 +116,7 @@ const CSP = [
   "font-src 'self' data:",
   "worker-src 'self' blob:",
   `connect-src 'self'${isDev ? ` ${DEV_RENDERER_URL} ws://localhost:* ws://127.0.0.1:*` : ''}`,
+  "frame-src 'none'",
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'",
@@ -255,6 +264,20 @@ function registerIpc() {
   handle('secrets:names', (_event, scope) => ({ available: vault.available, names: vault.names(String(scope)) }))
   handle('shell:openExternal', async (_event, url) => {
     await shell.openExternal(validateExternalUrl(url))
+    return true
+  })
+
+  // --- previews of local dev servers (see preview.ts) ---
+  handle('preview:show', (_event, id, url, bounds) => previews.show(validatePreviewId(id), validatePreviewUrl(url), validatePreviewBounds(bounds)))
+  handle('preview:hide', (_event, id) => previews.hide(validatePreviewId(id)))
+  handle('preview:capture', (_event, id) => previews.capture(validatePreviewId(id)))
+  handle('preview:reload', (_event, id) => previews.reload(validatePreviewId(id)))
+  handle('preview:devtools', (_event, id) => previews.devTools(validatePreviewId(id)))
+  handle('preview:close', (_event, id) => previews.close(validatePreviewId(id)))
+
+  // Ctrl+click on a link in a terminal opens it in the default browser (like VS Code)
+  handle('shell:openLink', async (_event, url) => {
+    await shell.openExternal(validateLinkUrl(url))
     return true
   })
 
@@ -409,7 +432,12 @@ async function createWindow() {
     if (!(url.startsWith('app://renderer/') || (isDev && url.startsWith(DEV_RENDERER_URL!)))) event.preventDefault()
   })
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault())
+  // the app's page is (re)loaded: previews come back when the renderer shows them again
+  mainWindow.webContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) previews.hideAll()
+  })
   mainWindow.on('closed', () => {
+    previews.closeAll()
     mainWindow = undefined
   })
   await mainWindow.loadURL(isDev ? DEV_RENDERER_URL! : 'app://renderer/index.html')
@@ -452,6 +480,8 @@ app.whenReady().then(async () => {
 
 app.on('web-contents-created', (_event, contents) => {
   contents.on('will-navigate', (event, url) => {
+    // previews navigate within their local server (they guard themselves, see preview.ts)
+    if (previews.owns(contents)) return
     if (!(url.startsWith('app://renderer/') || (isDev && url.startsWith(DEV_RENDERER_URL!)))) event.preventDefault()
   })
 })

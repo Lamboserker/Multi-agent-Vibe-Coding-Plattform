@@ -125,7 +125,7 @@ export class RepoContextService implements OnModuleInit, OnModuleDestroy {
     return detectValidationChecks(repoPath)
   }
 
-  async digest(projectId: string, repoPath: string, goal: string, budgetTokens = 6000, excerpts: { excerptFiles?: number; excerptChars?: number; excerptMaxLines?: number; fillUnranked?: boolean } = {}) {
+  async digest(projectId: string, repoPath: string, goal: string, budgetTokens = 6000, excerpts: { excerptFiles?: number; excerptChars?: number; excerptMaxLines?: number; fillUnranked?: boolean; maxFiles?: number; minRelativeScore?: number; unrankedManifestsOnly?: boolean } = {}) {
     const [index, checks] = await Promise.all([this.index(projectId, repoPath), this.runChecks(projectId, repoPath, goal)])
     const digest = await buildContextDigest(index, goal, { budgetTokens, validationCommands: checks.map((check) => check.command), ...excerpts })
     const project = { id: projectId, name: path.basename(repoPath), repoPath }

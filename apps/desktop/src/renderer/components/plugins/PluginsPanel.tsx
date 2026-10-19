@@ -424,12 +424,11 @@ function PluginDetail({ id, revision, onBack, onChanged }: { id: string; revisio
           onCancel={() => setUninstall(false)}
           onConfirm={() => {
             setUninstall(false)
+            // back to the list right away: a late navigation would pull the user out of a plugin opened meanwhile
+            onBack()
             void api
               .del(`/plugins/${enc(id)}`)
-              .then(() => {
-                onChanged()
-                onBack()
-              })
+              .then(() => onChanged())
               .catch((error: unknown) => notify(errorMessage(error), 'error'))
           }}
         >

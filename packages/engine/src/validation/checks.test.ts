@@ -58,7 +58,7 @@ describe('validation checks', () => {
     expect(failing.testsFailed).toBe(1)
     expect(failureDigest(failing)).toContain('fails')
     delete process.env.MAC_SECRET_TOKEN
-  })
+  }, 60_000) // two real `node --test` processes (each run is bounded by its own 60 s check timeout); 5 s is too tight on a loaded Windows machine
 
   it('skips denied or unapproved commands instead of running them', async () => {
     const dir = tempDir('mac-checks-deny-')

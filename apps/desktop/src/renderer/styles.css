@@ -1,58 +1,120 @@
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('./fonts/space-grotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('./fonts/space-grotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('./fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/*
+ * Design tokens (warm neutrals, violet accent = premium/orchestrator, cyan = local models,
+ * amber = tools/warnings). The older names below are aliases, so every view shares one palette.
+ */
 :root,
 :root[data-theme='dark'] {
-  --bg: #0d1117;
-  --bg-elevated: #131a23;
-  --bg-panel: #10161e;
-  --bg-input: #0a0f15;
-  --bg-hover: #1b2430;
-  --bg-active: #22303f;
-  --border: #233040;
-  --border-strong: #2f4054;
-  --text: #d7dee8;
-  --text-muted: #8b98a9;
-  --text-faint: #5d6b7c;
-  --accent: #e5a54b;
-  --accent-strong: #f0b866;
-  --accent-soft: rgba(229, 165, 75, 0.14);
-  --premium: #b48cff;
-  --premium-soft: rgba(180, 140, 255, 0.14);
-  --local: #4fc1a6;
-  --local-soft: rgba(79, 193, 166, 0.14);
-  --ok: #4fc17a;
-  --warn: #e5b44b;
-  --error: #f0716b;
-  --info: #6aa9f0;
-  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  --mono: 'Cascadia Code', 'JetBrains Mono', Consolas, 'SF Mono', Menlo, monospace;
-  --sans: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --bg: oklch(0.155 0.006 60);
+  --panel: oklch(0.185 0.007 60);
+  --elev: oklch(0.215 0.008 60);
+  --hover: oklch(0.25 0.009 60);
+  --line: oklch(0.28 0.009 60);
+  --line2: oklch(0.35 0.01 60);
+  --input: oklch(0.17 0.006 60);
+  --text: oklch(0.95 0.008 80);
+  --muted: oklch(0.74 0.01 70);
+  --faint: oklch(0.56 0.01 70);
+  --grid: oklch(0.27 0.008 60);
+  --accent: oklch(0.74 0.19 295);
+  --accent-soft: oklch(0.74 0.19 295 / 0.16);
+  --on-accent: oklch(0.16 0.03 295);
+  --local: oklch(0.8 0.12 200);
+  --local-soft: oklch(0.8 0.12 200 / 0.14);
+  --tool: oklch(0.82 0.14 85);
+  --tool-soft: oklch(0.82 0.14 85 / 0.14);
+  --ok: oklch(0.8 0.16 150);
+  --ok-soft: oklch(0.8 0.16 150 / 0.14);
+  --err: oklch(0.7 0.18 25);
+  --err-soft: oklch(0.7 0.18 25 / 0.14);
+  --glow: 0 0 0 1px oklch(0.74 0.19 295 / 0.5), 0 8px 30px oklch(0.74 0.19 295 / 0.18);
+  --shadow: 0 18px 60px oklch(0 0 0 / 0.5);
+  --pulse: oklch(0.74 0.19 295 / 0.6);
+  --pulse-off: oklch(0.74 0.19 295 / 0);
   color-scheme: dark;
 }
 
 :root[data-theme='light'] {
-  --bg: #f6f7f9;
-  --bg-elevated: #ffffff;
-  --bg-panel: #eef1f5;
-  --bg-input: #ffffff;
-  --bg-hover: #e4e9f0;
-  --bg-active: #d8e1ec;
-  --border: #d5dce5;
-  --border-strong: #bfc9d6;
-  --text: #1c2430;
-  --text-muted: #566275;
-  --text-faint: #8794a6;
-  --accent: #b9741c;
-  --accent-strong: #9a5f12;
-  --accent-soft: rgba(185, 116, 28, 0.12);
-  --premium: #7246d6;
-  --premium-soft: rgba(114, 70, 214, 0.1);
-  --local: #13866c;
-  --local-soft: rgba(19, 134, 108, 0.1);
-  --ok: #1f8f4c;
-  --warn: #a8740c;
-  --error: #c9362f;
-  --info: #2f6fbf;
-  --shadow: 0 8px 28px rgba(20, 30, 45, 0.15);
+  --bg: oklch(0.975 0.006 80);
+  --panel: oklch(0.955 0.007 80);
+  --elev: oklch(0.995 0.003 80);
+  --hover: oklch(0.93 0.008 80);
+  --line: oklch(0.9 0.008 80);
+  --line2: oklch(0.84 0.01 80);
+  --input: oklch(0.99 0.004 80);
+  --text: oklch(0.2 0.01 60);
+  --muted: oklch(0.45 0.012 60);
+  --faint: oklch(0.6 0.012 60);
+  --grid: oklch(0.88 0.01 80);
+  --accent: oklch(0.53 0.22 295);
+  --accent-soft: oklch(0.53 0.22 295 / 0.1);
+  --on-accent: oklch(0.99 0.005 295);
+  --local: oklch(0.52 0.11 210);
+  --local-soft: oklch(0.52 0.11 210 / 0.1);
+  --tool: oklch(0.58 0.13 70);
+  --tool-soft: oklch(0.58 0.13 70 / 0.12);
+  --ok: oklch(0.52 0.14 150);
+  --ok-soft: oklch(0.52 0.14 150 / 0.1);
+  --err: oklch(0.55 0.2 25);
+  --err-soft: oklch(0.55 0.2 25 / 0.1);
+  --glow: 0 0 0 1px oklch(0.53 0.22 295 / 0.45), 0 8px 26px oklch(0.53 0.22 295 / 0.14);
+  --shadow: 0 18px 50px oklch(0.3 0.02 60 / 0.18);
+  --pulse: oklch(0.53 0.22 295 / 0.5);
+  --pulse-off: oklch(0.53 0.22 295 / 0);
   color-scheme: light;
+}
+
+:root {
+  /* aliases used by the older views */
+  --bg-elevated: var(--elev);
+  --bg-panel: var(--panel);
+  --bg-input: var(--input);
+  --bg-hover: var(--hover);
+  --bg-active: var(--line);
+  --border: var(--line);
+  --border-strong: var(--line2);
+  --text-muted: var(--muted);
+  --text-faint: var(--faint);
+  --accent-strong: color-mix(in oklch, var(--accent) 82%, var(--text));
+  --premium: var(--accent);
+  --premium-soft: var(--accent-soft);
+  --warn: var(--tool);
+  --error: var(--err);
+  --info: var(--local);
+  --mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, Consolas, monospace;
+  --sans: 'Space Grotesk', 'Segoe UI Variable', system-ui, sans-serif;
 }
 
 * {
@@ -133,7 +195,7 @@ pre,
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #1a1206;
+  color: var(--on-accent);
   font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
@@ -366,33 +428,6 @@ pre,
   background: color-mix(in srgb, var(--ok) 9%, transparent);
 }
 
-/* ---------- IDE shell ---------- */
-
-.ide {
-  position: relative;
-  display: grid;
-  grid-template-columns: 48px var(--side-width, 290px) minmax(0, 1fr) var(--chat-width, 400px);
-  grid-template-rows: minmax(0, 1fr) 24px;
-  height: 100%;
-}
-/* explicit columns: a collapsed (display: none) region must not shift the others */
-.ide > .side-panel {
-  grid-column: 2;
-  grid-row: 1;
-}
-.ide > .center {
-  grid-column: 3;
-  grid-row: 1;
-}
-.ide > .chat-panel {
-  grid-column: 4;
-  grid-row: 1;
-}
-.ide.side-closed > .side-panel,
-.ide.chat-closed > .chat-panel {
-  display: none;
-}
-
 /* ---------- splitters ---------- */
 .splitter {
   position: absolute;
@@ -409,7 +444,7 @@ body.is-resizing .splitter:active {
 }
 .splitter-x {
   top: 0;
-  bottom: 24px;
+  bottom: 0;
   width: 5px;
   cursor: col-resize;
 }
@@ -420,8 +455,9 @@ body.is-resizing .splitter:active {
   height: 5px;
   cursor: row-resize;
 }
+/* positioned inside .code-screen, so no nav-rail/header offsets */
 .splitter-side {
-  left: calc(48px + var(--side-width) - 3px);
+  left: calc(var(--side-width) - 3px);
 }
 .splitter-chat {
   right: calc(var(--chat-width) - 3px);
@@ -1374,16 +1410,16 @@ body.is-resizing .monaco-editor {
   width: 3px !important;
 }
 .monaco-editor .git-gutter-added {
-  background: #2ea043;
+  background: var(--ok);
 }
 .monaco-editor .git-gutter-modified {
-  background: #1f6feb;
+  background: var(--tool);
 }
 .monaco-editor .git-gutter-deleted {
   margin-left: 2px;
   width: 0 !important;
   height: 0 !important;
-  border-left: 5px solid #da3633;
+  border-left: 5px solid var(--err);
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
 }
@@ -1549,4 +1585,52 @@ body.is-resizing .monaco-editor {
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+}
+
+/* ---------- preview of a local dev server (code screen) ---------- */
+.preview-view {
+  flex-direction: column;
+  background: var(--bg);
+}
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.preview-address {
+  flex: 1;
+  min-width: 0;
+  font: 12px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--input);
+  color: var(--text);
+}
+/* the page itself is a native view placed over this area (main process, preview.ts) */
+.preview-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+.preview-still {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+.preview-failure {
+  position: absolute;
+  inset: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: oklch(0.3 0.01 60);
+  font-size: 13px;
 }

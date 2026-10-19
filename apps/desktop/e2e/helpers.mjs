@@ -84,3 +84,42 @@ export function percentiles(values) {
   const at = (q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))]
   return { n: sorted.length, p50: at(0.5), p95: at(0.95), max: sorted.at(-1), min: sorted[0] }
 }
+
+// ---------------------------------------------------------------------------
+// Navigation of the shell (navigation rail → screens; setup sections; code side tabs)
+// ---------------------------------------------------------------------------
+
+/** Chat messages of the orchestrator chat (user, orchestrator, agents, system). */
+export const CHAT_MESSAGES = '[data-testid="chat-messages"] [data-role]'
+
+/** Opens a project through the folder dialog (the Leitstand offers it while no project is open). */
+export async function openProject(app, page, repo) {
+  await answerFolderDialog(app, repo)
+  // with a project open, the folder button lives in the project menu of the header
+  if (!(await page.getByRole('button', { name: 'Ordner öffnen' }).first().isVisible().catch(() => false))) await page.getByRole('button', { name: 'Projekt wählen' }).click()
+  await page.getByRole('button', { name: 'Ordner öffnen' }).filter({ visible: true }).first().click()
+  // opening may first create the repository and its initial commit
+  await page.locator('.project-name', { hasText: path.basename(repo) }).waitFor({ timeout: 60_000 })
+}
+
+/** Switches the screen through the navigation rail: Leitstand, Code, Freigabe, Sitzungen, Modelle, Kosten, Setup. */
+export async function go(page, label) {
+  await page.locator(`nav.nav-rail button[aria-label="${label}"]`).click()
+  await page.locator(`nav.nav-rail button[aria-label="${label}"][aria-current="page"]`).waitFor()
+}
+
+/** Opens a section of the setup screen: Einrichtung, Einstellungen, Agenten, Erweiterungen, Skills, MCP-Server, Diagnose. */
+export async function setupSection(page, label) {
+  await go(page, 'Setup')
+  await page.locator(`nav.setup-nav button[aria-label="${label}"]`).click()
+  await page.locator(`nav.setup-nav button[aria-label="${label}"][aria-current="page"]`).waitFor()
+}
+
+/** Shows a side view of the code screen: Explorer, Suchen, Git, Projekte. */
+export async function codeView(page, label) {
+  await go(page, 'Code')
+  const tab = page.locator(`.code-side-tabs button[aria-label="${label}"]`)
+  if ((await tab.count()) === 0) await page.keyboard.press('Control+b')
+  if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
+  await page.locator(`.code-side-tabs button[aria-label="${label}"][aria-selected="true"]`).waitFor()
+}

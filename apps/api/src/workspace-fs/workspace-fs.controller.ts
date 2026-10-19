@@ -101,4 +101,10 @@ export class WorkspaceFsController {
   init(@Param('id') id: string) {
     return this.files.initGit(id)
   }
+
+  /** First commit of a repository without commits (agents branch their worktrees off a commit). */
+  @Post('git/initial-commit')
+  initialCommit(@Param('id') id: string) {
+    return this.files.initialCommit(id)
+  }
 }

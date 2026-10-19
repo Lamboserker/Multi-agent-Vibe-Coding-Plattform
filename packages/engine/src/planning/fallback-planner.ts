@@ -54,6 +54,14 @@ const STYLING_LANGUAGES = new Set(['css', 'html', 'vue', 'svelte'])
 const CONFIG_FILE = /(^|\/)(package\.json|[^/]*\.config\.[cm]?[jt]s|tsconfig[^/]*\.json|postcss[^/]*|tailwind[^/]*)$/i
 const SKIPPED_PATH = /(^|\/)(dist|build|out|coverage|vendor|\.[^/]+)\/|(\.test|\.spec)\.[^/]+$|\.d\.ts$|\.min\.(js|css)$/i
 
+/** Repository-relative file paths a request names (e.g. `src/components/StatCard.tsx`); URLs excluded. */
+export function mentionedPaths(goal: string): string[] {
+  const files = new Set<string>()
+  const pattern = /(?<![\w/.:-])((?:\.\/)?(?:[\w.-]+\/)*[\w-]+(?:\.[\w-]+)*\.(?:tsx?|jsx?|mjs|cjs|css|scss|sass|less|html|vue|svelte|json|md|py|go|rs|java|cs))(?![\w/-])/g
+  for (const match of goal.matchAll(pattern)) files.add(match[1]!.replace(/^\.\//, ''))
+  return [...files]
+}
+
 function fileComplexity(entry: FileEntry | undefined): number {
   const lines = entry?.lines ?? 0
   return lines > 400 ? 4 : lines > 150 ? 3 : 2
@@ -71,8 +79,13 @@ export function deterministicPlan(goal: string, index: RepoIndex, options: { max
     const plan = decomposedPlan(goal, index, category, Math.max(2, options.maxTasks ?? 8))
     if (plan) return plan
   }
-  const ranked = rankFiles(index, goal).slice(0, 6).map((entry) => entry.path)
-  const complexity = estimateComplexity(goal, ranked.length, category)
+  // files the request names explicitly are the task's scope: existing ones to edit, the others to create
+  const named = mentionedPaths(goal)
+  const existing = new Set(index.files.map((entry) => entry.path))
+  const namedExisting = named.filter((file) => existing.has(file))
+  const namedNew = named.filter((file) => !existing.has(file))
+  const ranked = named.length ? namedExisting : rankFiles(index, goal).slice(0, 6).map((entry) => entry.path)
+  const complexity = estimateComplexity(goal, ranked.length + namedNew.length, category)
   const securityCritical = ranked.some(isSecurityCriticalPath) || category === 'auth-security' || category === 'database-migration'
   const risk = securityCritical ? 4 : complexity >= 4 ? 3 : 2
   const task: PlannedTask = {
@@ -83,12 +96,12 @@ export function deterministicPlan(goal: string, index: RepoIndex, options: { max
     complexity,
     risk,
     relevantFiles: ranked,
-    newFiles: [],
+    newFiles: namedNew,
     dependsOn: [],
     capabilities: index.frameworks.slice(0, 4).map((framework) => framework.toLowerCase()),
     expectedInputTokens: 3000 + ranked.length * 800,
     testStrategy: 'Run the project validation commands (typecheck/tests) in the task worktree.',
-    acceptanceCriteria: ['The requested change is implemented.', 'Existing validation commands pass.'],
+    acceptanceCriteria: ['The requested change is implemented.', ...(named.length ? [`Only these files are created or changed: ${named.join(', ')}.`] : []), 'Existing validation commands pass.'],
     suggestedExecutor: complexity >= 4 || securityCritical ? 'premium' : 'local',
     rationale: 'Deterministic fallback plan (no orchestrator planning call).',
   }

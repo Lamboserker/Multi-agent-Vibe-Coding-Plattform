@@ -32,7 +32,7 @@ export const AGENT_TEMPLATES: Array<AgentProfileInput & { id: string }> = [
     name: 'Frontend-Agent',
     description: 'UI-Komponenten, Styles und Barrierefreiheit.',
     categories: ['frontend', 'ui', 'component', 'komponente', 'react', 'css', 'tsx', 'jsx', 'vue', 'svelte', 'layout', 'button'],
-    instructions: 'Follow the existing component structure and styling approach. Use semantic, accessible markup (labels, roles, keyboard support). Keep components small and typed; do not add new UI libraries.',
+    instructions: 'Follow the existing component structure and styling approach. New or restyled UI meets the ui-design quality bar: design tokens instead of ad-hoc colors, consistent spacing and radii, hover/focus/disabled states, realistic sample data, responsive layout. Use semantic, accessible markup (labels, roles, keyboard support). Keep components small and typed; add no UI library beyond the one the project or task names.',
     escalation: 'premium',
     priority: 10,
   },

@@ -94,6 +94,10 @@ describe('SkillsService', () => {
     expect(context.text).toContain('### Skill: writing-tests')
     expect(context.text).toContain('Use plural nouns')
     expect(context.indexed).toEqual(expect.arrayContaining(['deploy', 'code-review']))
+    expect(context.requiresSkillLoad).toBe(false)
+    const bounded = await service.promptContext('coder', projectId, 'Add a vitest test for the login endpoint', { canLoad: true, budgetChars: 1 })
+    expect(bounded.requiresSkillLoad).toBe(true)
+    expect(bounded.indexed).toContain('writing-tests')
     expect(context.text).toContain('- deploy: How to deploy this service.')
     // without tools (structured models) only the inlined part is given
     expect((await service.promptContext('coder', projectId, 'Add a vitest test', { canLoad: false })).text).not.toContain('load_skill')
@@ -185,5 +189,28 @@ describe('SkillsService', () => {
     writeFileSync(path.join(source, 'SKILL.md'), '---\nname: imported-skill\ndescription: Imported.\n---\nBody\n')
     expect((await service.importFolder(source)).key).toBe('user:imported-skill')
     await expect(service.importFolder(source)).rejects.toThrow(/exists/)
+  })
+})
+
+describe('built-in UI design skills', () => {
+  it('give a UI task the design rules plus the framework recipe, inline within the local agent budget', async () => {
+    const context = await service.promptContext('coder', projectId, 'Dashboard-Layout mit Sidebar und Stat-Cards (Bootstrap 5, React-Komponente)', { canLoad: true, budgetChars: 6500 })
+    expect(context.inlined).toEqual(expect.arrayContaining(['ui-design', 'ui-bootstrap']))
+    expect(context.requiresSkillLoad).toBe(false)
+    expect(context.text).toContain('--accent')
+    expect(context.text).toContain('offcanvas')
+    const tailwind = await service.promptContext('coder', projectId, 'Navbar component with Tailwind', { canLoad: true, budgetChars: 6500 })
+    expect(tailwind.inlined).toEqual(expect.arrayContaining(['ui-design', 'ui-tailwind']))
+    expect(tailwind.inlined).not.toContain('ui-bootstrap')
+  })
+
+  it('stay out of backend work', async () => {
+    const context = await service.promptContext('coder', projectId, 'Add a NestJS endpoint that returns the users table with pagination and a request header check', { canLoad: true, budgetChars: 6500 })
+    expect(context.inlined.filter((name) => name.startsWith('ui-'))).toEqual([])
+  })
+
+  it('reach the planner, so the plan names tokens and classes for the local tasks', async () => {
+    const context = await service.promptContext('planner', projectId, 'Erstelle mit Vite ein React-Projekt mit einem modernen Dashboard, nutze Bootstrap als Styling', { canLoad: false, budgetChars: 8000 })
+    expect(context.inlined).toEqual(expect.arrayContaining(['ui-design', 'ui-bootstrap']))
   })
 })

@@ -1,0 +1,1685 @@
+{
+  "runId": "ui-2026-10-15T12-09-36-841Z",
+  "submitAt": "2026-10-15T12:09:43.549Z",
+  "readyAt": "2026-10-15T12:11:37.642Z",
+  "observedEndToEndMs": 114093,
+  "paintOpportunityEndToEndMs": 113749.60009765625,
+  "planVisibleMs": 27002.638,
+  "planApprovalClickMs": 30083.9,
+  "preparationAndApprovalDwellMs": 3081.26171875,
+  "appStartupMs": 1014.692626953125,
+  "localCalls": [
+    {
+      "id": "b132",
+      "startMs": 31032.953,
+      "endMs": 105566.992,
+      "requestedModel": "qwen3:4b",
+      "actualModel": "qwen3:4b",
+      "settings": {
+        "num_ctx": 16384,
+        "temperature": 0.15
+      },
+      "think": false,
+      "structured": false,
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "wallMs": 74534.2022,
+      "promptTokens": 3934,
+      "completionTokens": 4605,
+      "loadMs": 144.2841,
+      "contextProcessingMs": 1255.37,
+      "decodeMs": 73118.326,
+      "serverTotalMs": 74531.3402,
+      "serverResidualMs": 13.360100000005332,
+      "stream": {
+        "thinking": {
+          "chars": 0,
+          "chunks": 0
+        },
+        "content": {
+          "chars": 16253,
+          "chunks": 4074,
+          "firstMs": 1415.8175999999949,
+          "lastMs": 66241.4743
+        },
+        "tools": {
+          "chunks": 6,
+          "firstMs": 67251.24719999998,
+          "lastMs": 74500.38680000001
+        }
+      },
+      "gaps": [
+        "Thinking/output timings are streamed phase envelopes, not GPU compute partitions. evalMs combines all generated token types."
+      ]
+    }
+  ],
+  "premiumCalls": [
+    {
+      "id": "b72",
+      "name": "codex.createPlan.end",
+      "durationMs": 24478.0117,
+      "meta": {
+        "sessionId": "01a13f77-edb7-7530-aec6-c94ceaaa75d0",
+        "model": "gpt-6-astra",
+        "usage": {
+          "inputTokens": 15320,
+          "outputTokens": 547,
+          "cachedInputTokens": 0,
+          "measured": true,
+          "billing": "subscription"
+        },
+        "durationMs": 24385
+      },
+      "result": {
+        "summary": "Implement slugify and its public re-export in one local task, preserving existing tests.",
+        "analysis": {
+          "summary": "One new module and one existing entry-point edit; routine ASCII string normalization.",
+          "taskType": "backend",
+          "complexity": 1,
+          "risk": 1,
+          "securitySensitive": false,
+          "affectedAreas": [
+            "src/slug.mjs",
+            "src/index.mjs"
+          ],
+          "needsDecomposition": false,
+          "openQuestions": []
+        },
+        "tasks": [
+          {
+            "id": "task-001",
+            "title": "Implement and export slugify",
+            "description": "Add ASCII slug normalization using named ESM exports and the existing semicolon-free style.\nNew src/slug.mjs: absent → exported function slugify(text), returning text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').\nsrc/index.mjs: version-only export → preserve export const version = 1 and append export { slugify } from './slug.mjs'.\nKeep test/slug.test.mjs and package.json unchanged; add no dependencies or tests. Run both supplied validation commands.",
+            "category": "general",
+            "complexity": 1,
+            "risk": 1,
+            "relevantFiles": [
+              "src/index.mjs",
+              "test/slug.test.mjs",
+              "package.json"
+            ],
+            "newFiles": [
+              "src/slug.mjs"
+            ],
+            "dependsOn": [],
+            "capabilities": [
+              "javascript",
+              "esm",
+              "testing"
+            ],
+            "expectedInputTokens": 1000,
+            "testStrategy": "Run npm run typecheck --silent and npm run test --silent; existing tests cover case conversion, punctuation, empty input, separator-only input, grouped separators, and preservation of version.",
+            "acceptanceCriteria": [
+              "slugify is a named export from both src/slug.mjs and src/index.mjs.",
+              "ASCII letters become lowercase; groups outside a-z and 0-9 become one hyphen, with no boundary hyphens.",
+              "Empty input and separator-only input return an empty string.",
+              "version remains 1; tests and package.json remain unchanged.",
+              "Both validation commands pass."
+            ],
+            "suggestedExecutor": "local",
+            "rationale": "qwen3:4b can handle this precise, low-risk change to one existing file plus one new file."
+          }
+        ],
+        "warnings": []
+      },
+      "modelIdentitySource": "Pinned CLI argument and adapter meta; CLI emitted no independent server model ID."
+    }
+  ],
+  "queueClaims": [
+    {
+      "runId": "ui-2026-10-15T12-09-36-841Z",
+      "source": "backend",
+      "at": "2026-10-15T12:09:43.589Z",
+      "epochMs": 1792066183589.9805,
+      "name": "queue.claim",
+      "parent": "b35",
+      "jobId": "cmv9hxoy30007v2gwgcth9yq0",
+      "type": "execution.plan",
+      "payload": {
+        "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+        "autoStart": false,
+        "requestedAt": "2026-10-15T12:09:43.561Z",
+        "dedupeKey": "plan:cmv9hxoxz0004v2gw12jwkapl"
+      },
+      "createdAt": "2026-10-15T12:09:43.564Z",
+      "waitMs": 25
+    },
+    {
+      "runId": "ui-2026-10-15T12-09-36-841Z",
+      "source": "backend",
+      "at": "2026-10-15T12:10:13.703Z",
+      "epochMs": 1792066213703.475,
+      "name": "queue.claim",
+      "parent": "b90",
+      "jobId": "cmv9hyc76000jv2gwpyzgspu7",
+      "type": "execution.run",
+      "payload": {
+        "executionId": "cmv9hyc73000iv2gwa6yybrwy",
+        "dedupeKey": "exec:cmv9hyc73000iv2gwa6yybrwy"
+      },
+      "createdAt": "2026-10-15T12:10:13.698Z",
+      "waitMs": 5
+    }
+  ],
+  "timeline": [
+    {
+      "startMs": 0,
+      "at": "2026-10-15T12:09:43.550Z",
+      "name": "ui.click",
+      "label": "Senden",
+      "rendererEpochMs": 1792066183549.7
+    },
+    {
+      "startMs": 40.281,
+      "at": "2026-10-15T12:09:43.589Z",
+      "name": "queue.claim",
+      "parent": "b35",
+      "jobId": "cmv9hxoy30007v2gwgcth9yq0",
+      "type": "execution.plan",
+      "payload": {
+        "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+        "autoStart": false,
+        "requestedAt": "2026-10-15T12:09:43.561Z",
+        "dedupeKey": "plan:cmv9hxoxz0004v2gw12jwkapl"
+      },
+      "createdAt": "2026-10-15T12:09:43.564Z",
+      "waitMs": 25
+    },
+    {
+      "startMs": 41.148,
+      "at": "2026-10-15T12:09:43.590Z",
+      "name": "execution.plan.start",
+      "parent": "b35",
+      "id": "b41",
+      "args": [
+        "cmv9hxoxz0004v2gw12jwkapl",
+        null,
+        null,
+        "2026-10-15T12:09:43.561Z"
+      ]
+    },
+    {
+      "startMs": 44.823,
+      "at": "2026-10-15T12:09:43.594Z",
+      "name": "context.digest.start",
+      "parent": "b41",
+      "id": "b42",
+      "args": [
+        "cmv9hxopq0000v2gwshwbtgrm",
+        "C:\\Users\\lukas\\AppData\\Local\\Temp\\ui-2026-10-15T12-09-36-841Z-vSSUwf\\repo",
+        "Implement an exported slugify(text) function in a new src/slug.mjs and re-export it from src/index.mjs. Lowercase ASCII text, trim it, replace each group of non-alphanumeric characters by one hyphen, remove leading/trailing hyphens. Empty input returns an empty string. Do not change tests. Implement both files in one task.",
+        6000,
+        null
+      ]
+    },
+    {
+      "startMs": 294.752,
+      "at": "2026-10-15T12:09:43.843Z",
+      "name": "context.digest.engine.start",
+      "parent": "b42",
+      "id": "b56",
+      "goal": "Implement an exported slugify(text) function in a new src/slug.mjs and re-export it from src/index.mjs. Lowercase ASCII text, trim it, replace each group of non-alphanumeric characters by one hyphen, remove leading/trailing hyphens. Empty input returns an empty string. Do not change tests. Implement both files in one task.",
+      "options": {
+        "budgetTokens": 6000,
+        "validationCommands": [
+          "npm run typecheck --silent",
+          "npm run test --silent"
+        ],
+        "maxFiles": 10,
+        "excerptFiles": 5,
+        "excerptChars": 10000,
+        "excerptMaxLines": 500,
+        "fillUnranked": true,
+        "minRelativeScore": 0.2,
+        "unrankedManifestsOnly": true
+      }
+    },
+    {
+      "startMs": 363.693,
+      "at": "2026-10-15T12:09:43.912Z",
+      "name": "context.digest.engine.end",
+      "parent": "b42",
+      "id": "b56",
+      "durationMs": 68.91699999999946,
+      "tokenEstimate": 237
+    },
+    {
+      "startMs": 364.026,
+      "at": "2026-10-15T12:09:43.913Z",
+      "name": "context.digest.end",
+      "parent": "b41",
+      "id": "b42",
+      "durationMs": 319.20650000000023
+    },
+    {
+      "startMs": 1958.485,
+      "at": "2026-10-15T12:09:45.507Z",
+      "name": "ollama.load.start",
+      "parent": "b36",
+      "id": "b71",
+      "model": "qwen3:4b",
+      "keepAlive": "15m",
+      "numCtx": 16384
+    },
+    {
+      "startMs": 1961.393,
+      "at": "2026-10-15T12:09:45.510Z",
+      "name": "codex.createPlan.start",
+      "parent": "b41",
+      "id": "b72",
+      "configuredModel": "gpt-6-astra",
+      "effort": "low",
+      "run": "plan-cmv9hxoxz0004v2gw12jwkapl"
+    },
+    {
+      "startMs": 7159.529,
+      "at": "2026-10-15T12:09:50.708Z",
+      "name": "ollama.load.end",
+      "parent": "b36",
+      "id": "b71",
+      "durationMs": 5201.0572999999995
+    },
+    {
+      "startMs": 26439.391,
+      "at": "2026-10-15T12:10:09.988Z",
+      "name": "codex.createPlan.end",
+      "parent": "b41",
+      "id": "b72",
+      "durationMs": 24478.0117,
+      "meta": {
+        "sessionId": "01a13f77-edb7-7530-aec6-c94ceaaa75d0",
+        "model": "gpt-6-astra",
+        "usage": {
+          "inputTokens": 15320,
+          "outputTokens": 547,
+          "cachedInputTokens": 0,
+          "measured": true,
+          "billing": "subscription"
+        },
+        "durationMs": 24385
+      }
+    },
+    {
+      "startMs": 26457.784,
+      "at": "2026-10-15T12:10:10.007Z",
+      "name": "execution.chat.start",
+      "parent": "b41",
+      "id": "b78",
+      "args": [
+        "cmv9hxoxz0004v2gw12jwkapl",
+        "assistant",
+        "**Plan von Codex**\nImplement slugify and its public re-export in one local task, preserving existing tests.\n\n- **task-001** Implement and export slugify — Komplexität 1/5, Risiko 1/5 → qwen3:4b\n\nPrüfe Zuordnungen und starte die Ausführung, wenn der Plan passt.",
+        null
+      ]
+    },
+    {
+      "startMs": 26459.405,
+      "at": "2026-10-15T12:10:10.008Z",
+      "name": "execution.chat.end",
+      "parent": "b41",
+      "id": "b78",
+      "durationMs": 1.6247000000003027
+    },
+    {
+      "startMs": 27002.638,
+      "at": "2026-10-15T12:10:10.552Z",
+      "name": "ui.plan.visible",
+      "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+      "plan": {
+        "id": "cmv9hy9cl000ev2gwihezb7df",
+        "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+        "summary": "Implement slugify and its public re-export in one local task, preserving existing tests.",
+        "classification": {
+          "summary": "One new module and one existing entry-point edit; routine ASCII string normalization.",
+          "taskType": "backend",
+          "complexity": 1,
+          "risk": 1,
+          "securitySensitive": false,
+          "affectedAreas": [
+            "src/slug.mjs",
+            "src/index.mjs"
+          ],
+          "needsDecomposition": false,
+          "openQuestions": []
+        },
+        "modelAssignments": [
+          {
+            "key": "task-001",
+            "subtaskId": "cmv9hy9c9000cv2gw01kenmjv",
+            "executor": "local",
+            "model": "qwen3:4b",
+            "tier": "fast",
+            "reasons": [
+              "Simple task (complexity 1, risk 1).",
+              "qwen3:4b: no history for \"general\" yet (insufficient data)."
+            ],
+            "escalation": [
+              {
+                "executor": "premium",
+                "tier": "premium"
+              }
+            ],
+            "requiresApproval": false
+          }
+        ],
+        "estimatedCostEuro": "0",
+        "requiresApproval": true,
+        "nextAction": "await_plan_approval",
+        "source": "codex",
+        "dag": {
+          "tasks": [
+            {
+              "id": "task-001",
+              "dependsOn": []
+            }
+          ],
+          "warnings": [],
+          "contextTokens": 237,
+          "consideredFiles": 27
+        },
+        "createdAt": "2026-10-15T12:10:10.006Z",
+        "updatedAt": "2026-10-15T12:10:10.006Z"
+      },
+      "subtasks": [
+        {
+          "id": "cmv9hy9c9000cv2gw01kenmjv",
+          "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+          "key": "task-001",
+          "title": "Implement and export slugify",
+          "goal": "Add ASCII slug normalization using named ESM exports and the existing semicolon-free style.\nNew src/slug.mjs: absent → exported function slugify(text), returning text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').\nsrc/index.mjs: version-only export → preserve export const version = 1 and append export { slugify } from './slug.mjs'.\nKeep test/slug.test.mjs and package.json unchanged; add no dependencies or tests. Run both supplied validation commands.",
+          "status": "planned",
+          "assignedAgentType": "LocalCoderAgent",
+          "selectedModelClass": "local_llm",
+          "selectedProviderId": null,
+          "selectedModelName": "qwen3:4b",
+          "modelReason": "Simple task (complexity 1, risk 1).\nqwen3:4b: no history for \"general\" yet (insufficient data).",
+          "skippedModels": [
+            "premium"
+          ],
+          "estimatedCostEuro": "0",
+          "allowedFiles": [
+            "src/index.mjs",
+            "test/slug.test.mjs",
+            "package.json"
+          ],
+          "newFiles": [
+            "src/slug.mjs"
+          ],
+          "suggestedExecutor": "local",
+          "deniedFiles": [],
+          "expectedChange": "slugify is a named export from both src/slug.mjs and src/index.mjs.\nASCII letters become lowercase; groups outside a-z and 0-9 become one hyphen, with no boundary hyphens.\nEmpty input and separator-only input return an empty string.\nversion remains 1; tests and package.json remain unchanged.\nBoth validation commands pass.",
+          "validationCommands": [
+            "npm run typecheck --silent",
+            "npm run test --silent"
+          ],
+          "budgetLimitEuro": "0",
+          "dependsOn": [],
+          "category": "general",
+          "complexityScore": 1,
+          "riskScore": 1,
+          "capabilities": [
+            "javascript",
+            "esm",
+            "testing"
+          ],
+          "acceptanceCriteria": [
+            "slugify is a named export from both src/slug.mjs and src/index.mjs.",
+            "ASCII letters become lowercase; groups outside a-z and 0-9 become one hyphen, with no boundary hyphens.",
+            "Empty input and separator-only input return an empty string.",
+            "version remains 1; tests and package.json remain unchanged.",
+            "Both validation commands pass."
+          ],
+          "testStrategy": "Run npm run typecheck --silent and npm run test --silent; existing tests cover case conversion, punctuation, empty input, separator-only input, grouped separators, and preservation of version.",
+          "expectedInputTokens": 1000,
+          "priority": 1,
+          "attempts": 0,
+          "manualModel": null,
+          "agentId": null,
+          "fastPath": null,
+          "worktreePath": null,
+          "branchName": null,
+          "commitSha": null,
+          "patchText": null,
+          "patchStats": {},
+          "validation": {},
+          "errorMessage": null,
+          "startedAt": null,
+          "finishedAt": null,
+          "createdAt": "2026-10-15T12:10:09.993Z",
+          "updatedAt": "2026-10-15T12:10:10.004Z"
+        }
+      ]
+    },
+    {
+      "startMs": 27063.291,
+      "at": "2026-10-15T12:10:10.612Z",
+      "name": "plan.review.start"
+    },
+    {
+      "startMs": 30071.033,
+      "at": "2026-10-15T12:10:13.620Z",
+      "name": "plan.review.approved"
+    },
+    {
+      "startMs": 30083.9,
+      "at": "2026-10-15T12:10:13.633Z",
+      "name": "ui.click",
+      "label": "Ausführung starten",
+      "rendererEpochMs": 1792066213633.5999
+    },
+    {
+      "startMs": 30153.775,
+      "at": "2026-10-15T12:10:13.703Z",
+      "name": "queue.claim",
+      "parent": "b90",
+      "jobId": "cmv9hyc76000jv2gwpyzgspu7",
+      "type": "execution.run",
+      "payload": {
+        "executionId": "cmv9hyc73000iv2gwa6yybrwy",
+        "dedupeKey": "exec:cmv9hyc73000iv2gwa6yybrwy"
+      },
+      "createdAt": "2026-10-15T12:10:13.698Z",
+      "waitMs": 5
+    },
+    {
+      "startMs": 30204.734,
+      "at": "2026-10-15T12:10:13.753Z",
+      "name": "runner.execute.start",
+      "parent": "b92",
+      "id": "b104",
+      "args": []
+    },
+    {
+      "startMs": 30947.661,
+      "at": "2026-10-15T12:10:14.496Z",
+      "name": "context.digest.engine.start",
+      "parent": "b125",
+      "id": "b126",
+      "goal": "Implement and export slugify\nAdd ASCII slug normalization using named ESM exports and the existing semicolon-free style.\nNew src/slug.mjs: absent → exported function slugify(text), returning text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').\nsrc/index.mjs: version-only export → preserve export const version = 1 and append export { slugify } from './slug.mjs'.\nKeep test/slug.test.mjs and package.json unchanged; add no dependencies or tests. Run both supplied validation commands.",
+      "options": {
+        "explicitFiles": [
+          "src/index.mjs",
+          "test/slug.test.mjs",
+          "package.json"
+        ],
+        "budgetTokens": 2500,
+        "excerptFiles": 0,
+        "maxFiles": 10
+      }
+    },
+    {
+      "startMs": 31000.591,
+      "at": "2026-10-15T12:10:14.549Z",
+      "name": "context.digest.engine.end",
+      "parent": "b125",
+      "id": "b126",
+      "durationMs": 52.922099999996135,
+      "tokenEstimate": 1662
+    },
+    {
+      "startMs": 31011.547,
+      "at": "2026-10-15T12:10:14.560Z",
+      "name": "context.preload.start",
+      "parent": "b127",
+      "id": "b128",
+      "files": [
+        "src/index.mjs",
+        "test/slug.test.mjs",
+        "package.json"
+      ],
+      "budgetChars": 14745
+    },
+    {
+      "startMs": 31032.016,
+      "at": "2026-10-15T12:10:14.581Z",
+      "name": "context.preload.end",
+      "parent": "b127",
+      "id": "b128",
+      "durationMs": 20.477599999998347
+    },
+    {
+      "startMs": 31032.953,
+      "at": "2026-10-15T12:10:14.582Z",
+      "name": "ollama.chat.start",
+      "parent": "b127",
+      "id": "b132",
+      "requestedModel": "qwen3:4b",
+      "settings": {
+        "num_ctx": 16384,
+        "temperature": 0.15
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "messageChars": [
+        {
+          "role": "system",
+          "chars": 2753
+        },
+        {
+          "role": "user",
+          "chars": 8122
+        }
+      ],
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ]
+    },
+    {
+      "startMs": 105566.992,
+      "at": "2026-10-15T12:11:29.117Z",
+      "name": "ollama.chat.end",
+      "parent": "b127",
+      "id": "b132",
+      "durationMs": 74534.2022,
+      "promptTokens": 3934,
+      "completionTokens": 4605,
+      "totalDurationMs": 74531,
+      "loadDurationMs": 144
+    },
+    {
+      "startMs": 105567.236,
+      "at": "2026-10-15T12:11:29.117Z",
+      "name": "tool.call.start",
+      "parent": "b127",
+      "id": "b141",
+      "call": {
+        "id": "call_0qdmex6o",
+        "function": {
+          "index": 0,
+          "name": "write_file",
+          "arguments": {
+            "content": "export const slugify = (text) => text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');",
+            "path": "src/slug.mjs"
+          }
+        }
+      }
+    },
+    {
+      "startMs": 105569.407,
+      "at": "2026-10-15T12:11:29.119Z",
+      "name": "tool.call.end",
+      "parent": "b127",
+      "id": "b141",
+      "durationMs": 2.1732000000047265,
+      "result": {
+        "ok": true,
+        "output": "Created src/slug.mjs (1 lines)."
+      }
+    },
+    {
+      "startMs": 105569.996,
+      "at": "2026-10-15T12:11:29.120Z",
+      "name": "tool.call.start",
+      "parent": "b127",
+      "id": "b143",
+      "call": {
+        "id": "call_u7mjhhfe",
+        "function": {
+          "index": 1,
+          "name": "edit_file",
+          "arguments": {
+            "path": "src/index.mjs",
+            "search": "export const version = 1",
+            "replace": "export const version = 1\nexport { slugify } from './slug.mjs';"
+          }
+        }
+      }
+    },
+    {
+      "startMs": 105571.891,
+      "at": "2026-10-15T12:11:29.121Z",
+      "name": "tool.call.end",
+      "parent": "b127",
+      "id": "b143",
+      "durationMs": 1.8918000000121538,
+      "result": {
+        "ok": true,
+        "output": "Edited src/index.mjs."
+      }
+    },
+    {
+      "startMs": 105572.369,
+      "at": "2026-10-15T12:11:29.122Z",
+      "name": "tool.call.start",
+      "parent": "b127",
+      "id": "b145",
+      "call": {
+        "id": "call_h6yrq2cl",
+        "function": {
+          "index": 2,
+          "name": "finish",
+          "arguments": {
+            "summary": "Added src/slug.mjs with slugify function and updated src/index.mjs to export slugify, ensuring ASCII slug normalization with the specified behavior."
+          }
+        }
+      }
+    },
+    {
+      "startMs": 105572.658,
+      "at": "2026-10-15T12:11:29.122Z",
+      "name": "tool.call.end",
+      "parent": "b127",
+      "id": "b145",
+      "durationMs": 0.2876000000105705,
+      "result": {
+        "ok": true,
+        "output": "Finished.",
+        "finished": "Added src/slug.mjs with slugify function and updated src/index.mjs to export slugify, ensuring ASCII slug normalization with the specified behavior."
+      }
+    },
+    {
+      "startMs": 106037.034,
+      "at": "2026-10-15T12:11:29.587Z",
+      "name": "validation.start",
+      "parent": "b112",
+      "id": "b155",
+      "cwd": "C:\\Users\\lukas\\AppData\\Local\\Temp\\ui-2026-10-15T12-09-36-841Z-vSSUwf\\profile\\worktrees\\cmv9hxopq0000v2gwshwbtgrm\\pool-0",
+      "checks": [
+        {
+          "id": "typecheck",
+          "kind": "typecheck",
+          "command": "npm run typecheck --silent",
+          "blocking": true,
+          "timeoutMs": 300000,
+          "source": "package.json#typecheck"
+        },
+        {
+          "id": "test",
+          "kind": "test",
+          "command": "npm run test --silent",
+          "blocking": true,
+          "timeoutMs": 600000,
+          "source": "package.json#test"
+        }
+      ]
+    },
+    {
+      "startMs": 109075.275,
+      "at": "2026-10-15T12:11:32.625Z",
+      "name": "validation.end",
+      "parent": "b112",
+      "id": "b155",
+      "durationMs": 3038.2427000000025,
+      "report": {
+        "ok": true,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2071,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 964,
+            "exitCode": 0,
+            "testsPassed": 1,
+            "testsFailed": 0,
+            "output": "✔ slugify (0.6523ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 79.4886"
+          }
+        ],
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+      }
+    },
+    {
+      "startMs": 109128.46,
+      "at": "2026-10-15T12:11:32.678Z",
+      "name": "integration.cherryPick.start",
+      "parent": "b112",
+      "id": "b167",
+      "cwd": "C:\\Users\\lukas\\AppData\\Local\\Temp\\ui-2026-10-15T12-09-36-841Z-vSSUwf\\profile\\worktrees\\cmv9hxopq0000v2gwshwbtgrm\\a6yybrwy-integration",
+      "commit": "3b4c07cf3092a8793131a992e0fd34c3440fee73"
+    },
+    {
+      "startMs": 109263.726,
+      "at": "2026-10-15T12:11:32.813Z",
+      "name": "integration.cherryPick.end",
+      "parent": "b112",
+      "id": "b167",
+      "durationMs": 135.24269999998796
+    },
+    {
+      "startMs": 109599.276,
+      "at": "2026-10-15T12:11:33.149Z",
+      "name": "runner.finalize.start",
+      "parent": "b104",
+      "id": "b177",
+      "args": [
+        null
+      ]
+    },
+    {
+      "startMs": 109645.679,
+      "at": "2026-10-15T12:11:33.195Z",
+      "name": "validation.start",
+      "parent": "b177",
+      "id": "b179",
+      "cwd": "C:\\Users\\lukas\\AppData\\Local\\Temp\\ui-2026-10-15T12-09-36-841Z-vSSUwf\\profile\\worktrees\\cmv9hxopq0000v2gwshwbtgrm\\a6yybrwy-integration",
+      "checks": [
+        {
+          "id": "typecheck",
+          "kind": "typecheck",
+          "command": "npm run typecheck --silent",
+          "blocking": true,
+          "timeoutMs": 300000,
+          "source": "package.json#typecheck"
+        },
+        {
+          "id": "test",
+          "kind": "test",
+          "command": "npm run test --silent",
+          "blocking": true,
+          "timeoutMs": 600000,
+          "source": "package.json#test"
+        }
+      ]
+    },
+    {
+      "startMs": 112617.736,
+      "at": "2026-10-15T12:11:36.167Z",
+      "name": "validation.end",
+      "parent": "b177",
+      "id": "b179",
+      "durationMs": 2972.058400000009,
+      "report": {
+        "ok": true,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2001,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 969,
+            "exitCode": 0,
+            "testsPassed": 1,
+            "testsFailed": 0,
+            "output": "✔ slugify (0.5729ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 83.7834"
+          }
+        ],
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+      }
+    },
+    {
+      "startMs": 112830.831,
+      "at": "2026-10-15T12:11:36.380Z",
+      "name": "runner.review.start",
+      "parent": "b177",
+      "id": "b196",
+      "args": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "startMs": 112831.308,
+      "at": "2026-10-15T12:11:36.381Z",
+      "name": "runner.review.end",
+      "parent": "b177",
+      "id": "b196",
+      "durationMs": 0.481099999989965
+    },
+    {
+      "startMs": 112834.099,
+      "at": "2026-10-15T12:11:36.384Z",
+      "name": "runner.finalize.end",
+      "parent": "b104",
+      "id": "b177",
+      "durationMs": 3234.8266000000003
+    },
+    {
+      "startMs": 112846.615,
+      "at": "2026-10-15T12:11:36.396Z",
+      "name": "execution.chat.start",
+      "parent": "b92",
+      "id": "b197",
+      "args": [
+        "cmv9hxoxz0004v2gw12jwkapl",
+        "agent",
+        "**Ausführung abgeschlossen – Freigabe erforderlich.**\nIntegriert: task-001\nValidierung: typecheck: passed; test: passed (1 passed, 0 failed)\nReview: Low-risk change with passing validation: automated review only.",
+        null
+      ]
+    },
+    {
+      "startMs": 112848.763,
+      "at": "2026-10-15T12:11:36.398Z",
+      "name": "execution.chat.end",
+      "parent": "b92",
+      "id": "b197",
+      "durationMs": 2.156199999997625
+    },
+    {
+      "startMs": 113667.3,
+      "at": "2026-10-15T12:11:37.217Z",
+      "name": "ui.approval.dom",
+      "rendererEpochMs": 1792066297217
+    },
+    {
+      "startMs": 113749.6,
+      "at": "2026-10-15T12:11:37.299Z",
+      "name": "ui.approval.paintOpportunity",
+      "rendererEpochMs": 1792066297299.3
+    },
+    {
+      "startMs": 114093,
+      "at": "2026-10-15T12:11:37.642Z",
+      "name": "ui.ready.visible",
+      "rendererEpochMs": 1792066297642.7
+    },
+    {
+      "startMs": 114277.01,
+      "at": "2026-10-15T12:11:37.826Z",
+      "name": "result.review.approved",
+      "review": {
+        "kind": "deterministic",
+        "reason": "Low-risk change with passing validation: automated review only.",
+        "deterministicIssues": [],
+        "requiresHumanApproval": true
+      },
+      "testsUnchanged": true,
+      "userCheckoutClean": true
+    },
+    {
+      "startMs": 114297.2,
+      "at": "2026-10-15T12:11:37.846Z",
+      "name": "ui.click",
+      "label": "In Arbeitskopie übernehmen",
+      "rendererEpochMs": 1792066297846.9
+    },
+    {
+      "startMs": 114970.995,
+      "at": "2026-10-15T12:11:38.521Z",
+      "name": "execution.chat.start",
+      "parent": "b208",
+      "id": "b226",
+      "args": [
+        "cmv9hxoxz0004v2gw12jwkapl",
+        "system",
+        "✓ Applied 2 file(s) to the working tree (not committed).",
+        null
+      ]
+    },
+    {
+      "startMs": 114973.688,
+      "at": "2026-10-15T12:11:38.523Z",
+      "name": "execution.chat.end",
+      "parent": "b208",
+      "id": "b226",
+      "durationMs": 2.696700000000419
+    },
+    {
+      "startMs": 116179.546,
+      "at": "2026-10-15T12:11:39.729Z",
+      "name": "run.complete",
+      "success": true
+    }
+  ],
+  "apiRequests": [
+    {
+      "id": "http1",
+      "startMs": -4525.08,
+      "method": "GET",
+      "path": "/settings",
+      "durationMs": 3.2223999999999933,
+      "status": 200
+    },
+    {
+      "id": "http2",
+      "startMs": -4516.495,
+      "method": "GET",
+      "path": "/system/jobs?type=model.pull&active=1",
+      "durationMs": 4.287700000000029,
+      "status": 200
+    },
+    {
+      "id": "http3",
+      "startMs": -4515.717,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 4.955700000000036,
+      "status": 200
+    },
+    {
+      "id": "http4",
+      "startMs": -4507.362,
+      "method": "GET",
+      "path": "/system/info",
+      "durationMs": 64.99099999999999,
+      "status": 200
+    },
+    {
+      "id": "http6",
+      "startMs": -4430.588,
+      "method": "PATCH",
+      "path": "/settings",
+      "durationMs": 9.871399999999994,
+      "status": 200
+    },
+    {
+      "id": "http7",
+      "startMs": -4405.835,
+      "method": "GET",
+      "path": "/local-models/ollama",
+      "durationMs": 91.6128,
+      "status": 200
+    },
+    {
+      "id": "http9",
+      "startMs": -4305.935,
+      "method": "POST",
+      "path": "/local-models/ollama/start",
+      "durationMs": 3622.3520999999996,
+      "status": 201
+    },
+    {
+      "id": "http10",
+      "startMs": -4199.55,
+      "method": "GET",
+      "path": "/settings",
+      "durationMs": 0.9972000000000207,
+      "status": 200
+    },
+    {
+      "id": "http11",
+      "startMs": -680.343,
+      "method": "GET",
+      "path": "/local-models/installed",
+      "durationMs": 120.42879999999968,
+      "status": 200
+    },
+    {
+      "id": "http12",
+      "startMs": -555.06,
+      "method": "PUT",
+      "path": "/local-models/roles",
+      "durationMs": 2.423700000000281,
+      "status": 200
+    },
+    {
+      "id": "http13",
+      "startMs": -549.713,
+      "method": "GET",
+      "path": "/orchestrator/codex/status",
+      "durationMs": 68.75470000000041,
+      "status": 200
+    },
+    {
+      "id": "http16",
+      "startMs": -477.899,
+      "method": "POST",
+      "path": "/onboarding/complete",
+      "durationMs": 4.4531000000006316,
+      "status": 201
+    },
+    {
+      "id": "http17",
+      "startMs": -442.298,
+      "method": "GET",
+      "path": "/settings",
+      "durationMs": 0.7115999999996347,
+      "status": 200
+    },
+    {
+      "id": "http18",
+      "startMs": -439.656,
+      "method": "GET",
+      "path": "/system/jobs?type=model.pull&active=1",
+      "durationMs": 1.3955999999998312,
+      "status": 200
+    },
+    {
+      "id": "http19",
+      "startMs": -439.04,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.5257000000001426,
+      "status": 200
+    },
+    {
+      "id": "http20",
+      "startMs": -293.342,
+      "method": "POST",
+      "path": "/projects/open",
+      "durationMs": 64.67489999999998,
+      "status": 201
+    },
+    {
+      "id": "http22",
+      "startMs": -240.746,
+      "method": "GET",
+      "path": "/settings",
+      "durationMs": 0.731499999999869,
+      "status": 200
+    },
+    {
+      "id": "http23",
+      "startMs": -226.305,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/sessions",
+      "durationMs": 1.524199999999837,
+      "status": 200
+    },
+    {
+      "id": "http24",
+      "startMs": -223.486,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 11.657600000000457,
+      "status": 200
+    },
+    {
+      "id": "http25",
+      "startMs": -222.874,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 128.79470000000038,
+      "status": 200
+    },
+    {
+      "id": "http27",
+      "startMs": -213.206,
+      "method": "GET",
+      "path": "/projects",
+      "durationMs": 2.0645999999997002,
+      "status": 200
+    },
+    {
+      "id": "http31",
+      "startMs": -28.341,
+      "method": "GET",
+      "path": "/settings",
+      "durationMs": 0.5812999999998283,
+      "status": 200
+    },
+    {
+      "id": "http32",
+      "startMs": 1.508,
+      "method": "POST",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/sessions",
+      "durationMs": 2.797599999999875,
+      "status": 201
+    },
+    {
+      "id": "http33",
+      "startMs": 6.206,
+      "method": "POST",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt/messages",
+      "durationMs": 37.6266999999998,
+      "status": 201
+    },
+    {
+      "id": "http47",
+      "startMs": 54.808,
+      "method": "GET",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt",
+      "durationMs": 3.9385999999994965,
+      "status": 200
+    },
+    {
+      "id": "http48",
+      "startMs": 60.003,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 6.065099999999802,
+      "status": 200
+    },
+    {
+      "id": "http49",
+      "startMs": 69.451,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 2.0906999999997424,
+      "status": 200
+    },
+    {
+      "id": "http57",
+      "startMs": 341.671,
+      "method": "GET",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt",
+      "durationMs": 12.42949999999928,
+      "status": 200
+    },
+    {
+      "id": "http59",
+      "startMs": 362.561,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.393199999999524,
+      "status": 200
+    },
+    {
+      "id": "http61",
+      "startMs": 528.951,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.8626000000003842,
+      "status": 200
+    },
+    {
+      "id": "http65",
+      "startMs": 1458.803,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 9.96730000000025,
+      "status": 200
+    },
+    {
+      "id": "http66",
+      "startMs": 1459.418,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 121.1850000000004,
+      "status": 200
+    },
+    {
+      "id": "http79",
+      "startMs": 26766.168,
+      "method": "GET",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt",
+      "durationMs": 2.8316000000013446,
+      "status": 200
+    },
+    {
+      "id": "http80",
+      "startMs": 26770.052,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.144900000002963,
+      "status": 200
+    },
+    {
+      "id": "http81",
+      "startMs": 26777.78,
+      "method": "GET",
+      "path": "/agents?projectId=cmv9hxopq0000v2gwshwbtgrm",
+      "durationMs": 1.9940999999998894,
+      "status": 200
+    },
+    {
+      "id": "http82",
+      "startMs": 26964.883,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.7127000000000407,
+      "status": 200
+    },
+    {
+      "id": "http83",
+      "startMs": 26965.499,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 3.7318000000013853,
+      "status": 200
+    },
+    {
+      "id": "http84",
+      "startMs": 26983.756,
+      "method": "GET",
+      "path": "/settings",
+      "durationMs": 0.5645000000004075,
+      "status": 200
+    },
+    {
+      "id": "http85",
+      "startMs": 26987.276,
+      "method": "GET",
+      "path": "/tasks?projectId=cmv9hxopq0000v2gwshwbtgrm",
+      "durationMs": 2.4016999999985273,
+      "status": 200
+    },
+    {
+      "id": "http86",
+      "startMs": 26994.554,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 3.3594999999986612,
+      "status": 200
+    },
+    {
+      "id": "http87",
+      "startMs": 30085.397,
+      "method": "POST",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl/execute",
+      "durationMs": 65.17290000000503,
+      "status": 201
+    },
+    {
+      "id": "http91",
+      "startMs": 30151.675,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.505900000003749,
+      "status": 200
+    },
+    {
+      "id": "http98",
+      "startMs": 30166.477,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.598999999994703,
+      "status": 200
+    },
+    {
+      "id": "http99",
+      "startMs": 30167.577,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000",
+      "durationMs": 2.7888999999995576,
+      "status": 200
+    },
+    {
+      "id": "http102",
+      "startMs": 30173.553,
+      "method": "GET",
+      "path": "/agents?projectId=cmv9hxopq0000v2gwshwbtgrm",
+      "durationMs": 1.2317000000039116,
+      "status": 200
+    },
+    {
+      "id": "http103",
+      "startMs": 30174.105,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.4923999999955413,
+      "status": 200
+    },
+    {
+      "id": "http118",
+      "startMs": 30681.919,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.930500000002212,
+      "status": 200
+    },
+    {
+      "id": "http119",
+      "startMs": 30682.715,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 9.859300000003714,
+      "status": 200
+    },
+    {
+      "id": "http122",
+      "startMs": 30826.051,
+      "method": "GET",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt",
+      "durationMs": 2.5728000000017346,
+      "status": 200
+    },
+    {
+      "id": "http123",
+      "startMs": 30829.988,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.081700000002456,
+      "status": 200
+    },
+    {
+      "id": "http133",
+      "startMs": 31044.515,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.2321000000010827,
+      "status": 200
+    },
+    {
+      "id": "http134",
+      "startMs": 31045.279,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000",
+      "durationMs": 1.125899999999092,
+      "status": 200
+    },
+    {
+      "id": "http135",
+      "startMs": 31826.368,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 13.052999999999884,
+      "status": 200
+    },
+    {
+      "id": "http136",
+      "startMs": 31827.543,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 116.55309999999736,
+      "status": 200
+    },
+    {
+      "id": "http157",
+      "startMs": 106397.845,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 4.495900000008987,
+      "status": 200
+    },
+    {
+      "id": "http158",
+      "startMs": 106398.64,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000&after=2026-10-15T12%3A10%3A14.563Z&afterId=cmv9hycv6000vv2gwjcq03rdh",
+      "durationMs": 2.657600000005914,
+      "status": 200
+    },
+    {
+      "id": "http159",
+      "startMs": 106712.07,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 12.700899999996182,
+      "status": 200
+    },
+    {
+      "id": "http160",
+      "startMs": 106712.702,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 125.27300000000105,
+      "status": 200
+    },
+    {
+      "id": "http181",
+      "startMs": 109967.317,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.828300000008312,
+      "status": 200
+    },
+    {
+      "id": "http182",
+      "startMs": 109968,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000&after=2026-10-15T12%3A11%3A29.124Z&afterId=cmv9hzyeb0011v2gwh4vzv7u3",
+      "durationMs": 1.3513000000093598,
+      "status": 200
+    },
+    {
+      "id": "http183",
+      "startMs": 110136.678,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.7114000000001397,
+      "status": 200
+    },
+    {
+      "id": "http184",
+      "startMs": 110487.849,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 12.65779999998631,
+      "status": 200
+    },
+    {
+      "id": "http185",
+      "startMs": 110488.471,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 119.17280000000028,
+      "status": 200
+    },
+    {
+      "id": "http198",
+      "startMs": 113154.235,
+      "method": "GET",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt",
+      "durationMs": 2.4976000000024214,
+      "status": 200
+    },
+    {
+      "id": "http199",
+      "startMs": 113157.607,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.266199999998207,
+      "status": 200
+    },
+    {
+      "id": "http200",
+      "startMs": 113354.703,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.848599999997532,
+      "status": 200
+    },
+    {
+      "id": "http201",
+      "startMs": 113355.368,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 3.5138999999908265,
+      "status": 200
+    },
+    {
+      "id": "http202",
+      "startMs": 113657.515,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.2912000000069384,
+      "status": 200
+    },
+    {
+      "id": "http203",
+      "startMs": 113658.194,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000&after=2026-10-15T12%3A11%3A33.100Z&afterId=cmv9i01gs0019v2gwxkk8avcu",
+      "durationMs": 1.2260000000096625,
+      "status": 200
+    },
+    {
+      "id": "http204",
+      "startMs": 114143.01,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 3.294099999999162,
+      "status": 200
+    },
+    {
+      "id": "http205",
+      "startMs": 114156.589,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 2.7321999999985565,
+      "status": 200
+    },
+    {
+      "id": "http206",
+      "startMs": 114167.553,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events",
+      "durationMs": 1.381999999997788,
+      "status": 200
+    },
+    {
+      "id": "http207",
+      "startMs": 114297.848,
+      "method": "POST",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/approve",
+      "durationMs": 676.8654999999999,
+      "status": 201
+    },
+    {
+      "id": "http210",
+      "startMs": 114307.602,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.2422999999980675,
+      "status": 200
+    },
+    {
+      "id": "http216",
+      "startMs": 114571.662,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.706000000005588,
+      "status": 200
+    },
+    {
+      "id": "http223",
+      "startMs": 114835.961,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.0397999999986496,
+      "status": 200
+    },
+    {
+      "id": "http227",
+      "startMs": 114975.912,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.6490000000048894,
+      "status": 200
+    },
+    {
+      "id": "http228",
+      "startMs": 114976.544,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000&after=2026-10-15T12%3A11%3A36.385Z&afterId=cmv9i0400001bv2gwbej6zs78",
+      "durationMs": 1.4078999999910593,
+      "status": 200
+    },
+    {
+      "id": "http229",
+      "startMs": 114981.892,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 5.270999999993364,
+      "status": 200
+    },
+    {
+      "id": "http230",
+      "startMs": 114989.357,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.9074000000109663,
+      "status": 200
+    },
+    {
+      "id": "http231",
+      "startMs": 115271.757,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 11.86459999998624,
+      "status": 200
+    },
+    {
+      "id": "http232",
+      "startMs": 115272.275,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 115.64449999999488,
+      "status": 200
+    },
+    {
+      "id": "http234",
+      "startMs": 115303.261,
+      "method": "GET",
+      "path": "/sessions/cmv9hxoxt0002v2gwnzscexlt",
+      "durationMs": 2.4997000000003027,
+      "status": 200
+    },
+    {
+      "id": "http235",
+      "startMs": 115306.627,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.033699999999953,
+      "status": 200
+    },
+    {
+      "id": "http239",
+      "startMs": 115504.678,
+      "method": "GET",
+      "path": "/tasks/cmv9hxoxz0004v2gw12jwkapl",
+      "durationMs": 4.180299999992712,
+      "status": 200
+    },
+    {
+      "id": "http240",
+      "startMs": 115505.58,
+      "method": "GET",
+      "path": "/activity",
+      "durationMs": 1.3429999999934807,
+      "status": 200
+    },
+    {
+      "id": "http241",
+      "startMs": 115799.189,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy",
+      "durationMs": 3.329199999992852,
+      "status": 200
+    },
+    {
+      "id": "http242",
+      "startMs": 115799.721,
+      "method": "GET",
+      "path": "/executions/cmv9hyc73000iv2gwa6yybrwy/events?limit=2000&after=2026-10-15T12%3A11%3A36.385Z&afterId=cmv9i0400001bv2gwbej6zs78",
+      "durationMs": 1.0310999999928754,
+      "status": 200
+    },
+    {
+      "id": "http243",
+      "startMs": 115908.052,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/tree?dir=",
+      "durationMs": 9.088000000003376,
+      "status": 200
+    },
+    {
+      "id": "http244",
+      "startMs": 115908.778,
+      "method": "GET",
+      "path": "/projects/cmv9hxopq0000v2gwshwbtgrm/git/status",
+      "durationMs": 102.20720000000438,
+      "status": 200
+    }
+  ],
+  "gaps": [
+    "No compositor/pixel-present timestamp. Endpoint is the real visible approval UI; double requestAnimationFrame marks a paint opportunity, followed by a screenshot.",
+    "UI click to HTTP receive includes renderer handler, preload IPC, main bridge and loopback transport; these are not separately instrumented.",
+    "Premium API prefill/thinking/output token split and server latency are not exposed by the CLI.",
+    "Hooks add synchronous JSONL writes and stream parsing; observer overhead has not been measured against an uninstrumented control.",
+    "Historical samples and the real application differ: the application exposes skill tools, so this run uses tools mode from its first local call."
+  ]
+}

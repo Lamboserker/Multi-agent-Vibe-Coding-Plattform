@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as Monaco from 'monaco-editor'
-import { X } from 'lucide-react'
+import { Globe, X } from 'lucide-react'
 import * as actions from '../../lib/actions'
 import * as models from '../../lib/editor-models'
 import { touchWorkspace } from '../../lib/persistence'
@@ -12,8 +12,9 @@ import { ProjectSetup } from '../panels/ProjectsPanel'
 import { attachEditorFeatures } from '../../lib/editor-features'
 import { saveWithFormat } from '../../lib/ide'
 import { RunOverview } from './RunOverview'
+import { PreviewView } from './PreviewView'
 
-const EDITOR_FONT = "'Cascadia Code', 'JetBrains Mono', Consolas, monospace"
+const EDITOR_FONT = "'JetBrains Mono', 'Cascadia Code', Consolas, monospace"
 
 export function EditorArea() {
   const projectOpen = useAppState((state) => Boolean(state.project))
@@ -38,7 +39,7 @@ export function EditorArea() {
       <div className="editor-area">
         <div className="welcome">
           <h1>Multi-AI Coder</h1>
-          <div>Öffne ein Git-Repository, um loszulegen.</div>
+          <div>Öffne einen Projektordner, um loszulegen – Git richtet die App selbst ein.</div>
           <div style={{ width: 'min(440px, 90%)' }}>
             <ProjectSetup />
           </div>
@@ -65,7 +66,7 @@ export function EditorArea() {
             title={tab.path}
             onAuxClick={(event) => event.button === 1 && close(tab)}
           >
-            <span>{tab.kind === 'diff' ? '⇄ ' : ''}{tab.title}</span>
+            <span>{tab.kind === 'diff' ? '⇄ ' : ''}{tab.kind === 'preview' ? <Globe size={12} style={{ marginRight: 4, verticalAlign: -1 }} /> : null}{tab.title}</span>
             {tab.dirty ? <span className="dirty" title="Nicht gespeichert (als Entwurf gesichert)" /> : null}
             <button className="icon-btn" style={{ width: 20, height: 20 }} aria-label={`${tab.title} schließen`} onClick={(event) => { event.stopPropagation(); close(tab) }}>
               <X size={13} />
@@ -89,10 +90,11 @@ export function EditorArea() {
         <div className="editor-group">
         {hasFileTab ? <CodeEditor tab={active?.kind === 'file' ? active : undefined} visible={active?.kind === 'file'} /> : null}
         {active?.kind === 'diff' ? <DiffView key={active.id} tab={active} /> : null}
+        {tabs.filter((tab) => tab.kind === 'preview').map((tab) => <PreviewView key={tab.id} tab={tab} visible={tab.id === activeTabId} />)}
         {!active ? (
           <div className="welcome">
             {restoring ? <div className="row"><Spinner /> Stelle geöffnete Dateien wieder her …</div> : <RunOverview />}
-            {!restoring ? <div>Wähle eine Datei im Explorer oder beschreibe rechts eine Aufgabe.</div> : null}
+            {!restoring ? <div>Wähle eine Datei im Explorer. Aufgaben beschreibst du im Leitstand.</div> : null}
             <div className="faint">Strg+S speichert · Strg+P öffnet Dateien · Strg+B / Strg+J / Strg+Umschalt+B blenden Bereiche ein und aus</div>
           </div>
         ) : null}
@@ -182,7 +184,7 @@ function CodeEditor({ tab, visible, primary = true }: { tab?: EditorTab; visible
   }, [])
 
   useEffect(() => {
-    void models.loadMonaco().then((monaco) => monaco.editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs'))
+    void models.loadMonaco().then((monaco) => monaco.editor.setTheme(theme === 'dark' ? 'mac-dark' : 'mac-light'))
   }, [theme])
 
   useEffect(() => {
@@ -217,7 +219,7 @@ function DiffView({ tab }: { tab: EditorTab }) {
     let cleanup = () => undefined as void
     void models.loadMonaco().then((monaco) => {
       if (disposed || !host.current) return
-      monaco.editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs')
+      monaco.editor.setTheme(theme === 'dark' ? 'mac-dark' : 'mac-light')
       if (tab.language === 'diff' || tab.original === '') {
         // unified patch: shown as text
         const model = monaco.editor.createModel(tab.content ?? '', 'diff')

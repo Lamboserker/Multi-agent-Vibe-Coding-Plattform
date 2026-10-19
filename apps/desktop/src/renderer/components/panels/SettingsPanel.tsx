@@ -90,6 +90,7 @@ export function SettingsPanel() {
               <option value="manual">Manuell (empfohlen)</option>
               <option value="auto_branch">Automatisch als Branch behalten</option>
               <option value="auto_working_tree">Automatisch in die Arbeitskopie übernehmen</option>
+              <option value="auto_commit">Automatisch auf den aktuellen Branch committen (z. B. main)</option>
             </select>
           </Field>
           <label className="row"><input type="checkbox" checked={settings.planApproval} onChange={(event) => set({ planApproval: event.target.checked })} /> Plan vor der Ausführung bestätigen</label>

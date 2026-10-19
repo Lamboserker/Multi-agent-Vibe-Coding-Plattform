@@ -553,7 +553,7 @@ export function rankFiles(index: RepoIndex, goal: string, explicitFiles: string[
         if (symbolTokens.includes(word)) score += symbol.exported ? 2 : 1
       }
     }
-    if (explicitFiles.includes(entry.path)) score += 50
+    if (explicitFiles.includes(entry.path) || goal.includes(entry.path)) score += 50
     if (score > 0) scores.set(entry.path, score)
   }
   // Propagate a fraction of the score along the import graph (callers and callees).
@@ -626,6 +626,10 @@ export async function buildContextDigest(
     excerptMaxLines?: number
     /** After the ranked files, add files no keyword matched (manifests and configs first) while the budget lasts. */
     fillUnranked?: boolean
+    /** Exclude weak keyword matches relative to the strongest hit (explicit paths still win). */
+    minRelativeScore?: number
+    /** Fill gaps with build manifests, without sending unrelated source contents. */
+    unrankedManifestsOnly?: boolean
   } = {},
 ): Promise<RepoContextDigest & { tokenEstimate: number; consideredFiles: number }> {
   const budget = options.budgetTokens ?? 6000
@@ -636,34 +640,38 @@ export async function buildContextDigest(
   const relevantFiles: RepoContextDigest['relevantFiles'] = []
   const excerptBudget = options.excerptFiles ?? 3
 
-  const candidates = ranked.map((entry) => entry.path)
+  const threshold = (ranked[0]?.score ?? 0) * (options.minRelativeScore ?? 0)
+  const candidates = ranked.filter((entry) => entry.score >= threshold).map((entry) => entry.path)
   if (options.fillUnranked) {
     const listed = new Set(candidates)
     const manifest = (file: string) => (/(^|\/)(package\.json|[^/]*\.config\.[cm]?[jt]s|tsconfig[^/]*\.json)$/.test(file) ? 0 : 1)
     const rest = index.files
       .filter((entry) => !listed.has(entry.path) && entry.language !== 'other' && (!['json', 'markdown', 'yaml', 'toml'].includes(entry.language) || /(^|\/)(package\.json|tsconfig[^/]*\.json)$/.test(entry.path)))
+      .filter((entry) => !options.unrankedManifestsOnly || manifest(entry.path) === 0)
       .map((entry) => entry.path)
       .sort((a, b) => manifest(a) - manifest(b) || a.localeCompare(b))
     candidates.push(...rest)
   }
 
+  let excerpts = 0
   for (const file of candidates.slice(0, options.maxFiles ?? 14)) {
     const entry = byPath.get(file)
     if (!entry) continue
     const outline = outlineOf(entry)
     let excerpt: string | undefined
     let complete = false
-    if (relevantFiles.length < excerptBudget && entry.lines <= (options.excerptMaxLines ?? 220)) {
+    if (excerpts < excerptBudget && entry.lines <= (options.excerptMaxLines ?? 220)) {
       const content = redactSecrets(await fs.readFile(path.join(index.root, file), 'utf8').catch(() => ''))
       const candidate = content.slice(0, options.excerptChars ?? 3500)
-      if (used + estimateTokens(outline + candidate) <= budget) {
+      if (used + estimateTokens(outline + candidate) + 10 <= budget) {
         excerpt = candidate
         complete = candidate.length === content.length
       }
     }
     const cost = estimateTokens(outline + (excerpt ?? '')) + 10
-    if (used + cost > budget) break
+    if (used + cost > budget) continue
     used += cost
+    if (excerpt !== undefined) excerpts++
     relevantFiles.push({ path: file, outline, excerpt, ...(complete ? { complete } : {}) })
   }
 

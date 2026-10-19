@@ -24,6 +24,9 @@ describe('central workflow lifecycle', () => {
     expect(workflowState(task('execution'), run('awaiting_approval'))).toMatchObject({ phase: 'approval', state: 'approval' })
     for (const status of ['applied', 'completed'] as const) expect(workflowState(task('execution'), run(status))).toMatchObject({ phase: 'approval', state: 'done' })
   })
+  it.each(['failed', 'interrupted', 'cancelled'] as const)('shows a new plan after a %s run instead of that run', (status) => {
+    expect(workflowState(task(), run(status))).toMatchObject({ phase: 'plan', state: 'ready' })
+  })
   it('never offers controls for an execution that belongs to another task', () => {
     expect(workflowState(task(), { ...run('running'), taskId: 'other' })).toMatchObject({ phase: 'plan', state: 'ready' })
   })

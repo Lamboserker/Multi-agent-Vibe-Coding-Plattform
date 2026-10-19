@@ -1,0 +1,228 @@
+{
+  "id": "cmv9hxoxz0004v2gw12jwkapl",
+  "projectId": "cmv9hxopq0000v2gwshwbtgrm",
+  "userPrompt": "Implement an exported slugify(text) function in a new src/slug.mjs and re-export it from src/index.mjs. Lowercase ASCII text, trim it, replace each group of non-alphanumeric characters by one hyphen, remove leading/trailing hyphens. Empty input returns an empty string. Do not change tests. Implement both files in one task.",
+  "normalizedGoal": "Implement slugify and its public re-export in one local task, preserving existing tests.",
+  "status": "planned",
+  "complexity": "trivial",
+  "taskType": null,
+  "riskLevel": "low",
+  "contextNeed": null,
+  "securitySensitive": false,
+  "estimatedCostTier": null,
+  "maxCostEuro": null,
+  "mode": "balanced",
+  "premiumAllowed": true,
+  "currentStep": "awaiting_plan_approval",
+  "lastRunId": null,
+  "sessionId": "cmv9hxoxt0002v2gwnzscexlt",
+  "createdAt": "2026-10-15T12:09:43.559Z",
+  "updatedAt": "2026-10-15T12:10:10.007Z",
+  "project": {
+    "id": "cmv9hxopq0000v2gwshwbtgrm",
+    "name": "repo",
+    "repoPath": "C:\\Users\\lukas\\AppData\\Local\\Temp\\ui-2026-10-15T12-09-36-841Z-vSSUwf\\repo",
+    "defaultBranch": "main",
+    "techStack": {
+      "repoPath": "C:\\Users\\lukas\\AppData\\Local\\Temp\\ui-2026-10-15T12-09-36-841Z-vSSUwf\\repo",
+      "exists": true,
+      "frameworks": [],
+      "scripts": {
+        "test": "node --test",
+        "typecheck": "node syntax.mjs"
+      },
+      "dependencies": [],
+      "importantFiles": [
+        "package.json"
+      ],
+      "apiRoutes": [],
+      "databaseSchemas": [],
+      "testFiles": [],
+      "docs": [],
+      "directories": [
+        "src",
+        "test"
+      ],
+      "warnings": []
+    },
+    "packageManager": null,
+    "settings": {},
+    "lastOpenedAt": "2026-10-15T12:09:43.262Z",
+    "createdAt": "2026-10-15T12:09:43.263Z",
+    "updatedAt": "2026-10-15T12:09:43.264Z"
+  },
+  "contexts": [],
+  "subtasks": [
+    {
+      "id": "cmv9hy9c9000cv2gw01kenmjv",
+      "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+      "key": "task-001",
+      "title": "Implement and export slugify",
+      "goal": "Add ASCII slug normalization using named ESM exports and the existing semicolon-free style.\nNew src/slug.mjs: absent → exported function slugify(text), returning text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').\nsrc/index.mjs: version-only export → preserve export const version = 1 and append export { slugify } from './slug.mjs'.\nKeep test/slug.test.mjs and package.json unchanged; add no dependencies or tests. Run both supplied validation commands.",
+      "status": "planned",
+      "assignedAgentType": "LocalCoderAgent",
+      "selectedModelClass": "local_llm",
+      "selectedProviderId": null,
+      "selectedModelName": "qwen3:4b",
+      "modelReason": "Simple task (complexity 1, risk 1).\nqwen3:4b: no history for \"general\" yet (insufficient data).",
+      "skippedModels": [
+        "premium"
+      ],
+      "estimatedCostEuro": "0",
+      "allowedFiles": [
+        "src/index.mjs",
+        "test/slug.test.mjs",
+        "package.json"
+      ],
+      "newFiles": [
+        "src/slug.mjs"
+      ],
+      "suggestedExecutor": "local",
+      "deniedFiles": [],
+      "expectedChange": "slugify is a named export from both src/slug.mjs and src/index.mjs.\nASCII letters become lowercase; groups outside a-z and 0-9 become one hyphen, with no boundary hyphens.\nEmpty input and separator-only input return an empty string.\nversion remains 1; tests and package.json remain unchanged.\nBoth validation commands pass.",
+      "validationCommands": [
+        "npm run typecheck --silent",
+        "npm run test --silent"
+      ],
+      "budgetLimitEuro": "0",
+      "dependsOn": [],
+      "category": "general",
+      "complexityScore": 1,
+      "riskScore": 1,
+      "capabilities": [
+        "javascript",
+        "esm",
+        "testing"
+      ],
+      "acceptanceCriteria": [
+        "slugify is a named export from both src/slug.mjs and src/index.mjs.",
+        "ASCII letters become lowercase; groups outside a-z and 0-9 become one hyphen, with no boundary hyphens.",
+        "Empty input and separator-only input return an empty string.",
+        "version remains 1; tests and package.json remain unchanged.",
+        "Both validation commands pass."
+      ],
+      "testStrategy": "Run npm run typecheck --silent and npm run test --silent; existing tests cover case conversion, punctuation, empty input, separator-only input, grouped separators, and preservation of version.",
+      "expectedInputTokens": 1000,
+      "priority": 1,
+      "attempts": 0,
+      "manualModel": null,
+      "agentId": null,
+      "fastPath": null,
+      "worktreePath": null,
+      "branchName": null,
+      "commitSha": null,
+      "patchText": null,
+      "patchStats": {},
+      "validation": {},
+      "errorMessage": null,
+      "startedAt": null,
+      "finishedAt": null,
+      "createdAt": "2026-10-15T12:10:09.993Z",
+      "updatedAt": "2026-10-15T12:10:10.004Z"
+    }
+  ],
+  "runs": [],
+  "feedback": [],
+  "chatMessages": [
+    {
+      "id": "cmv9hxoy00006v2gwxgxh8ric",
+      "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+      "projectId": "cmv9hxopq0000v2gwshwbtgrm",
+      "sessionId": "cmv9hxoxt0002v2gwnzscexlt",
+      "clientId": "4e54cc81-d05f-4b35-a03a-df1e31e76ab0",
+      "role": "user",
+      "content": "Implement an exported slugify(text) function in a new src/slug.mjs and re-export it from src/index.mjs. Lowercase ASCII text, trim it, replace each group of non-alphanumeric characters by one hyphen, remove leading/trailing hyphens. Empty input returns an empty string. Do not change tests. Implement both files in one task.",
+      "metadata": {
+        "source": "session_chat",
+        "autoRun": false
+      },
+      "createdAt": "2026-10-15T12:09:43.560Z"
+    },
+    {
+      "id": "cmv9hxoy60009v2gwwd6ttrz8",
+      "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+      "projectId": "cmv9hxopq0000v2gwshwbtgrm",
+      "sessionId": "cmv9hxoxt0002v2gwnzscexlt",
+      "clientId": null,
+      "role": "system",
+      "content": "Analysiere das Repository und erstelle einen Plan …",
+      "metadata": {
+        "kind": "planning"
+      },
+      "createdAt": "2026-10-15T12:09:43.567Z"
+    },
+    {
+      "id": "cmv9hy9co000gv2gwjhdemw7c",
+      "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+      "projectId": "cmv9hxopq0000v2gwshwbtgrm",
+      "sessionId": "cmv9hxoxt0002v2gwnzscexlt",
+      "clientId": null,
+      "role": "assistant",
+      "content": "**Plan von Codex**\nImplement slugify and its public re-export in one local task, preserving existing tests.\n\n- **task-001** Implement and export slugify — Komplexität 1/5, Risiko 1/5 → qwen3:4b\n\nPrüfe Zuordnungen und starte die Ausführung, wenn der Plan passt.",
+      "metadata": {
+        "kind": "task_plan",
+        "taskPlanId": "cmv9hy9cl000ev2gwihezb7df",
+        "source": "codex"
+      },
+      "createdAt": "2026-10-15T12:10:10.009Z"
+    }
+  ],
+  "plans": [
+    {
+      "id": "cmv9hy9cl000ev2gwihezb7df",
+      "taskId": "cmv9hxoxz0004v2gw12jwkapl",
+      "summary": "Implement slugify and its public re-export in one local task, preserving existing tests.",
+      "classification": {
+        "summary": "One new module and one existing entry-point edit; routine ASCII string normalization.",
+        "taskType": "backend",
+        "complexity": 1,
+        "risk": 1,
+        "securitySensitive": false,
+        "affectedAreas": [
+          "src/slug.mjs",
+          "src/index.mjs"
+        ],
+        "needsDecomposition": false,
+        "openQuestions": []
+      },
+      "modelAssignments": [
+        {
+          "key": "task-001",
+          "subtaskId": "cmv9hy9c9000cv2gw01kenmjv",
+          "executor": "local",
+          "model": "qwen3:4b",
+          "tier": "fast",
+          "reasons": [
+            "Simple task (complexity 1, risk 1).",
+            "qwen3:4b: no history for \"general\" yet (insufficient data)."
+          ],
+          "escalation": [
+            {
+              "executor": "premium",
+              "tier": "premium"
+            }
+          ],
+          "requiresApproval": false
+        }
+      ],
+      "estimatedCostEuro": "0",
+      "requiresApproval": true,
+      "nextAction": "await_plan_approval",
+      "source": "codex",
+      "dag": {
+        "tasks": [
+          {
+            "id": "task-001",
+            "dependsOn": []
+          }
+        ],
+        "warnings": [],
+        "contextTokens": 237,
+        "consideredFiles": 27
+      },
+      "createdAt": "2026-10-15T12:10:10.006Z",
+      "updatedAt": "2026-10-15T12:10:10.006Z"
+    }
+  ],
+  "executions": []
+}

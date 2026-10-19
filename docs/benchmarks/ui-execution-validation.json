@@ -1,0 +1,34 @@
+{
+  "build": true,
+  "typecheck": true,
+  "engineApi": {
+    "passed": 296,
+    "skipped": 8,
+    "total": 304,
+    "unhandledErrors": false
+  },
+  "desktop": {
+    "passed": 52
+  },
+  "liveUi": {
+    "passed": 2,
+    "failed": 0,
+    "checks": [
+      "MCP tool result and matching skill",
+      "model-free rename, approval, apply and undo"
+    ]
+  },
+  "shellNote": "PowerShell classifies a Git LF/CRLF warning on native stderr as NativeCommandError; the test runner summary has no failures or unhandled errors.",
+  "staticChecks": {
+    "diffCheck": true,
+    "syntaxChecks": [
+      "docs/benchmarks/ui-execution-comparison.mjs",
+      "docs/benchmarks/summarize-ui-execution.mjs",
+      "docs/benchmarks/audit-ui-execution.mjs",
+      "docs/benchmarks/ui-latency-hook.cjs"
+    ]
+  },
+  "executedBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4",
+  "measurementAudit": true,
+  "restoredProductBundle": true
+}

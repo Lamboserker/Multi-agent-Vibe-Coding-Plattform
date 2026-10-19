@@ -1,0 +1,17 @@
+[
+  {
+    "name": "qwen2.5-coder:7b",
+    "sizeBytes": 4683087561,
+    "family": "qwen2",
+    "parameterSize": "7.6B",
+    "quantization": "Q4_K_M",
+    "capabilities": [
+      "completion",
+      "tools",
+      "insert"
+    ],
+    "contextLength": 32768,
+    "loaded": false,
+    "roles": []
+  }
+]

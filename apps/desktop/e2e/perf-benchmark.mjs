@@ -69,7 +69,8 @@ async function instrument(page) {
       paintSamples: [],
       longTasks: [],
       visibleHeader() {
-        return [...document.querySelectorAll('.side-panel .panel-header h2')].find((element) => element.offsetParent !== null)?.textContent ?? ''
+        // the visible screen (Leitstand, Code, …)
+        return [...document.querySelectorAll('.screen')].find((element) => element.offsetParent !== null)?.dataset.screen ?? ''
       },
       /** Clicks `selector` and resolves with the ms until `done()` is true and a frame was painted. */
       /** Median interval of 10 animation frames (≈16.7 ms when frames are not throttled). */
@@ -110,10 +111,10 @@ async function instrument(page) {
   })
 }
 
-const VIEW_TITLES = [['Projekte'], ['Explorer'], ['Git'], ['Sitzungen', 'Aufgaben'], ['Agenten'], ['Modelle'], ['Nutzung & Kosten'], ['Einstellungen']]
+const VIEW_TITLES = [['Leitstand'], ['Code'], ['Freigabe'], ['Sitzungen'], ['Modelle'], ['Kosten'], ['Setup']]
 
 async function viewSelector(page, titles) {
-  for (const title of titles) if (await page.locator(`nav.activity-bar button[title="${title}"]`).count()) return `nav.activity-bar button[title="${title}"]`
+  for (const title of titles) if (await page.locator(`nav.nav-rail button[aria-label="${title}"]`).count()) return `nav.nav-rail button[aria-label="${title}"]`
   throw new Error(`no view button for ${titles.join('/')}`)
 }
 
@@ -124,10 +125,10 @@ async function measureNavigation(page) {
   for (let round = 0; round < rounds + 1; round += 1) {
     for (const titles of VIEW_TITLES) {
       const selector = await viewSelector(page, titles)
-      if (await page.locator(`${selector}.active`).count()) continue
+      if (await page.locator(`${selector}[aria-current="page"]`).count()) continue
       const ms = await page.evaluate(async (target) => {
         const before = window.__perf.visibleHeader()
-        return window.__perf.clickUntil(target, `() => { const header = window.__perf.visibleHeader(); return header && header !== ${JSON.stringify(before)} && ![...document.querySelectorAll('.side-panel .spinner')].some((spinner) => spinner.offsetParent !== null) }`)
+        return window.__perf.clickUntil(target, `() => { const header = window.__perf.visibleHeader(); return header && header !== ${JSON.stringify(before)} && ![...document.querySelectorAll('.screen .spinner')].some((spinner) => spinner.offsetParent !== null) }`)
       }, selector)
       ;(round === 0 ? cold : warm).push(ms)
       if (round === 0) perView[titles[0]] = Math.round(ms)
@@ -226,21 +227,22 @@ async function main() {
   await measureNavigation(page)
 
   // switching between two loaded conversations (sessions / tasks)
-  await page.locator(await viewSelector(page, ['Sitzungen', 'Aufgaben'])).click()
-  await page.waitForFunction(() => [...document.querySelectorAll('.side-panel .tree-item')].filter((element) => element.offsetParent !== null).length >= 2, null, { timeout: 30_000 })
+  await page.locator(await viewSelector(page, ['Sitzungen'])).click()
+  await page.waitForFunction(() => [...document.querySelectorAll('.session-row')].filter((element) => element.offsetParent !== null).length >= 2, null, { timeout: 30_000 })
   const switchMs = []
   for (let index = 0; index < rounds * 2; index += 1) {
     switchMs.push(await page.evaluate(async (position) => {
-      const items = [...document.querySelectorAll('.side-panel .tree-item')].filter((element) => element.offsetParent !== null)
+      const items = [...document.querySelectorAll('.session-row')].filter((element) => element.offsetParent !== null)
       const target = items[position % 2]
       const title = target.querySelector('.truncate')?.textContent?.slice(0, 20) ?? ''
-      return window.__perf.clickUntil(target, `() => [...document.querySelectorAll('.chat-messages .msg.user')].some((message) => message.textContent.includes(${JSON.stringify(title)}))`)
+      // the selected session's history (messages loaded) is shown next to the list
+      return window.__perf.clickUntil(target, `() => { const detail = document.querySelector('.session-detail'); return Boolean(detail?.textContent.includes(${JSON.stringify(title)}) && detail.querySelector('.timeline-row')) }`)
     }, index))
   }
   record('open_loaded_chat_ms', switchMs)
 
   // open small files (first open includes loading the editor), switch tabs
-  await page.locator(await viewSelector(page, ['Explorer'])).click()
+  await page.locator(await viewSelector(page, ['Code'])).click()
   await page.locator('.tree-item[title="src"]:visible').first().click()
   await page.locator('.tree-item[title="src/components"]:visible').first().click()
   const { firstOpen, opens } = await withFrames(app, page, 'open_file', async () => {
@@ -269,12 +271,12 @@ async function main() {
 
   // background job start: click "Ausführung starten" → status visible (no local model: the run
   // ends quickly as blocked/failed, which is also a status the UI must show immediately)
-  await page.locator(await viewSelector(page, ['Sitzungen', 'Aufgaben'])).click()
+  await page.locator(await viewSelector(page, ['Leitstand'])).click()
   const startButton = page.locator('button:has-text("Ausführung starten")')
   if (await startButton.count()) {
     const startMs = await page.evaluate(() => {
       const button = [...document.querySelectorAll('button')].find((element) => element.textContent?.includes('Ausführung starten'))
-      return window.__perf.clickUntil(button, `() => [...document.querySelectorAll('.chat-panel .msg.system, .chat-panel .callout, [data-testid="run-running"]')].some((element) => /Ausführung (läuft|pausiert)|fehlgeschlagen|No task|blockiert|Freigabe/.test(element.textContent))`, 30_000)
+      return window.__perf.clickUntil(button, `() => /running|paused|recoverable|cancelled|approval|done/.test(document.querySelector('[data-testid="workflow"]')?.dataset.state ?? '')`, 30_000)
     })
     record('job_start_status_ms', [startMs])
   }
@@ -309,7 +311,7 @@ async function main() {
 
   // event storm: 2,000 run events for the displayed execution-less session (delivered like the runtime does)
   const longTasksBefore = await page.evaluate(() => window.__perf.longTasks.length)
-  await page.locator('nav.activity-bar button[title="Agenten"]').click()
+  await page.locator('nav.nav-rail button[aria-label="Leitstand"]').click()
   const rendererCpu = () => app.evaluate(({ app: electronApp, BrowserWindow }) => {
     const pid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId()
     const metric = electronApp.getAppMetrics().find((entry) => entry.pid === pid)
@@ -382,17 +384,17 @@ async function main() {
     const readyLine = [...log].reverse().find((line) => line.includes('runtime ready'))
     if (startLine && readyLine) runtimeReady.push(new Date(readyLine.slice(1, 25)).getTime() - new Date(startLine.slice(1, 25)).getTime())
     await instrument(page)
-    await page.locator('nav.activity-bar button[title="Explorer"]').click()
+    await page.locator('nav.nav-rail button[aria-label="Code"]').click()
     modelsAfterRestart.push(await page.evaluate(async (selector) => {
       const before = window.__perf.visibleHeader()
-      return window.__perf.clickUntil(selector, `() => { const header = window.__perf.visibleHeader(); return header && header !== ${JSON.stringify(before)} && ![...document.querySelectorAll('.side-panel .spinner')].some((spinner) => spinner.offsetParent !== null) && document.querySelector('.side-panel table.table tbody tr') }`, 30_000)
-    }, 'nav.activity-bar button[title="Modelle"]'))
+      return window.__perf.clickUntil(selector, `() => { const header = window.__perf.visibleHeader(); return header === 'models' && ![...document.querySelectorAll('.screen .spinner')].some((spinner) => spinner.offsetParent !== null) && document.querySelector('.screen[data-screen="models"] .stat-tile') }`, 30_000)
+    }, 'nav.nav-rail button[aria-label="Modelle"]'))
     await stop(app)
   }
   record('startup_first_paint_ms', fcp, { note: 'process launch → first contentful paint' })
   record('startup_ide_ms', ide, { note: 'process launch → IDE visible' })
   record('startup_workspace_restored_ms', workspaceRestored, { note: 'process launch → project, tabs and sessions restored from the runtime' })
-  record('models_view_after_restart_ms', modelsAfterRestart, { note: 'first visit of the Models view after an app restart (recommendations table visible)' })
+  record('models_view_after_restart_ms', modelsAfterRestart, { note: 'first visit of the Models screen after an app restart (hardware tiles visible)' })
   record('runtime_start_ms', runtimeReady, { note: 'utility process fork → NestJS listening (migrations, recovery included)' })
 
   results.finishedAt = new Date().toISOString()

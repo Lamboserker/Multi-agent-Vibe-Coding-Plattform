@@ -3,6 +3,7 @@ import * as actions from './actions'
 import { createStore, useStore } from './store/core'
 import { sessionStore } from './stores'
 import type { ExecutionRun } from './types'
+import { explainApplyRejection } from './engine-text'
 
 const busyStore = createStore<{ targets: Record<string, boolean> }>({ targets: {} })
 export const useWorkflowBusy = (target: string) => useStore(busyStore, (state) => Boolean(state.targets[target]))
@@ -50,10 +51,11 @@ export function controlRun(execution: ExecutionRun, control: 'pause' | 'resume' 
   })
 }
 
-export function approveRun(execution: ExecutionRun, mode: 'working_tree' | 'branch' | 'fast_forward') {
+export function approveRun(execution: ExecutionRun, mode: 'working_tree' | 'branch' | 'fast_forward' | 'commit') {
   return mutate(`execution:${execution.id}`, async () => {
     const result = await api.post<{ ok: boolean; message: string; blockedBy?: string[] }>(`/executions/${execution.id}/approve`, { mode })
-    actions.notify(result.message + (result.blockedBy?.length ? ` (${result.blockedBy.join(', ')})` : ''), result.ok ? 'success' : 'error')
+    // a refusal is explained on the approval screen; the toast says it in short
+    actions.notify(result.ok ? result.message : `Übernahme nicht möglich: ${explainApplyRejection(result.message).text}`, result.ok ? 'success' : 'error')
     await refresh(execution.taskId, execution.id)
     return result
   })

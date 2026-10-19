@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { normalizePlan, extractJson, normalizeReview } from '../orchestrator/schemas.js'
 import { analyzeDag, findCycle, transitiveDependents } from './dag.js'
 import type { RepoIndex } from '../index/repo-index.js'
-import { categorize, deterministicPlan, FILE_SCOPED_CRITERION } from './fallback-planner.js'
+import { categorize, deterministicPlan, FILE_SCOPED_CRITERION, mentionedPaths } from './fallback-planner.js'
 
 describe('analyzeDag', () => {
   it('computes parallel levels and topological order', () => {
@@ -139,5 +139,24 @@ describe('fallback plan scope', () => {
     const task = deterministicPlan(goal, index).tasks[0]!
     expect(task.complexity).toBeLessThan(4)
     expect(task.suggestedExecutor).toBe('local')
+  })
+})
+
+describe('fallback plan scope from named files', () => {
+  const entry = (path: string) => ({ path, size: 100, lines: 10, language: 'tsx', hash: '', mtimeMs: 0, symbols: [], imports: [] })
+  const index = { version: 2, root: '/repo', builtAt: '', files: [entry('src/App.tsx'), entry('src/components/Badge.tsx')], packageJsons: [], languages: {}, frameworks: ['React'], isGit: true, stats: { indexedFiles: 2, reusedFromCache: 0, skippedLarge: 0, skippedBinary: 0 } } as unknown as RepoIndex
+
+  it('finds repository paths in a request, not URLs', () => {
+    expect(mentionedPaths('Erstelle `src/components/StatCard.tsx` mit `./src/components/StatCard.css`; siehe https://example.com/docs/page.html und App.tsx.')).toEqual(['src/components/StatCard.tsx', 'src/components/StatCard.css', 'App.tsx'])
+  })
+
+  it('limits the task to the files the request names: existing to edit, others to create', () => {
+    const task = deterministicPlan('Erstelle eine React-Komponente `StatCard` in `src/components/StatCard.tsx` mit Stylesheet `src/components/StatCard.css`', index).tasks[0]!
+    expect(task.relevantFiles).toEqual([])
+    expect(task.newFiles).toEqual(['src/components/StatCard.tsx', 'src/components/StatCard.css'])
+    expect(task.acceptanceCriteria).toContain('Only these files are created or changed: src/components/StatCard.tsx, src/components/StatCard.css.')
+    const edit = deterministicPlan('Ergänze in src/App.tsx eine Überschrift', index).tasks[0]!
+    expect(edit.relevantFiles).toEqual(['src/App.tsx'])
+    expect(edit.newFiles).toEqual([])
   })
 })

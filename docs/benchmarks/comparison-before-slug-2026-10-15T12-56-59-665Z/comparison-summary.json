@@ -1,0 +1,139 @@
+{
+  "folder": "comparison-before-slug-2026-10-15T12-56-59-665Z",
+  "phase": "before",
+  "scenario": "slug",
+  "success": true,
+  "error": null,
+  "totalMs": 297630.1999511719,
+  "localMs": 263462.6612999999,
+  "localOutputTokens": 14621,
+  "allOutputTokens": 15027,
+  "modelCalls": 5,
+  "localModelCalls": 4,
+  "premiumModelCalls": 1,
+  "repairs": 1,
+  "controlledFaults": 0,
+  "agentCapabilities": [
+    {
+      "availableTools": null,
+      "instructionChars": null,
+      "preferStructured": null
+    },
+    {
+      "availableTools": null,
+      "instructionChars": null,
+      "preferStructured": null
+    }
+  ],
+  "local": [
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "durationMs": 120000.01389999999,
+      "outputTokens": 6956,
+      "inputTokens": 4113,
+      "doneReason": "stop",
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "contentChars": 18972
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "durationMs": 74815.2083,
+      "outputTokens": 3738,
+      "inputTokens": 9654,
+      "doneReason": "stop",
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "contentChars": 1097
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.35
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "durationMs": 62857.65139999997,
+      "outputTokens": 3671,
+      "inputTokens": 4354,
+      "doneReason": "stop",
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "contentChars": 14820
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.35
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": false,
+      "durationMs": 5789.787699999986,
+      "outputTokens": 256,
+      "inputTokens": 8045,
+      "doneReason": "stop",
+      "toolNames": [
+        "read_file",
+        "list_files",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "finish",
+        "load_skill",
+        "read_skill_file"
+      ],
+      "contentChars": 1260
+    }
+  ],
+  "premium": [
+    {
+      "name": "codex.createPlan.start",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "outputTokens": 406,
+      "durationMs": 17548.1858
+    }
+  ]
+}

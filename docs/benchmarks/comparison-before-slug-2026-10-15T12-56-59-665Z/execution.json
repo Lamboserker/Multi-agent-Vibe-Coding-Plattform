@@ -1,0 +1,479 @@
+{
+  "id": "cmv9jn4nr000iv2f8yxrbt5ny",
+  "taskId": "cmv9jmmkd0004v2f86fkkrpxc",
+  "projectId": "cmv9jmmbw0000v2f8cllgauym",
+  "status": "awaiting_approval",
+  "orchestrator": "codex",
+  "costMode": "balanced",
+  "approvalMode": "manual",
+  "premiumAllowed": true,
+  "baseCommit": "605ae930ccfb5127b4d1c5f8c4e497f11bab1d9b",
+  "baseBranch": null,
+  "integrationBranch": "mac/yxrbt5ny/integration",
+  "integrationWorktree": "C:\\Users\\lukas\\AppData\\Local\\Temp\\comparison-before-slug-2026-10-15T12-56-59-665Z-e43TVY\\profile\\worktrees\\cmv9jmmbw0000v2f8cllgauym\\yxrbt5ny-integration",
+  "integrationCommit": "c52ad19610e622b61a7d707c8c08919314aa87e4",
+  "finalDiff": "diff --git a/src/index.mjs b/src/index.mjs\nindex 2d16f9b..92d4192 100644\n--- a/src/index.mjs\n+++ b/src/index.mjs\n@@ -1 +1,2 @@\n-export const version = 1\n+export const version = 1;\n+export { slugify } from './slug.mjs';\n\\ No newline at end of file\ndiff --git a/src/slug.mjs b/src/slug.mjs\nnew file mode 100644\nindex 0000000..9f1f943\n--- /dev/null\n+++ b/src/slug.mjs\n@@ -0,0 +1,3 @@\n+export function slugify(text) {\n+  return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');\n+}\n\\ No newline at end of file\n",
+  "finalValidation": {
+    "ok": true,
+    "results": [
+      {
+        "id": "typecheck",
+        "kind": "typecheck",
+        "command": "npm run typecheck --silent",
+        "status": "passed",
+        "blocking": true,
+        "durationMs": 2310,
+        "exitCode": 0,
+        "output": ""
+      },
+      {
+        "id": "test",
+        "kind": "test",
+        "command": "npm run test --silent",
+        "status": "passed",
+        "blocking": true,
+        "durationMs": 1117,
+        "exitCode": 0,
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "output": "✔ slugify (0.7334ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 100.8509"
+      }
+    ],
+    "testsPassed": 1,
+    "testsFailed": 0,
+    "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+  },
+  "review": {
+    "kind": "deterministic",
+    "reason": "Low-risk change with passing validation: automated review only.",
+    "deterministicIssues": [],
+    "requiresHumanApproval": true
+  },
+  "summary": "1/1 task(s) integrated; 2 file(s), +5/-1. Validation: typecheck: passed; test: passed (1 passed, 0 failed)",
+  "errorMessage": null,
+  "startedAt": "2026-10-15T12:57:29.943Z",
+  "finishedAt": null,
+  "createdAt": "2026-10-15T12:57:29.944Z",
+  "updatedAt": "2026-10-15T13:02:03.166Z",
+  "task": {
+    "id": "cmv9jmmkd0004v2f86fkkrpxc",
+    "projectId": "cmv9jmmbw0000v2f8cllgauym",
+    "userPrompt": "Implement an exported slugify(text) function in a new src/slug.mjs and re-export it from src/index.mjs. Lowercase ASCII text, trim it, replace each group of non-alphanumeric characters by one hyphen, remove leading/trailing hyphens. Empty input returns an empty string. Do not change tests. Implement both files in one task.",
+    "normalizedGoal": "Add slugify and its public re-export in one local task, preserving existing tests.",
+    "status": "needs_review",
+    "complexity": "trivial",
+    "taskType": null,
+    "riskLevel": "low",
+    "contextNeed": null,
+    "securitySensitive": false,
+    "estimatedCostTier": null,
+    "maxCostEuro": null,
+    "mode": "balanced",
+    "premiumAllowed": true,
+    "currentStep": "waiting_for_user",
+    "lastRunId": "cmv9jn4nr000iv2f8yxrbt5ny",
+    "sessionId": "cmv9jmmk70002v2f8wfg943c3",
+    "createdAt": "2026-10-15T12:57:06.493Z",
+    "updatedAt": "2026-10-15T13:02:03.170Z",
+    "subtasks": [
+      {
+        "id": "cmv9jn1la000cv2f8cg12wrcr",
+        "taskId": "cmv9jmmkd0004v2f86fkkrpxc",
+        "key": "task-001",
+        "title": "Implement and export slugify",
+        "goal": "Add the ASCII slug utility using named ESM exports.\nNew src/slug.mjs → export function slugify(text), returning text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').\nsrc/index.mjs → retain export const version = 1 and append export { slugify } from './slug.mjs'.\nNo existing code is removed; do not modify tests or package configuration.",
+        "status": "completed",
+        "assignedAgentType": "LocalCoderAgent",
+        "selectedModelClass": "local_llm",
+        "selectedProviderId": null,
+        "selectedModelName": "qwen3:4b",
+        "modelReason": "Simple task (complexity 1, risk 1).\nqwen3:4b: no history for \"general\" yet (insufficient data).",
+        "skippedModels": [
+          "premium"
+        ],
+        "estimatedCostEuro": "0",
+        "allowedFiles": [
+          "src/index.mjs",
+          "test/slug.test.mjs",
+          "package.json"
+        ],
+        "newFiles": [
+          "src/slug.mjs"
+        ],
+        "suggestedExecutor": "local",
+        "deniedFiles": [],
+        "expectedChange": "slugify is a named export from both src/slug.mjs and src/index.mjs.\nASCII letters become lowercase; groups of non-alphanumeric characters become one hyphen; boundary hyphens are removed.\nEmpty and punctuation-only strings return an empty string.\nversion remains 1, tests remain unchanged, and both validation commands pass.",
+        "validationCommands": [
+          "npm run typecheck --silent",
+          "npm run test --silent"
+        ],
+        "budgetLimitEuro": "0",
+        "dependsOn": [],
+        "category": "general",
+        "complexityScore": 1,
+        "riskScore": 1,
+        "capabilities": [
+          "javascript",
+          "esm",
+          "testing"
+        ],
+        "acceptanceCriteria": [
+          "slugify is a named export from both src/slug.mjs and src/index.mjs.",
+          "ASCII letters become lowercase; groups of non-alphanumeric characters become one hyphen; boundary hyphens are removed.",
+          "Empty and punctuation-only strings return an empty string.",
+          "version remains 1, tests remain unchanged, and both validation commands pass."
+        ],
+        "testStrategy": "Run npm run typecheck --silent and npm run test --silent; use the existing slug test unchanged.",
+        "expectedInputTokens": 900,
+        "priority": 1,
+        "attempts": 2,
+        "manualModel": null,
+        "agentId": null,
+        "fastPath": null,
+        "worktreePath": null,
+        "branchName": null,
+        "commitSha": "c52ad19610e622b61a7d707c8c08919314aa87e4",
+        "patchText": "diff --git a/src/index.mjs b/src/index.mjs\nindex 2d16f9b..92d4192 100644\n--- a/src/index.mjs\n+++ b/src/index.mjs\n@@ -1 +1,2 @@\n-export const version = 1\n+export const version = 1;\n+export { slugify } from './slug.mjs';\n\\ No newline at end of file\ndiff --git a/src/slug.mjs b/src/slug.mjs\nnew file mode 100644\nindex 0000000..9f1f943\n--- /dev/null\n+++ b/src/slug.mjs\n@@ -0,0 +1,3 @@\n+export function slugify(text) {\n+  return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');\n+}\n\\ No newline at end of file\n",
+        "patchStats": {
+          "files": [
+            {
+              "path": "src/index.mjs",
+              "status": "M",
+              "added": 2,
+              "deleted": 1,
+              "binary": false
+            },
+            {
+              "path": "src/slug.mjs",
+              "status": "A",
+              "added": 3,
+              "deleted": 0,
+              "binary": false
+            }
+          ],
+          "linesAdded": 5,
+          "linesDeleted": 1,
+          "securityCritical": [],
+          "warnings": []
+        },
+        "validation": {
+          "ok": true,
+          "results": [
+            {
+              "id": "typecheck",
+              "kind": "typecheck",
+              "command": "npm run typecheck --silent",
+              "status": "passed",
+              "blocking": true,
+              "durationMs": 2240,
+              "exitCode": 0,
+              "output": ""
+            },
+            {
+              "id": "test",
+              "kind": "test",
+              "command": "npm run test --silent",
+              "status": "passed",
+              "blocking": true,
+              "durationMs": 1074,
+              "exitCode": 0,
+              "testsPassed": 1,
+              "testsFailed": 0,
+              "output": "✔ slugify (0.8054ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 91.8897"
+            }
+          ],
+          "testsPassed": 1,
+          "testsFailed": 0,
+          "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+        },
+        "errorMessage": null,
+        "startedAt": "2026-10-15T12:57:30.362Z",
+        "finishedAt": "2026-10-15T13:01:59.058Z",
+        "createdAt": "2026-10-15T12:57:25.966Z",
+        "updatedAt": "2026-10-15T13:01:59.358Z"
+      }
+    ],
+    "plans": [
+      {
+        "id": "cmv9jn1li000ev2f8dh3s2yve",
+        "taskId": "cmv9jmmkd0004v2f86fkkrpxc",
+        "summary": "Add slugify and its public re-export in one local task, preserving existing tests.",
+        "classification": {
+          "summary": "Routine ESM utility addition affecting one existing file and one new file.",
+          "taskType": "backend",
+          "complexity": 1,
+          "risk": 1,
+          "securitySensitive": false,
+          "affectedAreas": [
+            "src/slug.mjs",
+            "src/index.mjs"
+          ],
+          "needsDecomposition": false,
+          "openQuestions": []
+        },
+        "modelAssignments": [
+          {
+            "key": "task-001",
+            "subtaskId": "cmv9jn1la000cv2f8cg12wrcr",
+            "executor": "local",
+            "model": "qwen3:4b",
+            "tier": "fast",
+            "reasons": [
+              "Simple task (complexity 1, risk 1).",
+              "qwen3:4b: no history for \"general\" yet (insufficient data)."
+            ],
+            "escalation": [
+              {
+                "executor": "premium",
+                "tier": "premium"
+              }
+            ],
+            "requiresApproval": false
+          }
+        ],
+        "estimatedCostEuro": "0",
+        "requiresApproval": true,
+        "nextAction": "await_plan_approval",
+        "source": "codex",
+        "dag": {
+          "tasks": [
+            {
+              "id": "task-001",
+              "dependsOn": []
+            }
+          ],
+          "warnings": [],
+          "contextTokens": 237,
+          "consideredFiles": 27
+        },
+        "createdAt": "2026-10-15T12:57:25.974Z",
+        "updatedAt": "2026-10-15T12:57:25.974Z"
+      }
+    ]
+  },
+  "agentRuns": [
+    {
+      "id": "cmv9jn5ak000tv2f8jiko47ay",
+      "taskId": "cmv9jmmkd0004v2f86fkkrpxc",
+      "subtaskId": "cmv9jn1la000cv2f8cg12wrcr",
+      "executionId": "cmv9jn4nr000iv2f8yxrbt5ny",
+      "agentName": "LocalCoderAgent",
+      "selectedModelClass": "local_llm",
+      "providerId": null,
+      "selectedModelName": "qwen3:4b",
+      "runtime": "ollama",
+      "category": "general",
+      "repairRound": 0,
+      "escalated": false,
+      "outcome": "invalid_patch",
+      "status": "failed",
+      "startedAt": "2026-10-15T12:57:30.763Z",
+      "finishedAt": "2026-10-15T13:00:46.301Z",
+      "durationMs": 195535,
+      "logs": [
+        "qwen3:4b: tools mode, 2 step(s), 26 tool call(s) (6 invalid, 0 recovered from text), 13767+10694 tokens, 194903 ms.",
+        "✗ write_file ... – Error: Path resolves outside the workspace.",
+        "✗ edit_file ... – Error: Path resolves outside the workspace.",
+        "✓ finish  – Finished.",
+        "✓ finish src/slug.mjs – Finished.",
+        "✓ write_file src/slug.mjs – Created src/slug.mjs (3 lines).",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ finish  – Finished.",
+        "✗ edit_file src/slug.mjs – Error: \"search\" must be a non-empty string.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ finish  – Finished.",
+        "✓ write_file src/slug.mjs – Overwrote src/slug.mjs (3 lines).",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ finish  – Finished.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ read_file src/index.mjs – src/index.mjs (2 lines):\nexport const version = 1\nexport { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'",
+        "✓ read_file src/index.mjs – src/index.mjs (2 lines):\nexport const version = 1\nexport { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'",
+        "✗ edit_file src/index.mjs – Error: \"search\" must be a non-empty string.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✗ write_file  – Error: \"path\" must be a non-empty string.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✗ edit_file src/slug.mjs – Error: \"search\" must be a non-empty string.",
+        "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+        "✓ finish  – Finished.",
+        "Summary: (Too many invalid tool calls (6).)"
+      ],
+      "currentStep": "invalid_patch",
+      "promptSummary": "task-001 Implement and export slugify",
+      "inputTokenEstimate": 13767,
+      "outputTokenEstimate": 10694,
+      "inputTokens": 13767,
+      "outputTokens": 10694,
+      "tokensMeasured": true,
+      "estimatedCostEuro": "0",
+      "actualCostEuro": "0",
+      "diffSummary": "2 file(s), +6/-0: M src/index.mjs, A src/slug.mjs",
+      "validationStatus": "failed",
+      "validationResults": [],
+      "patchText": "diff --git a/src/index.mjs b/src/index.mjs\nindex 2d16f9b..64cf524 100644\n--- a/src/index.mjs\n+++ b/src/index.mjs\n@@ -1 +1,4 @@\n export const version = 1\n+export { slugify } from './slug.mjs'\n+export { slugify } from './slug.mjs'\n+export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'export { slugify } from './slug.mjs'\n\\ No newline at end of file\ndiff --git a/src/slug.mjs b/src/slug.mjs\nnew file mode 100644\nindex 0000000..9f1f943\n--- /dev/null\n+++ b/src/slug.mjs\n@@ -0,0 +1,3 @@\n+export function slugify(text) {\n+  return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');\n+}\n\\ No newline at end of file\n",
+      "patchStatus": "rejected",
+      "score": 0,
+      "errorMessage": "- syntax_error (src/index.mjs): line 4:37 ';' expected. (+6 more)",
+      "createdAt": "2026-10-15T12:57:30.765Z",
+      "updatedAt": "2026-10-15T13:00:46.302Z"
+    },
+    {
+      "id": "cmv9jrc6h002hv2f8k53n2la3",
+      "taskId": "cmv9jmmkd0004v2f86fkkrpxc",
+      "subtaskId": "cmv9jn1la000cv2f8cg12wrcr",
+      "executionId": "cmv9jn4nr000iv2f8yxrbt5ny",
+      "agentName": "LocalCoderAgent",
+      "selectedModelClass": "local_llm",
+      "providerId": null,
+      "selectedModelName": "qwen3:4b",
+      "runtime": "ollama",
+      "category": "general",
+      "repairRound": 1,
+      "escalated": false,
+      "outcome": "success",
+      "status": "completed",
+      "startedAt": "2026-10-15T13:00:46.312Z",
+      "finishedAt": "2026-10-15T13:01:58.899Z",
+      "durationMs": 72586,
+      "logs": [
+        "qwen3:4b: tools mode, 2 step(s), 1 tool call(s) (0 invalid, 0 recovered from text), 12399+3927 tokens, 68656 ms.",
+        "✓ write_file src/index.mjs – Overwrote src/index.mjs (2 lines).",
+        "Okay, let's see. The user wanted to implement and export a slugify function. The previous attempt had a syntax error in src/index.mjs because the exports were written without newlines. The fix was to write the index.mjs with two lines: the version export and the slugify import.\n\nI used write_file to correct src/index.mjs. The tool response says it overwrote the file with two lines. Now, the task should be complete. Let me check the acceptance criteria.\n\nThe slugify function in src/slug.mjs is correct. The index.mjs now has the correct syntax. The test file remains unchanged as per the task. The version is still 1. All acceptance criteria seem met.\n\nNo other files were modified, so the changes are within the required scope. The safety validator should now pass.\n\nTime to call finish with a summary.\n</think>\n\nfinish\nThe task was completed by fixing the syntax error in src/index.mjs by ensuring proper newlines between export statements. The slugify function now correctly implements ASCII slugification with the required behavior: lowercase conversion, non-alphanumeric character replacement, boundary hyphen removal, and empty/punctuation-only string handling. All acceptance criteria are satisfied with no changes to tests or package configuration.",
+        "Summary: Okay, let's see. The user wanted to implement and export a slugify function. The previous attempt had a syntax error in src/index.mjs because the exports were written without newlines. The fix was to write the index.mjs with two lines: the version export and the slugify import.\n\nI used write_file to correct src/index.mjs. The tool response says it overwrote the file with two lines. Now, the task should be complete. Let me check the acceptance criteria.\n\nThe slugify function in src/slug.mjs is correct. The index.mjs now has the correct syntax. The test file remains unchanged as per the task. The version is still 1. All acceptance criteria seem met.\n\nNo other files were modified, so the changes are within the required scope. The safety validator should now pass.\n\nTime to call finish with a summary.\n</think>\n\nfinish\nThe task was completed by fixing the syntax error in src/index.mjs by ensuring proper newlines between export statements. The slugify function now correctly implements ASCII slugification with the required behavior: lowercase conversion, non-alphanumeric character replacement, boundary hyphen removal, and empty/punctuation-only string handling. All acceptance criteria are satisfied with no changes to tests or package configuration."
+      ],
+      "currentStep": "success",
+      "promptSummary": "task-001 Implement and export slugify",
+      "inputTokenEstimate": 12399,
+      "outputTokenEstimate": 3927,
+      "inputTokens": 12399,
+      "outputTokens": 3927,
+      "tokensMeasured": true,
+      "estimatedCostEuro": "0",
+      "actualCostEuro": "0",
+      "diffSummary": "2 file(s), +5/-1: M src/index.mjs, A src/slug.mjs",
+      "validationStatus": "passed",
+      "validationResults": [
+        {
+          "id": "typecheck",
+          "kind": "typecheck",
+          "command": "npm run typecheck --silent",
+          "status": "passed",
+          "blocking": true,
+          "durationMs": 2240,
+          "exitCode": 0,
+          "output": ""
+        },
+        {
+          "id": "test",
+          "kind": "test",
+          "command": "npm run test --silent",
+          "status": "passed",
+          "blocking": true,
+          "durationMs": 1074,
+          "exitCode": 0,
+          "testsPassed": 1,
+          "testsFailed": 0,
+          "output": "✔ slugify (0.8054ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 91.8897"
+        }
+      ],
+      "patchText": "diff --git a/src/index.mjs b/src/index.mjs\nindex 2d16f9b..92d4192 100644\n--- a/src/index.mjs\n+++ b/src/index.mjs\n@@ -1 +1,2 @@\n-export const version = 1\n+export const version = 1;\n+export { slugify } from './slug.mjs';\n\\ No newline at end of file\ndiff --git a/src/slug.mjs b/src/slug.mjs\nnew file mode 100644\nindex 0000000..9f1f943\n--- /dev/null\n+++ b/src/slug.mjs\n@@ -0,0 +1,3 @@\n+export function slugify(text) {\n+  return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');\n+}\n\\ No newline at end of file\n",
+      "patchStatus": "validated",
+      "score": 100,
+      "errorMessage": null,
+      "createdAt": "2026-10-15T13:00:46.313Z",
+      "updatedAt": "2026-10-15T13:01:58.900Z"
+    }
+  ],
+  "modelCalls": [
+    {
+      "id": "cmv9jrbq3002dv2f8q7905gdr",
+      "executionId": "cmv9jn4nr000iv2f8yxrbt5ny",
+      "subtaskId": "cmv9jn1la000cv2f8cg12wrcr",
+      "kind": "local",
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "purpose": "execute",
+      "status": "ok",
+      "errorClass": "tool_misuse",
+      "sessionId": null,
+      "durationMs": 194903,
+      "inputTokens": 13767,
+      "outputTokens": 10694,
+      "cachedInputTokens": 0,
+      "tokensMeasured": true,
+      "actualApiCostUsd": null,
+      "apiEquivalentUsd": null,
+      "billing": "subscription",
+      "peakMemoryMb": 3782,
+      "createdAt": "2026-10-15T13:00:45.723Z"
+    },
+    {
+      "id": "cmv9jst76002nv2f88b41aacb",
+      "executionId": "cmv9jn4nr000iv2f8yxrbt5ny",
+      "subtaskId": "cmv9jn1la000cv2f8cg12wrcr",
+      "kind": "local",
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "purpose": "repair",
+      "status": "ok",
+      "errorClass": null,
+      "sessionId": null,
+      "durationMs": 68656,
+      "inputTokens": 12399,
+      "outputTokens": 3927,
+      "cachedInputTokens": 0,
+      "tokensMeasured": true,
+      "actualApiCostUsd": null,
+      "apiEquivalentUsd": null,
+      "billing": "subscription",
+      "peakMemoryMb": 3782,
+      "createdAt": "2026-10-15T13:01:55.026Z"
+    }
+  ],
+  "applyRecords": [],
+  "active": false,
+  "paused": false,
+  "usage": {
+    "premium": {
+      "calls": 0,
+      "failedCalls": 0,
+      "byPurpose": {},
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cachedInputTokens": 0,
+      "measuredCalls": 0,
+      "unmeasuredCalls": 0,
+      "apiEquivalentUsd": {
+        "value": 0,
+        "basis": "none",
+        "reportedCalls": 0
+      },
+      "durationMs": 0
+    },
+    "local": {
+      "calls": 2,
+      "failedCalls": 0,
+      "inputTokens": 26166,
+      "outputTokens": 14621,
+      "durationMs": 263559,
+      "peakMemoryMb": 3782,
+      "byModel": {
+        "qwen3:4b": {
+          "calls": 2,
+          "inputTokens": 26166,
+          "outputTokens": 14621,
+          "durationMs": 263559
+        }
+      }
+    },
+    "spend": {
+      "actualUsd": 0,
+      "actualBasis": "All premium calls ran under a subscription; no per-token charges were incurred."
+    },
+    "notes": [
+      "No savings baseline: no premium call reported a price and no price was configured."
+    ]
+  }
+}

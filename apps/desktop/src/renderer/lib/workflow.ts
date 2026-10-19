@@ -14,7 +14,9 @@ export function workflowState(task?: Task, execution?: ExecutionRun): { phase: W
   if (!task) return { phase: 'task', state: 'draft', label: 'Aufgabe beschreiben' }
   if (task.currentStep === 'planning') return { phase: 'plan', state: 'planning', label: 'Planung läuft' }
   if (['plan_failed', 'plan_interrupted'].includes(task.currentStep)) return { phase: 'plan', state: 'plan_error', label: 'Planung erneut starten' }
-  if (execution && execution.taskId === task.id) {
+  // a new plan after a failed or ended run replaces that run in the workflow
+  const planAfterRun = task.currentStep === 'awaiting_plan_approval' && task.subtasks.length > 0 && ['failed', 'interrupted', 'cancelled'].includes(execution?.status ?? '')
+  if (execution && execution.taskId === task.id && !planAfterRun) {
     switch (execution.status) {
       case 'awaiting_approval': return { phase: 'approval', state: 'approval', label: 'Änderungen prüfen und freigeben' }
       case 'applied':

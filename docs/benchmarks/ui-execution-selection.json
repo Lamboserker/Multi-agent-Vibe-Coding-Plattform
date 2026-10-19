@@ -1,0 +1,35 @@
+{
+  "runs": [
+    "comparison-before-slug-2026-10-15T12-56-59-665Z",
+    "comparison-before-slug-2026-10-15T13-09-47-939Z",
+    "comparison-before-clamp-2026-10-15T13-12-52-436Z",
+    "comparison-before-clamp-2026-10-15T13-18-53-048Z",
+    "comparison-before-repair-2026-10-15T13-04-15-297Z",
+    "comparison-before-repair-2026-10-15T13-15-09-478Z",
+    "comparison-after-clamp-2026-10-15T14-03-13-771Z",
+    "comparison-after-clamp-2026-10-15T14-07-25-572Z",
+    "comparison-after-repair-2026-10-15T14-04-33-619Z",
+    "comparison-after-repair-2026-10-15T14-08-46-334Z",
+    "comparison-after-slug-2026-10-15T14-01-49-442Z",
+    "comparison-after-slug-2026-10-15T14-05-59-270Z"
+  ],
+  "excluded": [
+    "comparison-after-clamp-2026-10-15T13-25-28-333Z",
+    "comparison-after-clamp-2026-10-15T13-30-24-277Z",
+    "comparison-after-clamp-2026-10-15T13-47-21-825Z",
+    "comparison-after-repair-2026-10-15T13-26-47-108Z",
+    "comparison-after-repair-2026-10-15T13-31-42-254Z",
+    "comparison-after-repair-2026-10-15T13-48-39-724Z",
+    "comparison-after-slug-2026-10-15T13-21-34-053Z",
+    "comparison-after-slug-2026-10-15T13-23-56-711Z",
+    "comparison-after-slug-2026-10-15T13-28-15-706Z",
+    "comparison-after-slug-2026-10-15T13-44-05-540Z",
+    "comparison-before-clamp-2026-10-15T12-51-58-868Z",
+    "comparison-before-clamp-2026-10-15T13-02-41-371Z",
+    "comparison-before-repair-2026-10-15T12-52-39-130Z",
+    "comparison-before-slug-2026-10-15T12-48-39-292Z",
+    "comparison-before-slug-2026-10-15T13-08-26-868Z"
+  ],
+  "finalBackendSha256": "87aa47faa9df97581784b330d534c089dbe105e41e3986391c890961f2b4c0f4",
+  "reason": "All scheduled runs of the final build, independent of outcome. Baseline excludes early concurrent tests and invalid setup/input probes; older after builds remain intermediate evidence."
+}

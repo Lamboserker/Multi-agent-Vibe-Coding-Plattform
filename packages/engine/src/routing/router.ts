@@ -145,7 +145,7 @@ export function routeTask(task: RoutableTask, models: LocalModelProfile[], polic
     if (candidateTier === 'premium') break
     const candidates = modelsForTier(available, candidateTier)
       .filter((model) => model.contextWindow === 0 || task.expectedInputTokens <= model.contextWindow * 0.6)
-      .sort((a, b) => scoreModel(b, task, stats) - scoreModel(a, task, stats))
+      .sort((a, b) => scoreModel(b, task, stats) - scoreModel(a, task, stats) || timePerValidatedChange(a, task, stats) - timePerValidatedChange(b, task, stats))
     const weak = candidates.filter((model) => {
       const entry = lookupStats(stats, model.model, task.category)
       return entry && entry.attempts >= MIN_SAMPLES && entry.confidence === 'low'
@@ -209,4 +209,11 @@ function scoreModel(model: LocalModelProfile, task: RoutableTask, stats: Suitabi
   // Prefer measured performance when sufficient; tool calling helps multi-step edits.
   const measured = entry && entry.attempts >= MIN_SAMPLES ? entry.lowerBound * 10 : 0
   return measured + (model.toolCalling ? 2 : 0)
+}
+
+/** Tie-break equally reliable models by time spent per validated result, including failures. */
+function timePerValidatedChange(model: LocalModelProfile, task: RoutableTask, stats: SuitabilityStats[]): number {
+  const entry = lookupStats(stats, model.model, task.category)
+  return entry && entry.attempts >= MIN_SAMPLES && entry.successRate > 0 && entry.avgDurationMs > 0
+    ? entry.avgDurationMs / entry.successRate : Number.MAX_SAFE_INTEGER
 }

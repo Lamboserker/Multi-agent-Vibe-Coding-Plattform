@@ -11,7 +11,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test } from 'node:test'
-import { answerFolderDialog, appDir, newProfile, prepareRepository, waitUntil } from './helpers.mjs'
+import { appDir, go, newProfile, openProject, prepareRepository, waitUntil } from './helpers.mjs'
 
 const executable = path.join(appDir, 'release', 'win-unpacked', 'Multi-AI Coder.exe')
 const testServer = path.resolve(appDir, '../api/src/mcp/testing/test-server.mjs')
@@ -40,7 +40,7 @@ test('packaged app: startup, plugins, skills, TypeScript worker, MCP, runtime cr
     const plugins = (await api('GET', '/plugins')).data
     assert.equal(plugins.length, 7, JSON.stringify(plugins.map((plugin) => plugin.id)))
     const skills = (await api('GET', '/skills')).data
-    assert.deepEqual(skills.filter((skill) => skill.source === 'builtin').map((skill) => skill.name).sort(), ['changelog', 'code-review', 'writing-tests'])
+    assert.deepEqual(skills.filter((skill) => skill.source === 'builtin').map((skill) => skill.name).sort(), ['changelog', 'code-review', 'ui-bootstrap', 'ui-design', 'ui-tailwind', 'writing-tests'])
 
     // plugin host process (sandboxed) runs from the package
     assert.equal((await api('POST', '/plugins/api-tools/enable', { grant: { network: ['*'] } })).status, 201)
@@ -53,8 +53,8 @@ test('packaged app: startup, plugins, skills, TypeScript worker, MCP, runtime cr
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
     const repo = prepareRepository()
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().waitFor({ timeout: 30_000 })
     const projectId = (await api('GET', '/settings')).data.lastProjectId
     const definition = await api('POST', `/projects/${projectId}/ide/ts/definition`, { path: 'src/App.tsx', line: 6, column: 8 })

@@ -687,6 +687,7 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
       .map(({ server, tool }) => ({
         name: agentToolName(server.name, tool.name),
         description: `[MCP ${server.name}] ${(tool.description || tool.title || tool.name).slice(0, 400)}`,
+        readOnly: tool.annotations?.readOnlyHint === true,
         parameters: (compactSchema(tool.inputSchema) as Record<string, unknown>) ?? { type: 'object' },
         execute: async (args, signal) => {
           const current = await this.record(server.id)
@@ -701,7 +702,7 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
         },
       }))
     if (tools.length && resultLimit !== Number.MAX_SAFE_INTEGER) {
-      tools.push({ name: 'mcp_read_result', description: READ_RESULT_DESCRIPTION, parameters: READ_RESULT_SCHEMA, execute: async (args) => pages.read(args.reference, args.offset ?? 0) })
+      tools.push({ name: 'mcp_read_result', readOnly: true, description: READ_RESULT_DESCRIPTION, parameters: READ_RESULT_SCHEMA, execute: async (args) => pages.read(args.reference, args.offset ?? 0) })
     }
     return tools
   }

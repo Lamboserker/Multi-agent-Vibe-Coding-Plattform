@@ -1,0 +1,79 @@
+{
+  "folder": "comparison-after-repair-2026-10-15T13-31-42-254Z",
+  "phase": "after",
+  "scenario": "repair",
+  "success": true,
+  "error": null,
+  "totalMs": 48906.89990234375,
+  "localMs": 6260.094799999999,
+  "localOutputTokens": 249,
+  "allOutputTokens": 738,
+  "modelCalls": 3,
+  "localModelCalls": 2,
+  "premiumModelCalls": 1,
+  "repairs": 1,
+  "controlledFaults": 1,
+  "agentCapabilities": [
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 1877,
+      "preferStructured": true
+    },
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 1877,
+      "preferStructured": true
+    }
+  ],
+  "local": [
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 2873.6321000000025,
+      "outputTokens": 103,
+      "inputTokens": 3467,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 405
+    },
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.35,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 3386.4626999999964,
+      "outputTokens": 146,
+      "inputTokens": 3858,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 551
+    }
+  ],
+  "premium": [
+    {
+      "name": "codex.createPlan.start",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "outputTokens": 489,
+      "durationMs": 22990.312299999998
+    }
+  ]
+}

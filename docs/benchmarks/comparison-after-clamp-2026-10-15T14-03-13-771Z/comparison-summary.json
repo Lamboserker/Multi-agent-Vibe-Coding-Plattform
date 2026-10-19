@@ -1,0 +1,54 @@
+{
+  "folder": "comparison-after-clamp-2026-10-15T14-03-13-771Z",
+  "phase": "after",
+  "scenario": "clamp",
+  "success": true,
+  "error": null,
+  "totalMs": 39576.699951171875,
+  "localMs": 2760.111299999997,
+  "localOutputTokens": 95,
+  "allOutputTokens": 526,
+  "modelCalls": 2,
+  "localModelCalls": 1,
+  "premiumModelCalls": 1,
+  "repairs": 0,
+  "controlledFaults": 0,
+  "agentCapabilities": [
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 1877,
+      "preferStructured": true
+    }
+  ],
+  "local": [
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 2760.111299999997,
+      "outputTokens": 95,
+      "inputTokens": 3430,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 363
+    }
+  ],
+  "premium": [
+    {
+      "name": "codex.createPlan.start",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "outputTokens": 431,
+      "durationMs": 21414.2555
+    }
+  ]
+}

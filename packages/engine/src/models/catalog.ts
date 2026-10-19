@@ -167,6 +167,22 @@ export function estimateRuntimeMemory(downloadBytes: number, contextTokens = 16_
   return Math.round(downloadBytes * 1.1 + kvCache + 0.4 * 1024 ** 3)
 }
 
+/** Stable per-model context sizing for both warmup and execution, with no model-name assumptions.
+ * Settings/native context remain upper bounds. Memory figures are conservative estimates; users
+ * can still install/select larger models (partial offload is never prohibited).
+ */
+export function runtimeContextTokens(requested: number, native: number | undefined, weightsBytes: number, profile: HardwareProfile): number {
+  const upper = Math.max(1024, Math.min(requested, native || requested))
+  const vram = usableVramMb(profile)
+  const budget = vram ? vram * 1024 ** 2 * 0.85 : profile.memory.totalBytes * 0.5
+  const cap = vram ? upper : Math.min(upper, 8192)
+  for (const tokens of [...new Set([cap, 16_384, 8192, 4096, 2048, 1024])].filter(n => n <= cap).sort((a, b) => b - a)) {
+    if (estimateRuntimeMemory(weightsBytes, tokens) <= budget) return tokens
+  }
+  // Weights alone exceed the accelerator budget: retain a usable small window for offload.
+  return Math.min(cap, 4096)
+}
+
 export function classifyFit(memoryBytes: number, profile: HardwareProfile): { fit: FitLevel; explanation: string } {
   const vramMb = usableVramMb(profile)
   const ramBytes = profile.memory.totalBytes

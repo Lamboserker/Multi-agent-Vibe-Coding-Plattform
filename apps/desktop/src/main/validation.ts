@@ -109,6 +109,23 @@ export function validateExternalUrl(input: unknown): string {
   return url.toString()
 }
 
+/**
+ * A link the user Ctrl+clicked in a terminal: http(s) only (local dev servers print http://localhost…),
+ * no credentials in the URL. Other schemes (file:, custom protocol handlers) are never opened.
+ */
+export function validateLinkUrl(input: unknown): string {
+  if (typeof input !== 'string' || input.length > 2048) throw new IpcValidationError('Invalid URL.')
+  let url: URL
+  try {
+    url = new URL(input)
+  } catch {
+    throw new IpcValidationError('Invalid URL.')
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new IpcValidationError('Only http:// and https:// links can be opened.')
+  if (url.username || url.password) throw new IpcValidationError('Links with credentials are not opened.')
+  return url.toString()
+}
+
 /** Commands the terminal may start directly (official login / install commands reported by the runtime). */
 export function isAllowedCommand(command: string[], allowed: string[][]): boolean {
   return allowed.some((candidate) => candidate.length === command.length && candidate.every((part, index) => part === command[index]))

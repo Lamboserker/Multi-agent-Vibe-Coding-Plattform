@@ -35,6 +35,17 @@ describe('suitability statistics', () => {
 })
 
 describe('routeTask', () => {
+  it('breaks equal reliability ties by measured time per validated change', () => {
+    const peers = [models[0]!, { ...models[0]!, model: 'other' }]
+    const measured = aggregateSuitability([
+      ...attempts('small:1b', 'react-ui', 10, 0).map(record => ({ ...record, durationMs: 5000 })),
+      ...attempts('other', 'react-ui', 10, 0),
+    ])
+    expect(routeTask(baseTask, peers, policy, measured).model).toBe('other')
+    // A fast but less reliable model must not outrank the better validated model.
+    const failures = aggregateSuitability([...attempts('small:1b', 'react-ui', 20, 0), ...attempts('other', 'react-ui', 5, 2)])
+    expect(routeTask(baseTask, peers, policy, failures).model).toBe('small:1b')
+  })
   it('maps complexity to tiers (complexity decides, not model size)', () => {
     expect(routeTask(baseTask, models, policy).model).toBe('small:1b')
     expect(routeTask({ ...baseTask, complexity: 3 }, models, policy).model).toBe('mid:7b')

@@ -1,0 +1,38 @@
+{
+  "at": "2026-10-15T12:18:41.698Z",
+  "runId": "ui-2026-10-15T12-09-36-841Z",
+  "traceLines": 627,
+  "traceRunIds": [
+    "ui-2026-10-15T12-09-36-841Z"
+  ],
+  "sourceFilesVerified": 318,
+  "sourceHashMismatches": [],
+  "buildArtifactsVerified": 242,
+  "buildHashMismatches": [],
+  "missingLinks": [],
+  "hasRunError": false,
+  "completed": true,
+  "backendRestored": true,
+  "modelCallCount": 2,
+  "executedToolCalls": 3,
+  "attempts": [
+    {
+      "outcome": "success",
+      "repairRound": 0
+    }
+  ],
+  "finalChecks": [
+    {
+      "kind": "typecheck",
+      "status": "passed"
+    },
+    {
+      "kind": "test",
+      "status": "passed"
+    }
+  ],
+  "frozenAcceptanceCheck": true,
+  "modelManifestSha256": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+  "recorderSnapshotSha256": "0c8af78f257dfa837db600305b8caad2c72ff51bc973be16a6524c8807b8cc2e",
+  "hookSnapshotSha256": "ecb187929f48b48297ba0f105c8a05aed30724321aa085a34df89c01e56dcf06"
+}

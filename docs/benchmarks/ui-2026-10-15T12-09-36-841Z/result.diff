@@ -1,0 +1,15 @@
+diff --git a/src/index.mjs b/src/index.mjs
+index 2d16f9b..0036da6 100644
+--- a/src/index.mjs
++++ b/src/index.mjs
+@@ -1 +1,2 @@
+ export const version = 1
++export { slugify } from './slug.mjs';
+diff --git a/src/slug.mjs b/src/slug.mjs
+new file mode 100644
+index 0000000..e41dfbd
+--- /dev/null
++++ b/src/slug.mjs
+@@ -0,0 +1 @@
++export const slugify = (text) => text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+\ No newline at end of file

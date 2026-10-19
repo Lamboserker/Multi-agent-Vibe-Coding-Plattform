@@ -1,0 +1,172 @@
+[
+  {
+    "id": "cmv9jwliw000lv25ctzjdjfzb",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": null,
+    "level": "info",
+    "type": "integration_ready",
+    "message": "Integration worktree on mac/mrf11uy2/integration (base 2b4852d5).",
+    "data": {},
+    "createdAt": "2026-10-15T13:04:51.704Z"
+  },
+  {
+    "id": "cmv9jwljg000ov25cq1kpomod",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "task_state",
+    "message": "task-001: running",
+    "data": {
+      "state": "running"
+    },
+    "createdAt": "2026-10-15T13:04:51.724Z"
+  },
+  {
+    "id": "cmv9jwljg000pv25cd743t7ql",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "task_routed",
+    "message": "task-001 → qwen3:4b (fast).",
+    "data": {
+      "reasons": [
+        "Simple task (complexity 1, risk 1).",
+        "qwen3:4b: no history for \"bugfix\" yet (insufficient data)."
+      ]
+    },
+    "createdAt": "2026-10-15T13:04:51.724Z"
+  },
+  {
+    "id": "cmv9jwlul000rv25cttefwb97",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "worktree_created",
+    "message": "task-001: worktree at 2b4852d5.",
+    "data": {
+      "path": "C:\\Users\\lukas\\AppData\\Local\\Temp\\comparison-before-repair-2026-10-15T13-04-15-297Z-wY85y9\\profile\\worktrees\\cmv9jvypp0000v25c1bjk1trn\\pool-0"
+    },
+    "createdAt": "2026-10-15T13:04:52.126Z"
+  },
+  {
+    "id": "cmv9jwlxk000vv25ckn7joty7",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "agent_started",
+    "message": "task-001: qwen3:4b, tool calling, mit Skills: writing-tests, changelog, code-review.",
+    "data": {},
+    "createdAt": "2026-10-15T13:04:52.232Z"
+  },
+  {
+    "id": "cmv9jy506000xv25c816aukta",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+    "data": {},
+    "createdAt": "2026-10-15T13:06:03.606Z"
+  },
+  {
+    "id": "cmv9jy507000zv25cpz4lat7m",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ finish  – Finished.",
+    "data": {},
+    "createdAt": "2026-10-15T13:06:03.607Z"
+  },
+  {
+    "id": "cmv9jy7y00013v25csq5dq3td",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "warn",
+    "type": "validation_failed",
+    "message": "task-001: typecheck: passed; test: failed (0 passed, 1 failed)",
+    "data": {},
+    "createdAt": "2026-10-15T13:06:07.417Z"
+  },
+  {
+    "id": "cmv9jy80i0017v25cqmupb4lb",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "agent_started",
+    "message": "task-001: qwen3:4b (repair 1), tool calling, mit Skills: writing-tests, changelog, code-review.",
+    "data": {},
+    "createdAt": "2026-10-15T13:06:07.506Z"
+  },
+  {
+    "id": "cmv9k00mw0019v25cu2rq0s60",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+    "data": {},
+    "createdAt": "2026-10-15T13:07:31.256Z"
+  },
+  {
+    "id": "cmv9k00mw001bv25c9oqd2n3a",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ finish src/index.mjs – Finished.",
+    "data": {},
+    "createdAt": "2026-10-15T13:07:31.256Z"
+  },
+  {
+    "id": "cmv9k03i7001gv25c5j9cutsj",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "debug",
+    "type": "task_handoff",
+    "message": "task-001: handoff for dependent tasks (1 file(s)).",
+    "data": {
+      "handoff": {
+        "key": "task-001",
+        "title": "Correct clamp boundary ordering",
+        "files": [
+          "src/index.mjs"
+        ],
+        "summary": "Task completed."
+      }
+    },
+    "createdAt": "2026-10-15T13:07:34.975Z"
+  },
+  {
+    "id": "cmv9k03i7001hv25ccbwhq8jt",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "task_integrated",
+    "message": "task-001: integrated (1 file(s), tests 1 passed).",
+    "data": {},
+    "createdAt": "2026-10-15T13:07:34.975Z"
+  },
+  {
+    "id": "cmv9k03ps001jv25chen4448l",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": "cmv9jwgxt000cv25cl82hikmw",
+    "level": "info",
+    "type": "task_state",
+    "message": "task-001: succeeded",
+    "data": {
+      "state": "succeeded"
+    },
+    "createdAt": "2026-10-15T13:07:35.248Z"
+  },
+  {
+    "id": "cmv9k06cp001lv25c7bs3sei9",
+    "executionId": "cmv9jwl7h000iv25cmrf11uy2",
+    "subtaskId": null,
+    "level": "info",
+    "type": "run_ready",
+    "message": "Run finished; waiting for approval.",
+    "data": {},
+    "createdAt": "2026-10-15T13:07:38.666Z"
+  }
+]

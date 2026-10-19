@@ -49,3 +49,26 @@ const RUN_STATUS: Record<string, string> = {
 export function runStatusLabel(status: string | null | undefined): string {
   return status ? RUN_STATUS[status] ?? status : '–'
 }
+
+/**
+ * Why applying a result was refused, in German and with the kind of problem (the engine reports it
+ * in English: dirty files, a branch that moved since the run, a conflict).
+ */
+export function explainApplyRejection(message: string | null | undefined): { kind: 'dirty' | 'base_moved' | 'conflict' | 'other'; text: string } {
+  if (!message) return { kind: 'other', text: '' }
+  const dirty = /Uncommitted changes in (.+?) would be overwritten/.exec(message)
+  if (dirty) return { kind: 'dirty', text: `Deine nicht committeten Änderungen in ${dirty[1]!.replace(/ and (\d+) more$/, ' und $1 weiteren')} würden überschrieben. Committe oder stashe sie zuerst – oder behalte das Ergebnis als Branch.` }
+  const parts: string[] = []
+  const moved = /moved since the run started \(base (\w+), now (\w+)\)/.exec(message)
+  if (moved) parts.push(`Dein Branch hat sich seit dem Start des Laufs geändert (Ausgangsstand ${moved[1]}, jetzt ${moved[2]}).`)
+  else if (/differs from the state the run started from/.test(message)) parts.push('Deine Arbeitskopie weicht vom Stand ab, auf dem der Lauf gestartet wurde.')
+  const missing = /(\d+) file\(s\) the change builds on are missing in the working copy: (.+?)\. Keep/.exec(message)
+  if (missing) parts.push(`${missing[1]} Datei(en), auf denen die Änderung aufbaut, fehlen in deiner Arbeitskopie: ${missing[2]!.replace(/ and (\d+) more$/, ' und $1 weitere')}.`)
+  const conflict = /the change conflicts with the current files \((.*)\)\. Keep/s.exec(message)
+  if (conflict) parts.push('Die Änderung kollidiert mit dem aktuellen Inhalt der Dateien.')
+  if (moved || missing) return { kind: 'base_moved', text: parts.join(' ') }
+  if (conflict) return { kind: 'conflict', text: parts.join(' ') }
+  // older runs: raw git output
+  if (/does not apply to the current files/.test(message)) return { kind: 'conflict', text: 'Die Änderung passt nicht mehr zum aktuellen Stand deiner Dateien (sie wurden seit dem Lauf geändert oder gelöscht).' }
+  return { kind: 'other', text: message }
+}

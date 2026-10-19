@@ -1,16 +1,76 @@
 import { useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ILink, type ILinkProvider } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalInfo } from '../../../shared/bridge'
 import * as actions from '../../lib/actions'
 import { bridge } from '../../lib/api'
 import { useAppState } from '../../lib/store'
+import { findLinks, isLinkModifier } from '../../lib/terminal-links'
 
 const THEMES = {
-  dark: { background: '#10161e', foreground: '#d7dee8', cursor: '#e5a54b' },
-  light: { background: '#eef1f5', foreground: '#1c2430', cursor: '#b9741c', selectionBackground: '#c9d6e6' },
+  // the app palette (sRGB form of the CSS tokens --bg / --text / --accent)
+  dark: { background: '#0e0c0a', foreground: '#f1eee9', cursor: '#b58dff', selectionBackground: '#b58dff40' },
+  light: { background: '#f9f6f2', foreground: '#1a1512', cursor: '#7a40da', selectionBackground: '#7a40da2e' },
+}
+
+const LINK_HINT = 'Link öffnen (Strg + Klick)'
+
+/**
+ * Web links in the output, opened in the default browser with Ctrl+click (Cmd+click on macOS).
+ * A URL that the terminal wrapped over several rows is found as one link; positions are mapped per
+ * cell, so wide characters before a link do not shift it.
+ */
+function webLinkProvider(terminal: Terminal, host: HTMLElement): ILinkProvider {
+  return {
+    provideLinks(bufferLineNumber, callback) {
+      const buffer = terminal.buffer.active
+      let first = bufferLineNumber - 1
+      while (first > 0 && buffer.getLine(first)?.isWrapped) first -= 1
+      let last = bufferLineNumber - 1
+      while (buffer.getLine(last + 1)?.isWrapped) last += 1
+      let text = ''
+      const cells: Array<{ x: number; y: number }> = []
+      for (let y = first; y <= last; y += 1) {
+        const line = buffer.getLine(y)
+        if (!line) break
+        for (let x = 0; x < line.length; x += 1) {
+          const cell = line.getCell(x)
+          const chars = cell?.getChars() ?? ''
+          if (!cell || cell.getWidth() === 0) continue
+          const value = chars || ' '
+          for (let index = 0; index < value.length; index += 1) cells.push({ x: x + 1, y: y + 1 })
+          text += value
+        }
+      }
+      const found = findLinks(text)
+        .map((link): ILink => {
+          const start = cells[link.start]!
+          const end = cells[link.end - 1]!
+          return {
+            range: { start, end },
+            text: link.url,
+            decorations: { pointerCursor: true, underline: true },
+            activate: (event, url) => {
+              if (!isLinkModifier(event)) return
+              // local dev servers open inside the app (code screen), everything else in the browser
+              if (actions.openPreview(url)) return
+              void bridge().shell.openLink(url).catch((error: unknown) => actions.notify(error instanceof Error ? error.message : String(error), 'error'))
+            },
+            hover: () => {
+              host.title = LINK_HINT
+            },
+            leave: () => {
+              if (host.title === LINK_HINT) host.removeAttribute('title')
+            },
+          }
+        })
+        // only the links touching the requested row
+        .filter((link) => link.range.start.y <= bufferLineNumber && link.range.end.y >= bufferLineNumber)
+      callback(found.length ? found : undefined)
+    },
+  }
 }
 
 /**
@@ -29,7 +89,7 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
   onExitRef.current = onExit
 
   useEffect(() => {
-    const terminal = new Terminal({ fontFamily: "'Cascadia Code', 'JetBrains Mono', Consolas, monospace", fontSize: 12.5, cursorBlink: true, allowProposedApi: false, scrollback: 5000, theme: THEMES[theme] })
+    const terminal = new Terminal({ fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace", fontSize: 12.5, cursorBlink: true, allowProposedApi: false, scrollback: 5000, theme: THEMES[theme] })
     termRef.current = terminal
     const fit = new FitAddon()
     fitRef.current = fit
@@ -46,6 +106,7 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
       return true
     })
     terminal.open(host.current!)
+    const links = terminal.registerLinkProvider(webLinkProvider(terminal, host.current!))
     let attached = false
     const buffered: string[] = []
     // Output that arrives while the scrollback is being fetched is appended after it.
@@ -84,6 +145,7 @@ export function TerminalView({ terminalId, visible = true, onExit }: { terminalI
     observer.observe(host.current!)
     return () => {
       observer.disconnect()
+      links.dispose()
       offData()
       offExit()
       terminal.dispose()

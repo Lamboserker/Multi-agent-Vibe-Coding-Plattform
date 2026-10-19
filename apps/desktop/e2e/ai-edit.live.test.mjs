@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { test } from 'node:test'
-import { answerFolderDialog, launch, newProfile, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { go, launch, newProfile, openProject, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
 
 const live = process.env.MAC_E2E_LIVE === '1'
 const model = process.env.MAC_E2E_MODEL ?? 'qwen2.5-coder:7b'
@@ -22,8 +22,8 @@ test('AI edit of a selection with a local model, reviewed as a diff, applied und
     await api('POST', '/onboarding/complete')
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().click()
     await page.locator('[data-path="src/components"]').first().click()
     await page.locator('[data-path="src/components/Badge.tsx"]').click()

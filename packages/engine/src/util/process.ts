@@ -259,14 +259,29 @@ const SECRET_ENV_PATTERN = /(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PR
  * Environment for untrusted commands (tests, typechecks, model-proposed commands): keeps what
  * toolchains need (PATH, HOME, temp, locale, proxy) and drops anything that looks like a secret.
  */
+/**
+ * Commands run in the user's project: node_modules/.bin folders of the app itself on PATH (added when
+ * the app was started through pnpm/npm) would let the project's commands resolve the app's tools.
+ */
+function dropAppBinFolders(env: NodeJS.ProcessEnv) {
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH')
+  if (!pathKey || !env[pathKey]) return
+  const separator = process.platform === 'win32' ? ';' : ':'
+  env[pathKey] = env[pathKey]!.split(separator).filter((entry) => !/[\\/]node_modules[\\/]\.bin[\\/]?$/i.test(entry) && !/[\\/]node-gyp-bin[\\/]?$/i.test(entry)).join(separator)
+}
+
 export function sanitizedEnv(extra: Record<string, string> = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined) continue
     if (SECRET_ENV_PATTERN.test(key)) continue
     if (key.startsWith('MAC_')) continue
+    // package-manager context of the app itself (started via pnpm/npm): `pnpm install` in the project
+    // would otherwise act on the app's workspace
+    if (/^(npm_|pnpm_|PNPM_|YARN_|BERRY_)/i.test(key) || key === 'INIT_CWD') continue
     env[key] = value
   }
+  dropAppBinFolders(env)
   env.CI = env.CI ?? '1'
   env.FORCE_COLOR = '0'
   return { ...env, ...extra }

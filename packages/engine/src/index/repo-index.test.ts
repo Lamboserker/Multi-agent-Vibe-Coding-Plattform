@@ -2,11 +2,21 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createTempRepo } from '../test-utils.js'
-import { buildRepoIndex, refreshRepoIndex, type RepoIndex } from './repo-index.js'
+import { buildContextDigest, buildRepoIndex, refreshRepoIndex, type RepoIndex } from './repo-index.js'
+import { planningContextOptions } from '../planning/context.js'
 
 const summary = (index: RepoIndex) => index.files.map((file) => `${file.path}#${file.hash}#${file.dependsOn.join(',')}`).sort()
 
 describe('refreshRepoIndex', () => {
+  it('plans with named files and manifests while excluding weak unrelated source matches', async () => {
+    const repo = await createTempRepo({ 'package.json': '{"type":"module"}', 'src/clamp.ts': 'export const clamp = (n: number) => n\n', 'src/unrelated.ts': 'export const unrelated = 1\n' })
+    const index = await buildRepoIndex(repo)
+    const goal = 'Fix src/clamp.ts'
+    const digest = await buildContextDigest(index, goal, planningContextOptions(goal))
+    expect(digest.relevantFiles.map(file => file.path)).toEqual(['src/clamp.ts', 'package.json'])
+    expect(digest.relevantFiles[0]?.complete).toBe(true)
+    expect(digest.tokenEstimate).toBeLessThanOrEqual(6000)
+  })
   it('produces the same index as a full rebuild for watcher-reported changes', async () => {
     const repo = await createTempRepo({
       '.gitignore': 'generated/\n',

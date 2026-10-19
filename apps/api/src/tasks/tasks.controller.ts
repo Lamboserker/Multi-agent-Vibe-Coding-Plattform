@@ -56,7 +56,7 @@ export class TasksController {
   }
 
   @Post(':id/apply')
-  apply(@Param('id') id: string, @Body() body: { mode?: 'working_tree' | 'branch' | 'fast_forward' }) {
+  apply(@Param('id') id: string, @Body() body: { mode?: 'working_tree' | 'branch' | 'fast_forward' | 'commit' }) {
     return this.tasks.apply(id, body?.mode)
   }
 

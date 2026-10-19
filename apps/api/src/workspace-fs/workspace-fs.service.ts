@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, Optional } from '@nestjs/common'
 import { LocalHistoryService } from '../ide/local-history.service.js'
 import { existsSync, promises as fs, watch, type FSWatcher } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import {
   cloneRepository,
@@ -10,6 +11,7 @@ import {
   headCommit,
   initRepository,
   isGitRepository,
+  isSensitivePath,
   listBranches,
   normalizeRelative,
   PathViolationError,
@@ -44,6 +46,81 @@ export interface TreeEntry {
 function gitResult<T>(value: T, valid: (value: any) => boolean): T {
   if (!valid(value)) throw new BadRequestException('Git integration plugin returned an invalid result.')
   return value
+}
+
+/** Written when a folder without .gitignore becomes a repository: no dependencies or secrets in the first commit. */
+export const DEFAULT_GITIGNORE = ['node_modules/', 'dist/', 'build/', 'out/', 'coverage/', '.next/', '.turbo/', '.cache/', '.venv/', 'venv/', '__pycache__/', '*.log', '.env', '.env.*', '!.env.example', '.DS_Store', 'Thumbs.db', ''].join('\n')
+
+const MAX_AUTO_INIT_ENTRIES = 20_000
+
+/** Counts directory entries up to `limit` (skipping ignored heavy folders), to refuse huge folders. */
+async function countEntries(dir: string, limit: number): Promise<number> {
+  let count = 0
+  const queue = [dir]
+  while (queue.length && count <= limit) {
+    const current = queue.shift()!
+    let entries: Array<import('node:fs').Dirent>
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && ['node_modules', '.git', 'dist', 'build', '.venv', 'venv', '__pycache__'].includes(entry.name)) continue
+      count += 1
+      if (entry.isDirectory()) queue.push(path.join(current, entry.name))
+    }
+  }
+  return count
+}
+
+/**
+ * Makes sure a project folder is a git repository with at least one commit: agents work in worktrees
+ * that branch off a commit. Initialises git if needed, writes a default .gitignore if there is none
+ * and commits what is there as "Initial commit". Existing history is never touched. Drive roots, the
+ * home folder and very large folders are only handled on explicit request (`force`).
+ */
+/** Dependency folders that never go into an automatic first commit, whatever the .gitignore says. */
+const DEPENDENCY_DIRECTORIES = ['node_modules', 'bower_components', 'jspm_packages', '.pnpm-store', '.venv', 'venv', '__pycache__', '.tox', '.gradle']
+
+export interface EnsureRepositoryResult {
+  initialized: boolean
+  committed: boolean
+  hasCommit: boolean
+  skipped?: string
+  /** Files and folders left out of the first commit (secrets, dependencies) although not ignored. */
+  excluded?: string[]
+}
+
+/** force: the user asked for it explicitly (no guard). allowLarge: a run needs git now (only drive roots and the home folder are refused). */
+export async function ensureRepository(root: string, options: { force?: boolean; allowLarge?: boolean } = {}): Promise<EnsureRepositoryResult> {
+  const resolved = path.resolve(root)
+  const isRepo = await isGitRepository(resolved)
+  if (isRepo && (await headCommit(resolved))) return { initialized: false, committed: false, hasCommit: true }
+  if (!options.force) {
+    const home = path.resolve(os.homedir())
+    if (resolved === path.parse(resolved).root || resolved.toLowerCase() === home.toLowerCase()) return { initialized: false, committed: false, hasCommit: false, skipped: 'Drive roots and the home folder are not turned into a repository automatically.' }
+    if (!options.allowLarge && (await countEntries(resolved, MAX_AUTO_INIT_ENTRIES)) > MAX_AUTO_INIT_ENTRIES) return { initialized: false, committed: false, hasCommit: false, skipped: `More than ${MAX_AUTO_INIT_ENTRIES} files: git is set up when the first run starts.` }
+  }
+  if (!isRepo) await initRepository(resolved)
+  if (!existsSync(path.join(resolved, '.gitignore'))) await fs.writeFile(path.join(resolved, '.gitignore'), DEFAULT_GITIGNORE)
+  // An existing .gitignore may be incomplete: dependencies are excluded by pathspec (their folders
+  // are not even scanned), secrets are taken out of the index after staging.
+  const dependencyExcludes = DEPENDENCY_DIRECTORIES.map((name) => `:(exclude,glob)**/${name}/**`)
+  await git(resolved, ['add', '-A', '--', '.', ...dependencyExcludes])
+  const staged = (await git(resolved, ['diff', '--cached', '--name-only', '-z'], { allowFailure: true })).stdout.split('\0').filter(Boolean)
+  const secrets = staged.filter((file) => isSensitivePath(file))
+  if (secrets.length) await git(resolved, ['rm', '-q', '--cached', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: secrets.join('\0') })
+  const leftOutDependencies = DEPENDENCY_DIRECTORIES.filter((name) => existsSync(path.join(resolved, name)))
+  await commitStaged(resolved, 'Initial commit').catch(async () => {
+    // no user identity configured or nothing to commit: the app's identity, empty commit allowed
+    await git(resolved, ['commit', '-q', '--allow-empty', '-m', 'Initial commit'], { internal: true })
+  })
+  const hasCommit = Boolean(await headCommit(resolved))
+  // what is left out but not ignored would show up as untracked: report it so the user can add it to .gitignore
+  const ignored = new Set((await git(resolved, ['check-ignore', '--stdin', '-z'], { allowFailure: true, input: [...secrets, ...leftOutDependencies.map((name) => `${name}/`)].join('\0') })).stdout.split('\0').filter(Boolean).map((entry) => entry.replace(/\/$/, '')))
+  const excluded = [...secrets, ...leftOutDependencies.map((name) => `${name}/`)].filter((entry) => !ignored.has(entry.replace(/\/$/, '')))
+  return { initialized: !isRepo, committed: hasCommit, hasCommit, ...(excluded.length ? { excluded } : {}) }
 }
 
 @Injectable()
@@ -287,7 +364,20 @@ export class WorkspaceFsService implements OnModuleDestroy {
     return this.gitStatus(projectId)
   }
 
+  /**
+   * A repository that was initialised elsewhere may have no commit yet. Commits everything that is not
+   * ignored as "Initial commit" (an empty commit for an empty folder). Never touches existing history.
+   */
+  async initialCommit(projectId: string) {
+    const root = await this.root(projectId)
+    const result = await ensureRepository(root, { force: true })
+    if (!result.hasCommit) throw new BadRequestException(result.skipped ?? 'The initial commit could not be created.')
+    return this.gitStatus(projectId)
+  }
+
   // --- project creation -----------------------------------------------------
+
+
 
   async createNewProject(parentDir: string, name: string) {
     if (!/^[\w.-]{1,80}$/.test(name)) throw new BadRequestException('Use letters, numbers, ".", "-" or "_" for the project name.')

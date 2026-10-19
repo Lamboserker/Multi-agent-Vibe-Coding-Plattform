@@ -28,7 +28,7 @@ export const DEFAULT_SCOPE: WorkspaceScope = {
 }
 
 export class ToolInputError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly code?: 'not_found') {
     super(message)
     this.name = 'ToolInputError'
   }
@@ -77,7 +77,8 @@ export class WorkspaceFiles {
       raw = await fs.readFile(absolute, 'utf8')
     } catch (error) {
       if (error instanceof ToolInputError) throw error
-      throw new ToolInputError(`File not found: ${relative}`)
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new ToolInputError(`File not found: ${relative}`, 'not_found')
+      throw new ToolInputError(`Cannot read file: ${relative}`)
     }
     if (raw.includes('\0')) throw new ToolInputError(`${relative} looks like a binary file.`)
     const lines = raw.split(/\r?\n/)
@@ -156,6 +157,7 @@ export class WorkspaceFiles {
     const text = original.replace(/\r\n/g, '\n')
     const needle = search.replace(/\r\n/g, '\n')
     const replacement = replace.replace(/\r\n/g, '\n')
+    if (needle === replacement) throw new ToolInputError(`Replacement is identical to search in ${relative}; return a corrected replacement that implements the requested change.`)
 
     let updated: string | undefined
     const occurrences = countOccurrences(text, needle)

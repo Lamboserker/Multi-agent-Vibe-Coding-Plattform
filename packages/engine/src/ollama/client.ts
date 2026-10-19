@@ -237,6 +237,7 @@ export class OllamaClient {
         if (error instanceof OllamaError) throw error
         throw toOllamaError(error, options.signal, controller.signal)
       }
+      if (!final.done) throw new OllamaError('Ollama stream ended without a completion marker; response discarded.', 'invalid_response')
       return {
         message: { role: 'assistant', content, tool_calls: toolCalls.length ? toolCalls : undefined, thinking: thinking || undefined },
         promptTokens: Number(final.prompt_eval_count ?? 0),

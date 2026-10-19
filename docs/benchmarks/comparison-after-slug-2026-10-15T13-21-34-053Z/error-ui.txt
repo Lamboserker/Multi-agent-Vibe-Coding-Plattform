@@ -1,0 +1,82 @@
+REPO
+src
+test
+package.json
+syntax.mjs
+⇄ Gesamt-Diff
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+diff --git a/src/index.mjs b/src/index.mjs
+index 2d16f9b..79100f1 100644
+--- a/src/index.mjs
++++ b/src/index.mjs
+@@ -1 +1,2 @@
+-export const version = 1
++export const version = 1;
++export { slugify } from './slug.mjs';
+diff --git a/src/slug.mjs b/src/slug.mjs
+new file mode 100644
+index 0000000..e41dfbd
+--- /dev/null
++++ b/src/slug.mjs
+@@ -0,0 +1 @@
++export const slugify = (text) => text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+\ No newline at end of file
+Terminal
+Logs
+Tests
+Git-Diff
+Run-Details
+Probleme
+repo
+Befehlshistorie
+PS C:\Users\lukas\AppData\Local\Temp\comparison-after-slug-2026-10-15T13-21-34-053Z-bJKq51\repo> 
+IMPLEMENT AN EXPORTED SLUGIFY(TEXT) FUNCTION IN A NEW SRC…
+Arbeitsablauf
+Verlauf
+✓
+Aufgabe
+✓
+Plan
+✓
+Ausführung
+✓
+Freigabe
+Abgeschlossen
+Implement an exported slugify(text) function in a new src/slug.mjs and re-export it from src/index.mjs. Lowercase ASCII text, trim it, replace each group of non-alphanumeric characters by one hyphen, remove leading/trailing hyphens. Empty input returns an empty string. Do not change tests. Implement both files in one task.
+1/1 Teilaufgabe(n) integriert; 2 Datei(en), +3/−1. Prüfung: typecheck: bestanden; test: bestanden (1 bestanden, 0 fehlgeschlagen)
+✓ Applied 2 file(s) to the working tree (not committed).
+Rückgängig machen
+Neue Aufgabe
+Plan und Teilaufgaben · 1
+Agentenübersicht
+Live-Protokoll
+Laufdetails
+Aufgabe
+Frage
+Cheapest
+Balanced
+Quality
+Plan direkt ausführen
+Senden
+repo
+Orchestrator: Codex
+Modus: balanced
+Freigabe: manuell
+⊗ 0 ⚠ 0
+Abgeschlossen

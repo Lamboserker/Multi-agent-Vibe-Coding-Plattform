@@ -1,21 +1,31 @@
 # Live end-to-end test
 
-## Central workflow regression
+## GUI regression (no model calls)
 
-The desktop session has one `Arbeitsablauf` for task → plan → execution → approval. The `Verlauf`
-tab retains the conversation. Agent and run-detail views link back to the workflow; lifecycle and
-approval controls are rendered only there. `Ctrl+Shift+L` opens it, also when the chat is collapsed.
+The window is a shell with a navigation rail: **Leitstand** (orchestrator chat, plan, agents as graph
+or tiles, inspector), **Code** (explorer/search/git, editor, terminal, agent changes), **Freigabe**
+(the only place with approval controls), **Sitzungen**, **Modelle**, **Kosten** and **Setup**
+(onboarding, settings, agents, plugins, skills, MCP, diagnostics). `Ctrl+Shift+L` and the footer entry
+open the Leitstand. The helpers in `helpers.mjs` (`openProject`, `go`, `setupSection`, `codeView`,
+`CHAT_MESSAGES`) encapsulate this navigation.
 
 After building the desktop app, run without any premium/model calls:
 
 ```bash
-node --test --test-concurrency=1 e2e/fast-path.test.mjs e2e/agents.test.mjs e2e/layout.test.mjs
+node --test --test-concurrency=1 e2e/fast-path.test.mjs e2e/agents.test.mjs e2e/layout.test.mjs e2e/empty-repo.test.mjs \
+  e2e/terminal.test.mjs e2e/energy.test.mjs e2e/ide-features.test.mjs e2e/plugins.test.mjs e2e/skills-mcp.test.mjs \
+  e2e/session-persistence.test.mjs e2e/load-and-editor.test.mjs
 ```
 
-The fast-path test covers real planning, isolated execution and project checks, exactly one approval
-surface, navigation back from agent/run details, collapsed-chat recovery, renderer reload, apply and
-undo. The agent test edits assignments from the central plan. The layout test includes minimum width.
-The separate `session-persistence.test.mjs` covers drafts, conversation history, crashes and restart.
+- `fast-path`: real planning, isolated execution and project checks, the approval screen with the real
+  diff, exactly one approval surface, the agent version in the editor, reload, apply and undo.
+- `agents`: agent profiles (Setup → Agenten), automatic assignment at planning, change in the inspector.
+- `layout`: splitters, collapse, maximize, persisted sizes, every screen at the 1024 px window minimum.
+- `empty-repo`: a repository without commits is explained, the start is blocked, the initial commit is
+  created on request and the run then goes through.
+- `terminal`: Ctrl+click on a link in the terminal output opens it in the browser (plain click does not), search, rename, split.
+- `energy`: tariff (unit price + base price) on the costs screen, live draw, metered energy and pro-rata base price.
+- `session-persistence`: drafts, conversation history, renderer crash and app restart while switching screens.
 
 ## Premium live run
 

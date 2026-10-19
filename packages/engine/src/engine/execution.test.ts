@@ -108,12 +108,90 @@ async function setup(chat: (request: FakeChatRequest) => FakeChatReply, models: 
     checks: detectValidationChecks(repo),
     index: await buildRepoIndex(repo),
     stats: [],
-    settings: { ...DEFAULT_ENGINE_SETTINGS, premiumReviewPolicy: 'never' as const, localSlots: 1 },
+    // These scenarios specifically exercise tool round-trips. Auto mode is covered below.
+    settings: { ...DEFAULT_ENGINE_SETTINGS, premiumReviewPolicy: 'never' as const, localSlots: 1, localExecutionMode: 'tools' as 'auto' | 'tools' },
   }
   return { repo, store, worktrees, deps }
 }
 
 describe('ExecutionRunner (real git, real validation, scripted model)', () => {
+  it('does not call a model when required agent instructions cannot be loaded', async () => {
+    const { repo, deps } = await setup(() => write('src/greet.js', GREET))
+    const outcome = await new ExecutionRunner({ id: 'run-missing-instructions', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'] })], {
+      ...deps, agentResources: async () => { throw new Error('Required skill unavailable') },
+    }).execute()
+    expect(outcome.status).toBe('failed')
+    expect(fake!.requests).toHaveLength(0)
+    expect(existsSync(path.join(repo, 'src/greet.js'))).toBe(false)
+  }, 60_000)
+
+  it('never integrates an unfinished partial change even if existing tests would pass', async () => {
+    const { repo, deps, store } = await setup(() => write('src/greet.js', GREET))
+    deps.settings.maxLocalRepairs = 0
+    deps.settings.maxEscalationSteps = 0
+    const outcome = await new ExecutionRunner({ id: 'run-incomplete', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', {
+      newFiles: ['src/greet.js'], agent: { id: 'bounded', name: 'Bounded', escalation: 'none', maxSteps: 1 },
+    })], deps).execute()
+    expect(outcome.status).toBe('failed')
+    expect(store.attempts[0]).toMatchObject({ outcome: 'error', patchStatus: 'incomplete' })
+    expect(existsSync(path.join(repo, 'src/greet.js'))).toBe(false)
+    expect(store.events.some(event => event.type === 'task_integrated')).toBe(false)
+  }, 60_000)
+
+  it('falls back to tools after a model cannot return structured operations', async () => {
+    const { repo, deps, store } = await setup(request => {
+      if (request.format) return { content: 'invalid json' }
+      return toolResults(request) ? finish : write('src/greet.js', GREET)
+    })
+    deps.settings.localExecutionMode = 'auto'
+    const outcome = await new ExecutionRunner({ id: 'run-auto-fallback', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'] })], deps).execute()
+    expect(outcome.status).toBe('awaiting_approval')
+    expect(store.attempts.map(attempt => attempt.outcome)).toEqual(['error', 'success'])
+    expect(fake!.requests.map(request => Boolean(request.format))).toEqual([true, true, false, false])
+    expect(store.events.some(event => event.type === 'structured_fallback')).toBe(true)
+  }, 60_000)
+
+  it('uses current files and bounded structured output to repair a failed validation', async () => {
+    let calls = 0
+    const { repo, deps, store } = await setup(request => {
+      expect(request.format).toBeDefined()
+      if (calls++ === 0) return { content: JSON.stringify({ summary: 'Changed add', operations: [{ action: 'write', path: 'src/math.js', content: 'export const add = (a, b) => a - b\n' }] }) }
+      expect(request.messages[1]!.content).toContain('previous attempt failed validation')
+      expect(request.messages[1]!.content).toContain('a - b')
+      return { content: JSON.stringify({ summary: 'Repaired add', operations: [{ action: 'write', path: 'src/math.js', content: 'export const add = (a, b) => Number(a) + Number(b)\n' }] }) }
+    })
+    deps.settings.localExecutionMode = 'auto'
+    const outcome = await new ExecutionRunner({ id: 'run-auto-repair', projectKey: 'demo', repoPath: repo, goal: 'Fix add' }, [task('task-001', { relevantFiles: ['src/math.js'] })], deps).execute()
+    expect(outcome.status).toBe('awaiting_approval')
+    expect(store.attempts.map(attempt => attempt.outcome)).toEqual(['validation_failed', 'success'])
+    expect(outcome.finalValidation?.ok).toBe(true)
+    expect(fake!.requests.map(request => Boolean(request.format))).toEqual([true, true])
+  }, 60_000)
+  it('fails the run when task checks pass but the final integration check fails', async () => {
+    const { repo, deps, store } = await setup(request => toolResults(request) ? finish : write('src/greet.js', GREET))
+    let validations = 0
+    deps.checks = [{ id: 'integration-check', kind: 'test', command: 'plugin check', blocking: true, timeoutMs: 5000, source: 'test', execute: async () => ({ passed: ++validations === 1 ? 1 : 0, failed: validations === 1 ? 0 : 1, output: 'integration check' }) }]
+    const runner = new ExecutionRunner({ id: 'run-final-failure', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'] })], deps)
+    const outcome = await runner.execute()
+    expect(store.attempts[0]?.outcome).toBe('success')
+    expect(outcome.status).toBe('failed')
+    expect(outcome.finalValidation?.ok).toBe(false)
+    expect(store.lastRun().errorMessage).toContain('Final validation failed')
+  }, 60_000)
+  it('uses one structured edit for a small fully supplied task and validates it twice', async () => {
+    const { repo, deps, store } = await setup(request => {
+      expect(request.format).toBeDefined()
+      return { content: JSON.stringify({ summary: 'Added subtract', operations: [{ action: 'edit', path: 'src/math.js', search: 'export const add = (a, b) => a + b', replace: 'export const add = (a, b) => a + b\nexport const subtract = (a, b) => a - b' }] }) }
+    })
+    deps.settings.localExecutionMode = 'auto'
+    const runner = new ExecutionRunner({ id: 'run-auto-structure', projectKey: 'demo', repoPath: repo, goal: 'Add subtract' }, [task('task-001', { relevantFiles: ['src/math.js'] })], deps)
+    const outcome = await runner.execute()
+    expect(outcome.status).toBe('awaiting_approval')
+    expect(store.attempts[0]?.validation?.ok).toBe(true)
+    expect(outcome.finalValidation?.ok).toBe(true)
+    expect(fake!.requests).toHaveLength(1)
+    expect(store.attempts[0]?.logs[0]).toContain('structured mode')
+  }, 60_000)
   it('runs dependent tasks in isolated worktrees, integrates them and applies with undo', async () => {
     const { repo, store, deps } = await setup((request) => {
       const key = taskKeyOf(request)
@@ -265,6 +343,8 @@ describe('ExecutionRunner (real git, real validation, scripted model)', () => {
     const result = await applyChangeSet({ repoPath: repo, integrationWorktree: run.integrationWorktree as string, integrationBranch: run.integrationBranch as string, baseCommit: run.baseCommit as string, mode: 'working_tree' })
     expect(result.ok).toBe(false)
     expect(result.blockedBy).toEqual(['src/math.js'])
+    expect(result.reason).toBe('dirty')
+    expect(result.message).toContain('src/math.js')
     expect(await fs.readFile(path.join(repo, 'src', 'math.js'), 'utf8')).toContain('my local edit')
 
     // fast-forward is refused as well; the branch mode leaves the checkout untouched
@@ -272,6 +352,94 @@ describe('ExecutionRunner (real git, real validation, scripted model)', () => {
     const branch = await applyChangeSet({ repoPath: repo, integrationWorktree: run.integrationWorktree as string, integrationBranch: run.integrationBranch as string, baseCommit: run.baseCommit as string, mode: 'branch' })
     expect(branch.ok).toBe(true)
     expect(await headCommit(repo)).toBe(run.baseCommit)
+  }, 60_000)
+
+  it('commits the result onto the checked-out branch: fast-forward, merge after newer commits, clean abort on conflict, undo', async () => {
+    const run = async (id: string) => {
+      const { deps, store, repo } = await setup((request) => [write('src/greet.js', GREET), finish][toolResults(request)] ?? finish)
+      const runner = new ExecutionRunner({ id, projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'] })], deps)
+      expect((await runner.execute()).status).toBe('awaiting_approval')
+      const last = store.lastRun()
+      const apply = (repoPath = repo) => applyChangeSet({ repoPath, integrationWorktree: last.integrationWorktree as string, integrationBranch: last.integrationBranch as string, baseCommit: last.baseCommit as string, mode: 'commit', commitMessage: 'Multi-AI Coder: Add greet' })
+      return { repo, apply }
+    }
+    const commit = (repo: string, message: string) => git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', message])
+    const branchOf = async (repo: string) => (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim()
+
+    // 1. branch unchanged: fast-forward; an unrelated uncommitted change stays as it is
+    const first = await run('run-commit-0008')
+    await fs.writeFile(path.join(first.repo, 'src', 'math.js'), 'export const add = (a, b) => a + b // local\n')
+    const forward = await first.apply()
+    expect(forward).toMatchObject({ ok: true, mode: 'commit', targetBranch: await branchOf(first.repo) })
+    expect(await headCommit(first.repo)).toBe(forward.afterHead)
+    expect((await git(first.repo, ['show', 'HEAD:src/greet.js'])).stdout).toBe(GREET)
+    expect(await fs.readFile(path.join(first.repo, 'src', 'math.js'), 'utf8')).toContain('// local')
+    // undo moves the branch back, the local change stays
+    expect((await revertChangeSet({ repoPath: first.repo, mode: 'commit', patch: forward.patch!, files: forward.files, beforeHead: forward.beforeHead, afterHead: forward.afterHead })).ok).toBe(true)
+    expect(await headCommit(first.repo)).toBe(forward.beforeHead)
+    expect(await fs.readFile(path.join(first.repo, 'src', 'math.js'), 'utf8')).toContain('// local')
+
+    // 2. the user committed meanwhile (other file): merge commit on top of the newer state
+    const second = await run('run-commit-0009')
+    await fs.writeFile(path.join(second.repo, 'NOTES.md'), 'meanwhile\n')
+    await git(second.repo, ['add', 'NOTES.md'])
+    await commit(second.repo, 'notes meanwhile')
+    const userHead = await headCommit(second.repo)
+    const merged = await second.apply()
+    expect(merged.ok).toBe(true)
+    expect((await git(second.repo, ['log', '-1', '--format=%s'])).stdout.trim()).toBe('Multi-AI Coder: Add greet')
+    expect((await git(second.repo, ['rev-list', '--parents', '-n', '1', 'HEAD'])).stdout).toContain(userHead!)
+    expect((await git(second.repo, ['show', 'HEAD:src/greet.js'])).stdout).toBe(GREET)
+    expect((await git(second.repo, ['show', 'HEAD:NOTES.md'])).stdout).toBe('meanwhile\n')
+
+    // 3. the user committed an own version of the same file: nothing changes, no half merge
+    const third = await run('run-commit-0010')
+    const mine = 'export const greet = () => "mine"\n'
+    await fs.writeFile(path.join(third.repo, 'src', 'greet.js'), mine)
+    await git(third.repo, ['add', '-A'])
+    await commit(third.repo, 'own greet')
+    const before = await headCommit(third.repo)
+    const refused = await third.apply()
+    expect(refused).toMatchObject({ ok: false, reason: 'conflict' })
+    expect(refused.message).toContain('src/greet.js')
+    expect(await headCommit(third.repo)).toBe(before)
+    expect(await fs.readFile(path.join(third.repo, 'src', 'greet.js'), 'utf8')).toBe(mine)
+    expect((await git(third.repo, ['status', '--porcelain'])).stdout.trim()).toBe('')
+    expect((await git(third.repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { allowFailure: true })).exitCode).not.toBe(0)
+  }, 180_000)
+
+  it('rolls back a conflicting 3-way apply completely: no conflict markers, no unmerged index', async () => {
+    const { deps, store, repo } = await setup((request) => [write('src/greet.js', GREET), finish][toolResults(request)] ?? finish)
+    const runner = new ExecutionRunner({ id: 'run-conflict-0007', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'] })], deps)
+    expect((await runner.execute()).status).toBe('awaiting_approval')
+    // meanwhile the user commits an own src/greet.js (the reported case: an earlier result committed by hand)
+    const mine = 'export const greet = () => "mine"\n'
+    await fs.writeFile(path.join(repo, 'src', 'greet.js'), mine)
+    await git(repo, ['add', '-A'])
+    await git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'own greet'])
+    const run = store.lastRun()
+    const result = await applyChangeSet({ repoPath: repo, integrationWorktree: run.integrationWorktree as string, integrationBranch: run.integrationBranch as string, baseCommit: run.baseCommit as string, mode: 'working_tree' })
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' })
+    expect(result.message).toContain('Nothing was changed')
+    expect(await fs.readFile(path.join(repo, 'src', 'greet.js'), 'utf8')).toBe(mine)
+    expect((await git(repo, ['status', '--porcelain'])).stdout.trim()).toBe('')
+  }, 60_000)
+
+  it('explains a refused apply when the branch moved and the changed files are gone', async () => {
+    const { deps, store, repo } = await setup((request) => [{ toolCalls: [{ name: 'edit_file', arguments: { path: 'src/math.js', search: 'export const add = (a, b) => a + b', replace: 'export const add = (a, b) => a + b\nexport const sub = (a, b) => a - b' } }] }, finish][toolResults(request)] ?? finish)
+    const runner = new ExecutionRunner({ id: 'run-moved-0006', projectKey: 'demo', repoPath: repo, goal: 'Add sub' }, [task('task-001', { relevantFiles: ['src/math.js'] })], deps)
+    expect((await runner.execute()).status).toBe('awaiting_approval')
+    // meanwhile the user commits the deletion of the file the change modifies
+    await fs.rm(path.join(repo, 'src', 'math.js'))
+    await git(repo, ['add', '-A'])
+    await git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'remove math'])
+    const run = store.lastRun()
+    const result = await applyChangeSet({ repoPath: repo, integrationWorktree: run.integrationWorktree as string, integrationBranch: run.integrationBranch as string, baseCommit: run.baseCommit as string, mode: 'working_tree' })
+    expect(result).toMatchObject({ ok: false, reason: 'base_moved', missingFiles: ['src/math.js'] })
+    expect(result.message).toMatch(/moved since the run started[\s\S]*missing in the working copy: src\/math\.js[\s\S]*branch/)
+    expect(result.message).not.toContain('Falling back')
+    // the result stays available as a branch
+    expect((await applyChangeSet({ repoPath: repo, integrationWorktree: run.integrationWorktree as string, integrationBranch: run.integrationBranch as string, baseCommit: run.baseCommit as string, mode: 'branch' })).ok).toBe(true)
   }, 60_000)
 
   it('fast-forwards a clean branch and can undo it', async () => {

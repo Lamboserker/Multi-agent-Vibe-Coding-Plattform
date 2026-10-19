@@ -11,9 +11,9 @@ import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { launchWithCdp } from './cdp.mjs'
-import { answerFolderDialog, launch, newProfile, percentiles, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { CHAT_MESSAGES, codeView, go, launch, newProfile, openProject, percentiles, prepareRepository, quit, resultsDir, setupSection, stamp, waitUntil } from './helpers.mjs'
 
-const VIEWS = ['Projekte', 'Explorer', 'Git', 'Sitzungen', 'Agenten', 'Modelle', 'Nutzung & Kosten', 'Einstellungen']
+const VIEWS = ['Leitstand', 'Code', 'Freigabe', 'Sitzungen', 'Modelle', 'Kosten', 'Setup', 'Code']
 const UNSAVED = '// unsaved edit from the persistence test'
 const COMPOSER_DRAFT = 'Entwurf, der nicht gesendet wurde'
 
@@ -26,10 +26,17 @@ const READ_UI = `(() => {
     tabDirty: document.querySelectorAll('.tab.active .dirty').length,
     // Monaco renders spaces as non-breaking spaces
     editor: (lines?.textContent ?? '').replace(/\\u00a0/g, ' '),
-    chatMessages: document.querySelectorAll('[data-testid="chat-messages"] .msg[data-role]').length,
+    chatMessages: document.querySelectorAll(${JSON.stringify(CHAT_MESSAGES)}).length,
     composer: document.querySelector('#chat-input')?.value ?? null,
-    sessionTitle: document.querySelector('.chat-panel .panel-header h2')?.textContent ?? null,
+    sessionTitle: document.querySelector('[data-testid="session-title"]')?.textContent ?? null,
   }
+})()`
+
+/** Window and editor state when something was not restored (diagnostics only). */
+const DEBUG_UI = `(() => {
+  const editor = document.querySelector('[data-testid="code-editor"]')
+  const box = editor?.getBoundingClientRect()
+  return { visibility: document.visibilityState, focus: document.hasFocus(), screen: document.querySelector('.app-shell')?.dataset.screen, editorBox: box ? [Math.round(box.width), Math.round(box.height)] : null, monaco: Boolean(editor?.querySelector('.monaco-editor')), lines: editor?.querySelectorAll('.view-line').length ?? 0 }
 })()`
 
 async function snapshot(page, api) {
@@ -38,11 +45,20 @@ async function snapshot(page, api) {
   return { ...ui, maxTasks: settings.maxTasks }
 }
 
-async function waitRestored(read, before, label) {
+async function waitRestored(read, before, label, debug) {
+  let last
   return waitUntil(async () => {
     const ui = await read()
+    last = ui
     return ui.ide && ui.editor.includes('unsaved edit') && ui.chatMessages >= before.chatMessages && ui.composer === before.composer ? ui : null
-  }, 60_000, label, 300)
+  }, 60_000, label, 300).catch((error) => {
+    // the state that was shown instead (helps to see which part was not restored)
+    console.log('[e2e] not restored:', JSON.stringify({ ...last, editor: last?.editor?.slice(-80) }))
+    return Promise.resolve(debug?.()).then((state) => {
+      if (state) console.log('[e2e] window/editor:', JSON.stringify(state))
+      throw error
+    })
+  })
 }
 
 test('sessions, drafts and settings survive navigation, reload, renderer crash and app restart', { timeout: 15 * 60_000 }, async () => {
@@ -63,8 +79,8 @@ test('sessions, drafts and settings survive navigation, reload, renderer crash a
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
 
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().click()
     await page.locator('[data-path="src/App.tsx"]').click()
     await page.locator('[data-testid="code-editor"] .view-lines').click()
@@ -75,6 +91,7 @@ test('sessions, drafts and settings survive navigation, reload, renderer crash a
     step('project opened, unsaved edit typed')
 
     // a session with a real (deterministic) plan
+    await go(page, 'Leitstand')
     await page.locator('#chat-input').fill('Ergänze in src/App.tsx eine Überschrift')
     await page.getByRole('button', { name: 'Senden' }).click()
     await page.getByRole('button', { name: 'Ausführung starten' }).waitFor({ timeout: 120_000 })
@@ -82,12 +99,17 @@ test('sessions, drafts and settings survive navigation, reload, renderer crash a
     step('session planned')
 
     // a setting typed and immediately left (no blur, no Enter)
-    await page.locator('nav.activity-bar button[aria-label="Einstellungen"]').click()
+    await setupSection(page, 'Einstellungen')
     await page.locator('label:has-text("Max. Teilaufgaben") input').fill('5')
-    await page.locator('nav.activity-bar button[aria-label="Explorer"]').click()
+    await codeView(page, 'Explorer')
     await waitUntil(async () => (await api('GET', '/settings')).data.maxTasks === 5, 5000, 'setting persisted after navigating away')
     step('setting persisted without blur')
 
+    // the code screen was just shown again: Monaco lays out on the next frames (the snapshot reads rendered lines)
+    await waitUntil(async () => (await page.evaluate(READ_UI)).editor.includes(UNSAVED), 10_000, 'editor laid out again', 100).catch(async (error) => {
+      console.log('[e2e] window/editor:', JSON.stringify(await page.evaluate(DEBUG_UI)))
+      throw error
+    })
     const before = await snapshot(page, api)
     assert.ok(before.editor.includes('unsaved edit from the persistence test'), before.editor)
     assert.equal(before.composer, COMPOSER_DRAFT)
@@ -98,11 +120,10 @@ test('sessions, drafts and settings survive navigation, reload, renderer crash a
     for (let index = 0; index < 32; index += 1) {
       const view = VIEWS[index % VIEWS.length]
       const started = Date.now()
-      await page.locator(`nav.activity-bar button[aria-label="${view}"]`).click()
-      await page.locator(`nav.activity-bar button[aria-label="${view}"].active`).waitFor()
+      await go(page, view)
       report.navigationMs.push(Date.now() - started)
     }
-    await page.locator('nav.activity-bar button[aria-label="Explorer"]').click()
+    await codeView(page, 'Explorer')
     assert.deepEqual(await snapshot(page, api), before, 'navigation must not change any state')
     step('32 navigations', { navigation: percentiles(report.navigationMs) })
 
@@ -118,10 +139,10 @@ test('sessions, drafts and settings survive navigation, reload, renderer crash a
     // --- renderer crash (raw CDP: Playwright cannot follow a crashed target) ---
     const cdp = await launchWithCdp(profile)
     try {
-      await waitRestored(() => cdp.evaluate(READ_UI), before, 'state restored after restart (cdp)')
+      await waitRestored(() => cdp.evaluate(READ_UI), before, 'state restored after restart (cdp)', () => cdp.evaluate(DEBUG_UI))
       await cdp.crashRenderer()
       const crashStarted = Date.now()
-      const afterCrash = await waitRestored(() => cdp.evaluate(READ_UI), before, 'state restored after renderer crash')
+      const afterCrash = await waitRestored(() => cdp.evaluate(READ_UI), before, 'state restored after renderer crash', () => cdp.evaluate(DEBUG_UI))
       report.crashRestoreMs = Date.now() - crashStarted
       assert.equal(afterCrash.tabDirty, 1)
       assert.equal(afterCrash.activeTab, before.activeTab)

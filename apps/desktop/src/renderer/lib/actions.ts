@@ -1,4 +1,5 @@
 import type { DraftEntry } from '../../shared/bridge'
+import { localPreviewUrl } from '../../shared/local-preview'
 import { api, ApiError, bridge, enc, errorMessage } from './api'
 import * as models from './editor-models'
 import * as persistence from './persistence'
@@ -14,6 +15,9 @@ import {
   type ComposerDraft,
   type DiffSource,
   type EditorTab,
+  type LeitstandVariant,
+  type Screen,
+  type SetupSection,
   type SideView,
   type Theme,
   type Toast,
@@ -70,13 +74,49 @@ export async function updateSettings(patch: Partial<Settings>) {
 // Window layout and per-project work state
 // ---------------------------------------------------------------------------
 
-export function setSideView(sideView: SideView) {
-  appStore.set((state) => ({ ui: { ...state.ui, sideView, sideOpen: true } }))
+export function setScreen(screen: Screen) {
+  if (appStore.get().ui.screen !== screen) appStore.set((state) => ({ ui: { ...state.ui, screen } }))
 }
 
-/** Activity bar click: clicking the view that is already shown collapses the side panel. */
+export function setSetupSection(setupSection: SetupSection) {
+  appStore.set((state) => ({ ui: { ...state.ui, screen: 'setup', setupSection } }))
+}
+
+export function setLeitstandVariant(leitstandVariant: LeitstandVariant) {
+  appStore.set((state) => ({ ui: { ...state.ui, leitstandVariant } }))
+}
+
+export function setInspectorOpen(inspectorOpen: boolean) {
+  appStore.set((state) => ({ ui: { ...state.ui, inspectorOpen } }))
+}
+
+/** Views of the earlier side bar live on screens now: each one opens where it is shown. */
+const VIEW_TARGET: Partial<Record<SideView, { screen: Screen; setup?: SetupSection }>> = {
+  tasks: { screen: 'sessions' },
+  models: { screen: 'models' },
+  usage: { screen: 'usage' },
+  agents: { screen: 'setup', setup: 'agents' },
+  plugins: { screen: 'setup', setup: 'plugins' },
+  skills: { screen: 'setup', setup: 'skills' },
+  mcp: { screen: 'setup', setup: 'mcp' },
+  diagnostics: { screen: 'setup', setup: 'diagnostics' },
+  settings: { screen: 'setup', setup: 'settings' },
+}
+
+export function setSideView(sideView: SideView) {
+  const target = VIEW_TARGET[sideView]
+  if (target) {
+    appStore.set((state) => ({ ui: { ...state.ui, screen: target.screen, setupSection: target.setup ?? state.ui.setupSection } }))
+    return
+  }
+  // explorer, search, git, projects: the side column of the code screen
+  appStore.set((state) => ({ ui: { ...state.ui, screen: 'code', sideView, sideOpen: true } }))
+}
+
+/** Code screen side tabs: clicking the view that is already shown collapses the side column. */
 export function toggleSideView(sideView: SideView) {
-  appStore.set((state) => ({ ui: { ...state.ui, sideView, sideOpen: !(state.ui.sideOpen && state.ui.sideView === sideView) } }))
+  if (VIEW_TARGET[sideView]) return setSideView(sideView)
+  appStore.set((state) => ({ ui: { ...state.ui, screen: 'code', sideView, sideOpen: !(state.ui.sideOpen && state.ui.sideView === sideView && state.ui.screen === 'code') } }))
 }
 
 export function setBottomTab(bottomTab: BottomTab) {
@@ -133,16 +173,29 @@ export function setComposerDraft(sessionId: string | undefined, patch: Partial<C
 // Projects
 // ---------------------------------------------------------------------------
 
+/** Opening a project sets up git (first commit); say what happened and what was left out. */
+function reportRepository(project: Project) {
+  const repository = project.repository
+  if (!repository) return
+  if (repository.committed) {
+    const left = repository.excluded?.length ? ` Nicht aufgenommen (vertraulich/Abhängigkeiten, bitte in die .gitignore eintragen): ${repository.excluded.slice(0, 6).join(', ')}${repository.excluded.length > 6 ? ' …' : ''}.` : ''
+    notify(`${repository.initialized ? 'Git-Repository angelegt' : 'Ersten Commit angelegt'} – die Agenten arbeiten in Worktrees auf diesem Stand.${left}`, 'success')
+  } else if (repository.skipped) notify(`Kein automatischer erster Commit: ${repository.skipped}`, 'info')
+}
+
 export async function openProjectPath(folder: string) {
   const opened = await api.post<Project>('/projects/open', { path: folder })
+  reportRepository(opened)
   await activateProject(opened)
-  setSideView('explorer')
+  // the explorer is preselected for the code screen; the current screen stays (Leitstand: chat)
+  appStore.set((state) => ({ ui: { ...state.ui, sideView: 'explorer', sideOpen: true } }))
 }
 
 /** Selecting the project that is already open keeps all of its state (tabs, session, terminals). */
 export async function selectProject(project: Project) {
   const current = appStore.get().project
   const opened = await api.post<Project>('/projects/open', { path: project.repoPath, name: project.name })
+  reportRepository(opened)
   if (current?.id === opened.id) {
     appStore.set({ project: { ...current, ...opened } })
     return
@@ -191,7 +244,7 @@ const fileTabId = (path: string) => `file:${path}`
 
 interface PersistedTab {
   id: string
-  kind: 'file' | 'diff'
+  kind: 'file' | 'diff' | 'preview'
   path: string
   title: string
   source?: DiffSource
@@ -199,7 +252,7 @@ interface PersistedTab {
 
 persistence.registerWorkspaceExtra((projectId) => {
   const { tabs, activeTabId } = editorStore.get()
-  const persisted: PersistedTab[] = tabs.filter((tab) => tab.kind === 'file' || tab.source).map((tab) => ({ id: tab.id, kind: tab.kind, path: tab.path, title: tab.title, source: tab.source }))
+  const persisted: PersistedTab[] = tabs.filter((tab) => tab.kind === 'file' || tab.kind === 'preview' || tab.source).map((tab) => ({ id: tab.id, kind: tab.kind, path: tab.path, title: tab.title, source: tab.source }))
   return { tabs: persisted, activeTabId, viewStates: models.viewStates(projectId) }
 })
 persistence.registerBeforeFlush(() => models.flushDrafts())
@@ -269,7 +322,9 @@ async function restoreTabs(projectId: string, raw: Record<string, unknown>) {
     const fileTabs = saved.filter((tab) => tab.kind === 'file' && typeof tab.path === 'string')
     const orphanDrafts = drafts.filter((draft) => !fileTabs.some((tab) => tab.path === draft.path))
     const loaded = await Promise.all([
-      ...saved.map((tab) => (tab.kind === 'file' ? loadFileTab(projectId, tab.path, drafts.find((draft) => draft.path === tab.path), viewStates[tab.id]) : loadDiffTab(tab))),
+      ...saved.map((tab) =>
+        tab.kind === 'file' ? loadFileTab(projectId, tab.path, drafts.find((draft) => draft.path === tab.path), viewStates[tab.id]) : tab.kind === 'preview' ? Promise.resolve(previewTab(tab.path)) : loadDiffTab(tab),
+      ),
       // Unsaved edits whose tab is gone (e.g. closed by a crash) come back as tabs.
       ...orphanDrafts.map((draft) => loadFileTab(projectId, draft.path, draft)),
     ])
@@ -297,6 +352,8 @@ export async function openFile(path: string) {
   const project = appStore.get().project
   if (!project) return
   const id = fileTabId(path)
+  // opening a file always shows it, wherever it was requested from
+  setScreen('code')
   if (editorStore.get().tabs.some((tab) => tab.id === id)) {
     setActiveTab(id)
     return
@@ -310,9 +367,33 @@ export async function openFile(path: string) {
   editorStore.set((state) => ({ tabs: state.tabs.some((existing) => existing.id === id) ? state.tabs : [...state.tabs, tab], activeTabId: id }))
 }
 
+/** A preview tab per local server (origin): opening another page of it reuses the tab. */
+function previewTab(url: string): EditorTab | undefined {
+  const target = localPreviewUrl(url)
+  if (!target) return undefined
+  const parsed = new URL(target)
+  return { id: `preview:${parsed.origin}`, kind: 'preview', path: target, title: parsed.host, dirty: false, readOnly: true }
+}
+
+/** Shows a local dev server (http://localhost:…) in the code screen instead of the external browser. */
+export function openPreview(url: string): boolean {
+  const tab = previewTab(url)
+  if (!tab) return false
+  setScreen('code')
+  editorStore.set((state) => ({ tabs: state.tabs.some((existing) => existing.id === tab.id) ? state.tabs.map((existing) => (existing.id === tab.id ? { ...existing, path: tab.path } : existing)) : [...state.tabs, tab], activeTabId: tab.id }))
+  return true
+}
+
+/** The page in a preview tab navigated (a link inside it): the tab keeps the current address. */
+export function updatePreviewUrl(tabId: string, url: string) {
+  const target = localPreviewUrl(url)
+  if (target) updateTab(tabId, { path: target })
+}
+
 export function openDiff(input: { title: string; path: string; original: string; modified: string; source?: DiffSource }) {
   const id = `diff:${input.title}:${input.path}`
   const tab: EditorTab = { id, kind: 'diff', path: input.path, title: input.title, content: input.modified, original: input.original, dirty: false, readOnly: true, language: input.path.endsWith('.diff') ? 'diff' : languageFor(input.path), source: input.source }
+  setScreen('code')
   editorStore.set((state) => ({ tabs: [...state.tabs.filter((existing) => existing.id !== id), tab], activeTabId: id }))
 }
 
@@ -402,6 +483,8 @@ export function upsertSessionSummary(summary: Partial<SessionSummary> & { id: st
 /** Shows a session. Nothing is cancelled or reset by switching: the runtime keeps running its work. */
 export async function selectSession(sessionId: string | undefined) {
   if (appStore.get().workspace.activeSessionId !== sessionId) updateWorkspace({ activeSessionId: sessionId })
+  // a session that is shown gets its tab back
+  if (sessionId && appStore.get().workspace.closedSessionTabs?.includes(sessionId)) updateWorkspace((workspace) => ({ closedSessionTabs: workspace.closedSessionTabs?.filter((id) => id !== sessionId) }))
   if (sessionStore.get().active?.id !== sessionId) sessionStore.set({ active: undefined, task: undefined, execution: undefined, events: [], selectedSubtaskId: undefined, older: undefined })
   if (!sessionId) return
   await reloadActiveSession()
@@ -483,7 +566,7 @@ export function setSelectedSubtask(subtaskId: string | undefined) {
 /** All execution entry points lead to the same session workflow, including a hidden chat panel. */
 export async function openWorkflow(sessionId?: string) {
   if (sessionId && appStore.get().workspace.activeSessionId !== sessionId) await selectSession(sessionId)
-  setLayout({ chatOpen: true })
+  setScreen('leitstand')
   updateWorkspace({ chatView: 'workflow' })
   requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-testid="workflow"]')?.focus({ preventScroll: true }))
 }
@@ -552,8 +635,19 @@ export function discardPending(clientId: string) {
   if (message && !appStore.get().workspace.composer[composerKey(message.sessionId)]?.text) setComposerDraft(message.sessionId, { text: message.content })
 }
 
+/** Closes a session tab in the header. The session stays (screen "Sitzungen"); its work keeps running. */
+export async function closeSessionTab(sessionId: string) {
+  const workspace = appStore.get().workspace
+  const closed = [...new Set([...(workspace.closedSessionTabs ?? []), sessionId])].slice(-500)
+  updateWorkspace({ closedSessionTabs: closed })
+  if (workspace.activeSessionId !== sessionId) return
+  const next = sessionStore.get().list.find((entry) => entry.id !== sessionId && !entry.archivedAt && !closed.includes(entry.id))
+  await selectSession(next?.id)
+}
+
 export function newSession() {
   updateWorkspace({ chatView: 'workflow' })
+  setScreen('leitstand')
   void selectSession(undefined)
 }
 
@@ -640,6 +734,8 @@ async function ensureDefaultTerminal() {
 /** Starts a terminal that runs an allowlisted command (official login/install commands). */
 export async function runInTerminal(command: string[], title: string) {
   await createTerminal({ command, title })
+  // terminals live in the bottom panel of the code screen (onboarding has its own terminal view)
+  if (appStore.get().settings?.onboarding.completed) setScreen('code')
   setBottomTab('terminal')
   setBottomOpen(true)
 }

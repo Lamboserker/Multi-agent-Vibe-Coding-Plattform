@@ -3,7 +3,7 @@ import { api, bridge } from './api'
 import * as actions from './actions'
 import * as persistence from './persistence'
 import { planningProgressForEvent } from './planning-progress'
-import { appStore, editorStore, jobsStore, liveStore, planProgressStore, pluginStore, sessionStore, type LiveLine, type BottomTab, type SideView, type Theme, type UiState } from './stores'
+import { appStore, editorStore, jobsStore, liveStore, planProgressStore, pluginStore, sessionStore, type LiveLine, type BottomTab, type Screen, type SetupSection, type SideView, type Theme, type UiState } from './stores'
 import type { Project, VersionedSettings } from './types'
 
 /*
@@ -16,6 +16,8 @@ import type { Project, VersionedSettings } from './types'
 
 const SIDE_VIEWS: SideView[] = ['projects', 'explorer', 'search', 'git', 'tasks', 'agents', 'models', 'plugins', 'skills', 'mcp', 'usage', 'diagnostics', 'settings']
 const BOTTOM_TABS: BottomTab[] = ['terminal', 'logs', 'tests', 'diff', 'run', 'problems']
+const SCREENS: Screen[] = ['leitstand', 'code', 'review', 'sessions', 'models', 'usage', 'setup']
+const SETUP_SECTIONS: SetupSection[] = ['onboarding', 'settings', 'agents', 'plugins', 'skills', 'mcp', 'diagnostics']
 
 function throttle(fn: () => unknown, ms: number) {
   let timer: number | undefined
@@ -43,6 +45,10 @@ async function restoreUi() {
     appStore.set((state) => ({
       ui: {
         theme: saved.theme === 'light' || saved.theme === 'dark' ? (saved.theme as Theme) : state.ui.theme,
+        screen: SCREENS.includes(saved.screen as Screen) ? (saved.screen as Screen) : state.ui.screen,
+        setupSection: SETUP_SECTIONS.includes(saved.setupSection as SetupSection) ? (saved.setupSection as SetupSection) : state.ui.setupSection,
+        leitstandVariant: saved.leitstandVariant === 'tiles' ? 'tiles' : 'graph',
+        inspectorOpen: saved.inspectorOpen !== false,
         sideView: SIDE_VIEWS.includes(saved.sideView as SideView) ? (saved.sideView as SideView) : state.ui.sideView,
         bottomTab: BOTTOM_TABS.includes(saved.bottomTab as BottomTab) ? (saved.bottomTab as BottomTab) : state.ui.bottomTab,
         bottomOpen: typeof saved.bottomOpen === 'boolean' ? saved.bottomOpen : state.ui.bottomOpen,
@@ -186,7 +192,7 @@ const refreshTask = throttle(() => actions.reloadTask(), 500)
 const refreshExecution = throttle(() => actions.reloadExecution(), 800)
 const refreshActivity = throttle(() => actions.loadActivity(), 500)
 
-const TASK_EVENTS = new Set(['plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'applied', 'apply_rejected', 'discarded', 'undone', 'auto_applied'])
+const TASK_EVENTS = new Set(['subtask_hint', 'plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'applied', 'apply_rejected', 'discarded', 'undone', 'auto_applied'])
 const ACTIVITY_EVENTS = new Set(['plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'run_paused', 'run_resumed', 'discarded', 'applied'])
 const MAX_LIVE_LINES = 2000
 

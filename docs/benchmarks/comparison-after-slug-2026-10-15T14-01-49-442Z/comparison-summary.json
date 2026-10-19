@@ -1,0 +1,54 @@
+{
+  "folder": "comparison-after-slug-2026-10-15T14-01-49-442Z",
+  "phase": "after",
+  "scenario": "slug",
+  "success": true,
+  "error": null,
+  "totalMs": 43467.60009765625,
+  "localMs": 3587.0367999999944,
+  "localOutputTokens": 159,
+  "allOutputTokens": 688,
+  "modelCalls": 2,
+  "localModelCalls": 1,
+  "premiumModelCalls": 1,
+  "repairs": 0,
+  "controlledFaults": 0,
+  "agentCapabilities": [
+    {
+      "availableTools": [
+        "load_skill",
+        "read_skill_file"
+      ],
+      "instructionChars": 2866,
+      "preferStructured": true
+    }
+  ],
+  "local": [
+    {
+      "model": "qwen3:4b",
+      "options": {
+        "num_ctx": 16384,
+        "temperature": 0.15,
+        "num_predict": 2048
+      },
+      "think": false,
+      "keepAlive": "15m",
+      "structured": true,
+      "durationMs": 3587.0367999999944,
+      "outputTokens": 159,
+      "inputTokens": 3686,
+      "doneReason": "stop",
+      "toolNames": [],
+      "contentChars": 530
+    }
+  ],
+  "premium": [
+    {
+      "name": "codex.createPlan.start",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "outputTokens": 529,
+      "durationMs": 24192.230600000003
+    }
+  ]
+}

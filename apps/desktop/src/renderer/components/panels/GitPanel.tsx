@@ -46,7 +46,7 @@ export function GitPanel() {
       <>
         <PanelHeader title="Git" />
         <div className="panel-body stack">
-          <div className="callout warn">Dieser Ordner ist kein Git-Repository. Isolierte Agenten-Ausführung benötigt Git (Worktrees).</div>
+          <div className="callout warn">Dieser Ordner hat noch kein Git. Die App richtet es beim ersten Lauf automatisch ein – oder jetzt sofort:</div>
           <AsyncButton className="btn primary" onClick={async () => { await api.post(`/projects/${project.id}/git/init`); await load() }}>
             Git initialisieren (mit erstem Commit)
           </AsyncButton>

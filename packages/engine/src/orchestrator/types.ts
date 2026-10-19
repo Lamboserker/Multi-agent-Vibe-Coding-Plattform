@@ -229,6 +229,8 @@ export interface ExecutionInput {
   /** Errors from previous attempts (validation output, failing tests) for repair runs. */
   previousFailures?: string
   resumeSessionId?: string
+  /** The agent role and the skills relevant for the task (same guidance local agents get). */
+  guidance?: string
 }
 
 export interface ExecutionResult {

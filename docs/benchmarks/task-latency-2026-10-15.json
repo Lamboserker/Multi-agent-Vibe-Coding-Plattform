@@ -1,0 +1,1394 @@
+{
+  "measuredAt": "2026-10-15",
+  "baselineCommit": "bc1bd58",
+  "hardware": {
+    "cpu": "AMD Ryzen 7 5800X, 8 cores / 16 threads",
+    "ramGiB": 32,
+    "ramType": "DDR4",
+    "ramConfiguredMHz": 3600,
+    "gpu": "NVIDIA GeForce RTX 4060 Ti",
+    "vramMiB": 16380,
+    "driver": "617.42",
+    "os": "Windows 11 Pro 10.0.26300",
+    "node": "24.14.1",
+    "ollama": "0.30.10",
+    "codexCli": "0.153.4",
+    "claudeCli": "2.1.86"
+  },
+  "notes": [
+    "Real local inference, real git worktrees, frozen acceptance tests and final integration checks. No mocked task/model timings.",
+    "Local series before: fix n=2, feature/refactor n=1. After: each n=2. Warm models, num_ctx=16384.",
+    "Initial LF-vs-CRLF harness comparison corrected only after verifying no test diff and a clean user checkout; timing unchanged.",
+    "Premium planning series: two repetitions per fixture. CLI defaults and existing subscription authentication. Only structural plan checks in planning-only series.",
+    "Experimental iterations with failures are not release measurements. One overlapping cold-start trial was excluded; serial paired cold runs are reported separately.",
+    "8 GiB CPU-only and 4 GiB GPU hardware are simulated policy tests, not physical latency measurements.",
+    "The configured Codex model gpt-6.1-sol was rejected by the CLI during an explicitly pinned probe. User configuration was not changed; paired cold runs pin the catalog-supported gpt-6-astra. Earlier planning-only runs used CLI defaults and existing automatic model fallback; their exact returned model IDs were not retained."
+  ],
+  "series": {
+    "before-local": {
+      "model": "qwen3:4b",
+      "planner": "none",
+      "plannerModel": "CLI default",
+      "cold": false,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 83360,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 75244,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 11068,
+                "outputTokens": 4786,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 78798,
+              "logs": [
+                "qwen3:4b: tools mode, 2 step(s), 1 tool call(s) (0 invalid, 0 recovered from text), 11068+4786 tokens, 75244 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 1999
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 996,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          },
+          "harnessCorrection": "Original harness compared LF fixture text to Git CRLF checkout literally. Normalization added; tests unchanged, user checkout clean, final checks passed."
+        },
+        {
+          "scenario": "feature",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 263013,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 113828,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 3378,
+                "outputTokens": 7119,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            },
+            {
+              "model": "qwen3:4b",
+              "durationMs": 91831,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 15759,
+                "outputTokens": 5367,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            },
+            {
+              "model": "qwen3:4b",
+              "durationMs": 42430,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 4046,
+                "outputTokens": 2689,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "validation_failed",
+              "durationMs": 116518,
+              "logs": [
+                "qwen3:4b: tools mode, 1 step(s), 6 tool call(s) (0 invalid, 0 recovered from text), 3378+7119 tokens, 113828 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "failed",
+                  "durationMs": 979
+                },
+                {
+                  "kind": "test",
+                  "status": "failed",
+                  "durationMs": 1043,
+                  "testsPassed": 0,
+                  "testsFailed": 1
+                }
+              ]
+            },
+            {
+              "outcome": "validation_failed",
+              "durationMs": 95581,
+              "logs": [
+                "qwen3:4b: tools mode, 2 step(s), 2 tool call(s) (0 invalid, 0 recovered from text), 15759+5367 tokens, 91831 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2124
+                },
+                {
+                  "kind": "test",
+                  "status": "failed",
+                  "durationMs": 983,
+                  "testsPassed": 0,
+                  "testsFailed": 1
+                }
+              ]
+            },
+            {
+              "outcome": "success",
+              "durationMs": 46116,
+              "logs": [
+                "qwen3:4b: tools mode, 1 step(s), 2 tool call(s) (0 invalid, 0 recovered from text), 4046+2689 tokens, 42430 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2091
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 1021,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          },
+          "harnessCorrection": "Original harness compared LF fixture text to Git CRLF checkout literally. Normalization added; tests unchanged, user checkout clean, final checks passed."
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 176628,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 110173,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 3133,
+                "outputTokens": 6819,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            },
+            {
+              "model": "qwen3:4b",
+              "durationMs": 53309,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 10224,
+                "outputTokens": 3088,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "validation_failed",
+              "durationMs": 114151,
+              "logs": [
+                "qwen3:4b: tools mode, 1 step(s), 8 tool call(s) (2 invalid, 0 recovered from text), 3133+6819 tokens, 110173 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2190
+                },
+                {
+                  "kind": "test",
+                  "status": "failed",
+                  "durationMs": 1114,
+                  "testsPassed": 0,
+                  "testsFailed": 1
+                }
+              ]
+            },
+            {
+              "outcome": "success",
+              "durationMs": 57678,
+              "logs": [
+                "qwen3:4b: tools mode, 2 step(s), 2 tool call(s) (0 invalid, 0 recovered from text), 10224+3088 tokens, 53309 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2452
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 1063,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          },
+          "harnessCorrection": "Original harness compared LF fixture text to Git CRLF checkout literally. Normalization added; tests unchanged, user checkout clean, final checks passed."
+        },
+        {
+          "scenario": "fix",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 82284,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 74008,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 3346,
+                "outputTokens": 4526,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 77821,
+              "logs": [
+                "qwen3:4b: tools mode, 1 step(s), 3 tool call(s) (0 invalid, 0 recovered from text), 3346+4526 tokens, 74008 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2108
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 1142,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          },
+          "harnessCorrection": "Original harness compared LF fixture text to Git CRLF checkout literally. Normalization added; tests unchanged, user checkout clean, final checks passed."
+        }
+      ]
+    },
+    "after-release": {
+      "model": "qwen3:4b",
+      "planner": "none",
+      "plannerModel": "CLI default",
+      "cold": false,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 11590,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 2060,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2920,
+                "outputTokens": 113,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 6139,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 1 tool call(s) (0 invalid, 0 recovered from text), 2920+113 tokens, 2060 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2297
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 1209,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          }
+        },
+        {
+          "scenario": "feature",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 157736,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 2865,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2952,
+                "outputTokens": 172,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            },
+            {
+              "model": "qwen3:4b",
+              "durationMs": 142359,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 4072,
+                "outputTokens": 9284,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "validation_failed",
+              "durationMs": 6602,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 2 tool call(s) (0 invalid, 0 recovered from text), 2952+172 tokens, 2865 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2055
+                },
+                {
+                  "kind": "test",
+                  "status": "failed",
+                  "durationMs": 1031,
+                  "testsPassed": 0,
+                  "testsFailed": 1
+                }
+              ]
+            },
+            {
+              "outcome": "success",
+              "durationMs": 146162,
+              "logs": [
+                "qwen3:4b: tools mode, 1 step(s), 3 tool call(s) (0 invalid, 0 recovered from text), 4072+9284 tokens, 142359 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2146
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 1071,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          }
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 11853,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 3841,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2709,
+                "outputTokens": 250,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 7438,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 3 tool call(s) (0 invalid, 0 recovered from text), 2709+250 tokens, 3841 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2063
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 958,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          }
+        },
+        {
+          "scenario": "fix",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 9746,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 1982,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2920,
+                "outputTokens": 113,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 5439,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 1 tool call(s) (0 invalid, 0 recovered from text), 2920+113 tokens, 1982 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 1972
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 956,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          }
+        },
+        {
+          "scenario": "feature",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 157720,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 2733,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2952,
+                "outputTokens": 172,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            },
+            {
+              "model": "qwen3:4b",
+              "durationMs": 143429,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 10596,
+                "outputTokens": 2723,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "validation_failed",
+              "durationMs": 6343,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 2 tool call(s) (0 invalid, 0 recovered from text), 2952+172 tokens, 2733 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2037
+                },
+                {
+                  "kind": "test",
+                  "status": "failed",
+                  "durationMs": 950,
+                  "testsPassed": 0,
+                  "testsFailed": 1
+                }
+              ]
+            },
+            {
+              "outcome": "success",
+              "durationMs": 146971,
+              "logs": [
+                "qwen3:4b: tools mode, 2 step(s), 3 tool call(s) (0 invalid, 0 recovered from text), 10596+2723 tokens, 143429 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2028
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 980,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          }
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 12185,
+          "planningMs": 0,
+          "contextTokens": 0,
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 4055,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2709,
+                "outputTokens": 250,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 7669,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 3 tool call(s) (0 invalid, 0 recovered from text), 2709+250 tokens, 4055 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 2074
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 1006,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          }
+        }
+      ]
+    },
+    "before-codex": {
+      "model": "qwen3:4b",
+      "planner": "codex",
+      "plannerModel": "CLI default",
+      "cold": false,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 18325,
+          "planningMs": 18097,
+          "contextTokens": 9373,
+          "planUsage": {
+            "inputTokens": 26111,
+            "outputTokens": 388,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 19205,
+          "planningMs": 19066,
+          "contextTokens": 9371,
+          "planUsage": {
+            "inputTokens": 26139,
+            "outputTokens": 528,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 18364,
+          "planningMs": 18230,
+          "contextTokens": 8560,
+          "planUsage": {
+            "inputTokens": 25153,
+            "outputTokens": 542,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "fix",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 14896,
+          "planningMs": 14768,
+          "contextTokens": 9373,
+          "planUsage": {
+            "inputTokens": 26109,
+            "outputTokens": 410,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 19471,
+          "planningMs": 19340,
+          "contextTokens": 9371,
+          "planUsage": {
+            "inputTokens": 26137,
+            "outputTokens": 555,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 17437,
+          "planningMs": 17306,
+          "contextTokens": 8560,
+          "planUsage": {
+            "inputTokens": 25153,
+            "outputTokens": 529,
+            "cachedInputTokens": 11904,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        }
+      ]
+    },
+    "after-codex": {
+      "model": "qwen3:4b",
+      "planner": "codex",
+      "plannerModel": "CLI default",
+      "cold": false,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 17414,
+          "planningMs": 17236,
+          "contextTokens": 239,
+          "planUsage": {
+            "inputTokens": 14896,
+            "outputTokens": 318,
+            "cachedInputTokens": 11904,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 20527,
+          "planningMs": 20387,
+          "contextTokens": 237,
+          "planUsage": {
+            "inputTokens": 14926,
+            "outputTokens": 520,
+            "cachedInputTokens": 11904,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 17685,
+          "planningMs": 17531,
+          "contextTokens": 304,
+          "planUsage": {
+            "inputTokens": 15020,
+            "outputTokens": 542,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "fix",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 13691,
+          "planningMs": 13562,
+          "contextTokens": 239,
+          "planUsage": {
+            "inputTokens": 14896,
+            "outputTokens": 333,
+            "cachedInputTokens": 11904,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 16293,
+          "planningMs": 16169,
+          "contextTokens": 237,
+          "planUsage": {
+            "inputTokens": 14924,
+            "outputTokens": 527,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 17727,
+          "planningMs": 17575,
+          "contextTokens": 304,
+          "planUsage": {
+            "inputTokens": 15020,
+            "outputTokens": 537,
+            "cachedInputTokens": 11904,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        }
+      ]
+    },
+    "before-claude": {
+      "model": "qwen3:4b",
+      "planner": "claude-code",
+      "plannerModel": "CLI default",
+      "cold": false,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 15382,
+          "planningMs": 15231,
+          "contextTokens": 9373,
+          "planUsage": {
+            "inputTokens": 37353,
+            "outputTokens": 633,
+            "cachedInputTokens": 21328,
+            "measured": true,
+            "apiEquivalentUsd": 0.07598415,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 16349,
+          "planningMs": 16197,
+          "contextTokens": 9371,
+          "planUsage": {
+            "inputTokens": 37351,
+            "outputTokens": 563,
+            "cachedInputTokens": 21364,
+            "measured": true,
+            "apiEquivalentUsd": 0.07480245,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 16896,
+          "planningMs": 16750,
+          "contextTokens": 8560,
+          "planUsage": {
+            "inputTokens": 35078,
+            "outputTokens": 682,
+            "cachedInputTokens": 20151,
+            "measured": true,
+            "apiEquivalentUsd": 0.07224855,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "fix",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 13832,
+          "planningMs": 13704,
+          "contextTokens": 9373,
+          "planUsage": {
+            "inputTokens": 37339,
+            "outputTokens": 619,
+            "cachedInputTokens": 21330,
+            "measured": true,
+            "apiEquivalentUsd": 0.07571475,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 15872,
+          "planningMs": 15742,
+          "contextTokens": 9371,
+          "planUsage": {
+            "inputTokens": 37492,
+            "outputTokens": 704,
+            "cachedInputTokens": 21362,
+            "measured": true,
+            "apiEquivalentUsd": 0.0774531,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 16280,
+          "planningMs": 16154,
+          "contextTokens": 8560,
+          "planUsage": {
+            "inputTokens": 35066,
+            "outputTokens": 670,
+            "cachedInputTokens": 20147,
+            "measured": true,
+            "apiEquivalentUsd": 0.07203735,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        }
+      ]
+    },
+    "after-claude": {
+      "model": "qwen3:4b",
+      "planner": "claude-code",
+      "plannerModel": "CLI default",
+      "cold": false,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 11749,
+          "planningMs": 11574,
+          "contextTokens": 239,
+          "planUsage": {
+            "inputTokens": 9740,
+            "outputTokens": 520,
+            "cachedInputTokens": 7414,
+            "measured": true,
+            "apiEquivalentUsd": 0.0187437,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 13972,
+          "planningMs": 13824,
+          "contextTokens": 237,
+          "planUsage": {
+            "inputTokens": 9855,
+            "outputTokens": 563,
+            "cachedInputTokens": 7661,
+            "measured": true,
+            "apiEquivalentUsd": 0.0189678,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 13602,
+          "planningMs": 13471,
+          "contextTokens": 304,
+          "planUsage": {
+            "inputTokens": 10085,
+            "outputTokens": 589,
+            "cachedInputTokens": 7765,
+            "measured": true,
+            "apiEquivalentUsd": 0.0198615,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "fix",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 11669,
+          "planningMs": 11545,
+          "contextTokens": 239,
+          "planUsage": {
+            "inputTokens": 9697,
+            "outputTokens": 473,
+            "cachedInputTokens": 7629,
+            "measured": true,
+            "apiEquivalentUsd": 0.0171357,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "feature",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 18136,
+          "planningMs": 18009,
+          "contextTokens": 237,
+          "planUsage": {
+            "inputTokens": 9848,
+            "outputTokens": 560,
+            "cachedInputTokens": 7661,
+            "measured": true,
+            "apiEquivalentUsd": 0.01889655,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        },
+        {
+          "scenario": "refactor",
+          "repeat": 1,
+          "success": true,
+          "totalMs": 15074,
+          "planningMs": 14947,
+          "contextTokens": 304,
+          "planUsage": {
+            "inputTokens": 10232,
+            "outputTokens": 733,
+            "cachedInputTokens": 7765,
+            "measured": true,
+            "apiEquivalentUsd": 0.02257275,
+            "billing": "subscription"
+          },
+          "modelCalls": [],
+          "attempts": []
+        }
+      ]
+    },
+    "before-e2e-serial": {
+      "model": "qwen3:4b",
+      "planner": "codex",
+      "plannerModel": "gpt-6-astra",
+      "cold": true,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 119194,
+          "planningMs": 13555,
+          "contextTokens": 9373,
+          "planUsage": {
+            "inputTokens": 26107,
+            "outputTokens": 410,
+            "cachedInputTokens": 11904,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 97785,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 19515,
+                "outputTokens": 6422,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 101274,
+              "logs": [
+                "qwen3:4b: tools mode, 3 step(s), 5 tool call(s) (1 invalid, 0 recovered from text), 19515+6422 tokens, 97785 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 1989
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 947,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          },
+          "localResponses": [
+            {
+              "structured": false,
+              "thinkingRequested": false,
+              "loadMs": 3131,
+              "promptTokens": 3529,
+              "completionTokens": 3627,
+              "totalDurationMs": 53753
+            },
+            {
+              "structured": false,
+              "thinkingRequested": false,
+              "loadMs": 157,
+              "promptTokens": 7110,
+              "completionTokens": 1690,
+              "totalDurationMs": 26219
+            },
+            {
+              "structured": false,
+              "thinkingRequested": false,
+              "loadMs": 141,
+              "promptTokens": 8876,
+              "completionTokens": 1105,
+              "totalDurationMs": 17796
+            }
+          ]
+        }
+      ]
+    },
+    "after-e2e-serial": {
+      "model": "qwen3:4b",
+      "planner": "codex",
+      "plannerModel": "gpt-6-astra",
+      "cold": true,
+      "context": 16384,
+      "samples": [
+        {
+          "scenario": "fix",
+          "repeat": 0,
+          "success": true,
+          "totalMs": 26052,
+          "planningMs": 13690,
+          "contextTokens": 239,
+          "planUsage": {
+            "inputTokens": 14894,
+            "outputTokens": 398,
+            "cachedInputTokens": 0,
+            "measured": true,
+            "billing": "subscription"
+          },
+          "modelCalls": [
+            {
+              "model": "qwen3:4b",
+              "durationMs": 4544,
+              "status": "ok",
+              "usage": {
+                "inputTokens": 2812,
+                "outputTokens": 84,
+                "cachedInputTokens": 0,
+                "measured": true,
+                "billing": "subscription"
+              }
+            }
+          ],
+          "attempts": [
+            {
+              "outcome": "success",
+              "durationMs": 7996,
+              "logs": [
+                "qwen3:4b: structured mode, 1 step(s), 1 tool call(s) (0 invalid, 0 recovered from text), 2812+84 tokens, 4544 ms."
+              ],
+              "checks": [
+                {
+                  "kind": "typecheck",
+                  "status": "passed",
+                  "durationMs": 1965
+                },
+                {
+                  "kind": "test",
+                  "status": "passed",
+                  "durationMs": 956,
+                  "testsPassed": 1,
+                  "testsFailed": 0
+                }
+              ]
+            }
+          ],
+          "finalValidation": {
+            "ok": true,
+            "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+          },
+          "localResponses": [
+            {
+              "structured": true,
+              "thinkingRequested": false,
+              "loadMs": 2835,
+              "promptTokens": 2812,
+              "completionTokens": 84,
+              "totalDurationMs": 4534
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "localComparison": {
+    "fix": {
+      "beforeSamples": 2,
+      "afterSamples": 2,
+      "beforeSuccesses": 2,
+      "afterSuccesses": 2,
+      "beforeMeanMs": 82822,
+      "afterMeanMs": 10668,
+      "reductionPercent": 87.11936442008162
+    },
+    "feature": {
+      "beforeSamples": 1,
+      "afterSamples": 2,
+      "beforeSuccesses": 1,
+      "afterSuccesses": 2,
+      "beforeMeanMs": 263013,
+      "afterMeanMs": 157728,
+      "reductionPercent": 40.03034070559251
+    },
+    "refactor": {
+      "beforeSamples": 1,
+      "afterSamples": 2,
+      "beforeSuccesses": 1,
+      "afterSuccesses": 2,
+      "beforeMeanMs": 176628,
+      "afterMeanMs": 12019,
+      "reductionPercent": 93.19530312294766
+    }
+  },
+  "pairedColdComparison": {
+    "beforeMs": 119194,
+    "afterMs": 26052,
+    "n": 1,
+    "reductionPercent": 78.1431951272715
+  },
+  "validation": {
+    "engineAndApi": {
+      "passed": 279,
+      "skipped": 8,
+      "failed": 0,
+      "command": "node packages/engine/node_modules/vitest/vitest.mjs run --config vitest.stabilization.config.ts"
+    },
+    "desktop": {
+      "passed": 52,
+      "failed": 0,
+      "command": "pnpm --filter @multi-ai-coder/desktop test"
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "pnpm typecheck"
+    },
+    "build": {
+      "passed": true,
+      "command": "pnpm --filter @multi-ai-coder/desktop build"
+    }
+  },
+  "ollamaRuntime": {
+    "numParallel": 1,
+    "flashAttention": true,
+    "kvCacheType": "q8_0",
+    "model": "qwen3:4b",
+    "modelId": "359d7dd4bcda",
+    "quantization": "Q4_K_M",
+    "placement": "100% GPU observed",
+    "contextTokens": 16384
+  }
+}

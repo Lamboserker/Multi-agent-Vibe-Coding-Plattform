@@ -5,7 +5,7 @@ import { summarizeUsage, type UsageCall } from '../cost/usage.js'
 import { parseNvidiaSmi, type HardwareProfile } from '../hardware/detect.js'
 import { buildContextDigest, buildRepoIndex, extractSymbols, rankFiles, searchCode } from '../index/repo-index.js'
 import { createTempRepo } from '../test-utils.js'
-import { classifyFit, lookupRegistryModel, recommendModels, type RegistryModelInfo } from './catalog.js'
+import { classifyFit, estimateRuntimeMemory, lookupRegistryModel, recommendModels, runtimeContextTokens, type RegistryModelInfo } from './catalog.js'
 
 const GB = 1024 ** 3
 
@@ -35,6 +35,17 @@ const registry: RegistryModelInfo[] = [
 ]
 
 describe('hardware parsing and fit classification', () => {
+  it('sizes arbitrary models for reliable GPU and weak CPU profiles, respecting both limits', () => {
+    expect(runtimeContextTokens(16384, 32768, 4 * GB, profile())).toBe(16384)
+    const smallGpu = profile({ gpus: [{ name: 'small GPU', vendor: 'other', vramTotalMb: 4096, vramReliable: true, vramSource: 'registry' }] })
+    const tokens = runtimeContextTokens(32768, 32768, 2 * GB, smallGpu)
+    expect(tokens).toBeLessThan(16384)
+    expect(estimateRuntimeMemory(2 * GB, tokens)).toBeLessThanOrEqual(4096 * 1024 ** 2 * 0.85)
+    const weak = profile({ gpus: [], memory: { totalBytes: 8 * GB, freeBytes: 4 * GB } })
+    expect(runtimeContextTokens(16384, 32768, GB, weak)).toBe(8192)
+    expect(runtimeContextTokens(4096, 2048, GB, weak)).toBe(2048)
+    expect(runtimeContextTokens(16384, 32768, 20 * GB, profile())).toBe(4096)
+  })
   it('parses nvidia-smi CSV', () => {
     expect(parseNvidiaSmi('NVIDIA GeForce RTX 4060 Ti, 16380, 10855, 610.88\n')).toEqual([
       { name: 'NVIDIA GeForce RTX 4060 Ti', vendor: 'nvidia', vramTotalMb: 16380, vramUsedMb: 10855, vramReliable: true, vramSource: 'nvidia-smi', driver: '610.88' },

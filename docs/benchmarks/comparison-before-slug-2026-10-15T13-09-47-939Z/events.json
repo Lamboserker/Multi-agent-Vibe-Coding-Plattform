@@ -1,0 +1,143 @@
+[
+  {
+    "id": "cmv9k3s3n000lv27o8kkk5fsh",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": null,
+    "level": "info",
+    "type": "integration_ready",
+    "message": "Integration worktree on mac/soux00xq/integration (base 0046e515).",
+    "data": {},
+    "createdAt": "2026-10-15T13:10:26.820Z"
+  },
+  {
+    "id": "cmv9k3s3s000ov27osdw5eckj",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "info",
+    "type": "task_state",
+    "message": "task-001: running",
+    "data": {
+      "state": "running"
+    },
+    "createdAt": "2026-10-15T13:10:26.824Z"
+  },
+  {
+    "id": "cmv9k3s3s000pv27ozybu4joa",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "info",
+    "type": "task_routed",
+    "message": "task-001 → qwen3:4b (fast).",
+    "data": {
+      "reasons": [
+        "Simple task (complexity 1, risk 1).",
+        "qwen3:4b: no history for \"general\" yet (insufficient data)."
+      ]
+    },
+    "createdAt": "2026-10-15T13:10:26.824Z"
+  },
+  {
+    "id": "cmv9k3sdn000rv27ob62znawb",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "info",
+    "type": "worktree_created",
+    "message": "task-001: worktree at 0046e515.",
+    "data": {
+      "path": "C:\\Users\\lukas\\AppData\\Local\\Temp\\comparison-before-slug-2026-10-15T13-09-47-939Z-sxsIZD\\profile\\worktrees\\cmv9k33ht0000v27obcvsqjds\\pool-0"
+    },
+    "createdAt": "2026-10-15T13:10:27.180Z"
+  },
+  {
+    "id": "cmv9k3sg3000vv27odtkmozac",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "info",
+    "type": "agent_started",
+    "message": "task-001: qwen3:4b, tool calling, mit Skills: writing-tests, changelog, code-review.",
+    "data": {},
+    "createdAt": "2026-10-15T13:10:27.268Z"
+  },
+  {
+    "id": "cmv9k5zwg000xv27oyxuawvkc",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ write_file src/slug.mjs – Created src/slug.mjs (6 lines).",
+    "data": {},
+    "createdAt": "2026-10-15T13:12:10.240Z"
+  },
+  {
+    "id": "cmv9k5zwi000zv27oxhzr19uw",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ edit_file src/index.mjs – Edited src/index.mjs.",
+    "data": {},
+    "createdAt": "2026-10-15T13:12:10.243Z"
+  },
+  {
+    "id": "cmv9k5zwj0011v27oy3c980gk",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ finish src/slug.mjs – Finished.",
+    "data": {},
+    "createdAt": "2026-10-15T13:12:10.243Z"
+  },
+  {
+    "id": "cmv9k62y90016v27op7kg188i",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "debug",
+    "type": "task_handoff",
+    "message": "task-001: handoff for dependent tasks (2 file(s)).",
+    "data": {
+      "handoff": {
+        "key": "task-001",
+        "title": "Add slugify and its public export",
+        "files": [
+          "src/index.mjs",
+          "src/slug.mjs"
+        ],
+        "summary": "Task completed."
+      }
+    },
+    "createdAt": "2026-10-15T13:12:14.193Z"
+  },
+  {
+    "id": "cmv9k62y90017v27o5wf4o0pp",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "info",
+    "type": "task_integrated",
+    "message": "task-001: integrated (2 file(s), tests 1 passed).",
+    "data": {},
+    "createdAt": "2026-10-15T13:12:14.193Z"
+  },
+  {
+    "id": "cmv9k635w0019v27o5v2ppmse",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": "cmv9k3ovi000cv27og16lwsf5",
+    "level": "info",
+    "type": "task_state",
+    "message": "task-001: succeeded",
+    "data": {
+      "state": "succeeded"
+    },
+    "createdAt": "2026-10-15T13:12:14.468Z"
+  },
+  {
+    "id": "cmv9k661h001bv27ossonk1f2",
+    "executionId": "cmv9k3rsm000iv27osoux00xq",
+    "subtaskId": null,
+    "level": "info",
+    "type": "run_ready",
+    "message": "Run finished; waiting for approval.",
+    "data": {},
+    "createdAt": "2026-10-15T13:12:18.197Z"
+  }
+]

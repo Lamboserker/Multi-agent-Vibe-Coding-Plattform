@@ -1,0 +1,42 @@
+[
+  {
+    "historicalRunId": "task-latency-2026-10-15/after-release/feature/0",
+    "classification": "Offline reconstruction after the live UI run; no model call, not an original timing sample",
+    "dir": "C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-feature-recheck-bFpgoZ",
+    "original": {
+      "exitCode": 1,
+      "stdout": "node:internal/modules/esm/resolve:275\n    throw new ERR_MODULE_NOT_FOUND(\n          ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-feature-recheck-bFpgoZ\\src\\slug' imported from C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-feature-recheck-bFpgoZ\\src\\index.mjs\n    at finalizeResolution (node:internal/modules/esm/resolve:275:11)\n    at moduleResolve (node:internal/modules/esm/resolve:865:10)\n    at defaultResolve (node:internal/modules/esm/resolve:991:11)\n    at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)\n    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)\n    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)\n    at #resolve (node:internal/modules/esm/loader:701:17)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)\n    at ModuleJob.syncLink (node:internal/modules/esm/module_job:160:33)\n    at ModuleJob.link (node:internal/modules/esm/module_job:245:17) {\n  code: 'ERR_MODULE_NOT_FOUND',\n  url: 'file:///C:/Users/lukas/AppData/Local/Temp/mac-feature-recheck-bFpgoZ/src/slug'\n}\n\nNode.js v24.14.1\n✖ test\\slug.test.mjs (51.8318ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 63.1425\n\n✖ failing tests:\n\ntest at test\\slug.test.mjs:1:1\n✖ test\\slug.test.mjs (51.8318ms)\n  'test failed'\n",
+      "stderr": ""
+    },
+    "importOnlyFix": {
+      "exitCode": 1,
+      "stdout": "✖ slugify (1.3842ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 84.1013\n\n✖ failing tests:\n\ntest at test\\slug.test.mjs:1:129\n✖ slugify (1.3842ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + 'hello-world-'\n  - 'hello-world'\n                ^\n  \n      at TestContext.<anonymous> (file:///C:/Users/lukas/AppData/Local/Temp/mac-feature-recheck-bFpgoZ/test/slug.test.mjs:1:281)\n      at Test.runInAsyncScope (node:async_hooks:228:14)\n      at Test.run (node:internal/test_runner/test:1118:25)\n      at Test.start (node:internal/test_runner/test:1015:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 'hello-world-',\n    expected: 'hello-world',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "stderr": ""
+    },
+    "bothFixes": {
+      "exitCode": 0,
+      "stdout": "✔ slugify (0.6287ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 78.0147\n",
+      "stderr": ""
+    }
+  },
+  {
+    "historicalRunId": "task-latency-2026-10-15/after-release/feature/1",
+    "classification": "Offline reconstruction after the live UI run; no model call, not an original timing sample",
+    "dir": "C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-feature-recheck-mCIr4S",
+    "original": {
+      "exitCode": 1,
+      "stdout": "node:internal/modules/esm/resolve:275\n    throw new ERR_MODULE_NOT_FOUND(\n          ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-feature-recheck-mCIr4S\\src\\slug' imported from C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-feature-recheck-mCIr4S\\src\\index.mjs\n    at finalizeResolution (node:internal/modules/esm/resolve:275:11)\n    at moduleResolve (node:internal/modules/esm/resolve:865:10)\n    at defaultResolve (node:internal/modules/esm/resolve:991:11)\n    at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)\n    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)\n    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)\n    at #resolve (node:internal/modules/esm/loader:701:17)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)\n    at ModuleJob.syncLink (node:internal/modules/esm/module_job:160:33)\n    at ModuleJob.link (node:internal/modules/esm/module_job:245:17) {\n  code: 'ERR_MODULE_NOT_FOUND',\n  url: 'file:///C:/Users/lukas/AppData/Local/Temp/mac-feature-recheck-mCIr4S/src/slug'\n}\n\nNode.js v24.14.1\n✖ test\\slug.test.mjs (56.4687ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 67.9427\n\n✖ failing tests:\n\ntest at test\\slug.test.mjs:1:1\n✖ test\\slug.test.mjs (56.4687ms)\n  'test failed'\n",
+      "stderr": ""
+    },
+    "importOnlyFix": {
+      "exitCode": 1,
+      "stdout": "✖ slugify (1.1885ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 76.582\n\n✖ failing tests:\n\ntest at test\\slug.test.mjs:1:129\n✖ slugify (1.1885ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + 'hello-world-'\n  - 'hello-world'\n                ^\n  \n      at TestContext.<anonymous> (file:///C:/Users/lukas/AppData/Local/Temp/mac-feature-recheck-mCIr4S/test/slug.test.mjs:1:281)\n      at Test.runInAsyncScope (node:async_hooks:228:14)\n      at Test.run (node:internal/test_runner/test:1118:25)\n      at Test.start (node:internal/test_runner/test:1015:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 'hello-world-',\n    expected: 'hello-world',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "stderr": ""
+    },
+    "bothFixes": {
+      "exitCode": 0,
+      "stdout": "✔ slugify (0.6728ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 74.8462\n",
+      "stderr": ""
+    }
+  }
+]

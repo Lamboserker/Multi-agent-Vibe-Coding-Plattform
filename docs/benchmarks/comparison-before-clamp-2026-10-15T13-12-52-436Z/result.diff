@@ -1,0 +1,7 @@
+diff --git a/src/index.mjs b/src/index.mjs
+index 5fee887..f1ab03e 100644
+--- a/src/index.mjs
++++ b/src/index.mjs
+@@ -1 +1 @@
+-export const clamp = (value, min, max) => Math.min(min, Math.max(max, value))
++export const clamp = (value, min, max) => Math.min(max, Math.max(min, value))

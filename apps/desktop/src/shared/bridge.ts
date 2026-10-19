@@ -58,6 +58,8 @@ export interface TerminalInfo {
   endedAt?: string
 }
 
+export type PreviewEvent = { id: string; type: 'navigated'; url: string } | { id: string; type: 'title'; title: string } | { id: string; type: 'loading'; loading: boolean } | { id: string; type: 'failed'; message: string }
+
 export interface MacBridge {
   api<T = unknown>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<ApiResponse<T>>
   /** Runtime events; the main process delivers them in batches through a single IPC channel. */
@@ -80,7 +82,21 @@ export interface MacBridge {
     /** Save dialog + write; resolves with the chosen path or null when cancelled. */
     saveText(defaultName: string, content: string): Promise<string | null>
   }
-  shell: { openExternal(url: string): Promise<boolean>; showItem(target: string): Promise<boolean> }
+  /** openLink: a link the user Ctrl+clicked in a terminal (http/https, e.g. a local dev server). */
+  shell: { openExternal(url: string): Promise<boolean>; openLink(url: string): Promise<boolean>; showItem(target: string): Promise<boolean> }
+  /**
+   * Local dev servers in the code screen: a native view with its own process, placed over the area the
+   * renderer reports (CSS pixels). capture: a still image while a dialog covers the area.
+   */
+  preview: {
+    show(id: string, url: string, bounds: { x: number; y: number; width: number; height: number }): Promise<boolean>
+    hide(id: string): Promise<boolean>
+    capture(id: string): Promise<string | null>
+    reload(id: string): Promise<boolean>
+    devTools(id: string): Promise<boolean>
+    close(id: string): Promise<boolean>
+    onEvent(listener: (event: PreviewEvent) => void): () => void
+  }
   /** Encrypted secrets (scope e.g. "plugin:github"); values can be written but never read back. */
   secrets: {
     set(scope: string, name: string, value: string): Promise<boolean>

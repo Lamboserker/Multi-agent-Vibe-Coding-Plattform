@@ -1,0 +1,25 @@
+Multi-AI Coder
+1
+Willkommen
+2
+Orchestrator
+3
+Hardware
+4
+Lokale KI
+5
+Workspace
+6
+Kostenmodus
+7
+Funktionstest
+Willkommen bei Multi-AI Coder
+
+Ein Premium-Modell – Claude Code oder OpenAI Codex mit deinem bestehenden Abonnement – plant und überwacht. Die eigentliche Implementierung übernehmen bevorzugt lokale Coding-Modelle über Ollama. Jede Änderung entsteht in einem isolierten Git-Worktree, wird automatisch geprüft und getestet und erst nach deiner Freigabe übernommen.
+
+SYSTEMVORAUSSETZUNGEN
+Git: git version 2.53.0.windows.2
+Datenordner:
+C:\Users\lukas\AppData\Local\Temp\ui-2026-10-15T12-07-56-905Z-eG7jHK\profile
+Claude Code bzw. Codex und Ollama werden in den nächsten Schritten erkannt und nur mit deiner Zustimmung installiert. Es werden keine Pakete heimlich installiert.
+Los geht’s

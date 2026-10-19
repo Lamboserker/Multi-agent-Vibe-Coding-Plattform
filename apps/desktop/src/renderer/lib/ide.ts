@@ -225,6 +225,7 @@ export function explainSelection() {
   const from = selection?.startLineNumber ?? 1
   const sessionId = appStore.get().workspace.activeSessionId
   actions.setComposerDraft(sessionId, { mode: 'ask', text: `Erkläre diesen Code aus \`${context.path}\` (ab Zeile ${from}):\n\n\`\`\`\n${text.slice(0, 8000)}\n\`\`\`` })
+  actions.setScreen('leitstand')
   actions.notify('Frage im Chat vorbereitet – prüfen und senden.', 'info')
 }
 
@@ -235,6 +236,7 @@ export function prepareCodeTask(action: 'refactor' | 'tests' | 'fix' | 'review')
   const text = selection && !selection.isEmpty() ? context.model.getValueInRange(selection) : context.model.getValue()
   const instructions = { refactor: 'Refaktoriere diesen Code unter Erhalt des Verhaltens. Prüfe alle betroffenen Referenzen und Tests.', tests: 'Generiere aussagekräftige Tests für diesen Code nach den Konventionen des Projekts.', fix: 'Korrigiere die Fehler in diesem Code. Prüfe die Diagnosen und bestehenden Tests.', review: 'Prüfe diesen Code auf Fehler, Sicherheitsprobleme und fehlende Tests. Nenne konkrete Befunde mit Datei und Zeile.' }
   actions.setComposerDraft(appStore.get().workspace.activeSessionId, { mode: action === 'review' ? 'ask' : 'task', text: `${instructions[action]}\n\nDatei: ${context.path}\n\`\`\`\n${text.slice(0, 24_000)}\n\`\`\`` })
+  actions.setScreen('leitstand')
   actions.notify('Auftrag im Chat vorbereitet – prüfen und senden.', 'info')
 }
 
@@ -256,11 +258,13 @@ export async function addContext(kind: 'file' | 'folder' | 'diff', requestedPath
   const key = actions.composerKey(appStore.get().workspace.activeSessionId)
   const draft = appStore.get().workspace.composer[key]
   actions.setComposerDraft(appStore.get().workspace.activeSessionId, { text: `${draft?.text ?? ''}\n\nKontext (${kind}: ${file ?? 'Git-Diff'}):\n\`\`\`\n${text.slice(0, 32_000)}\n\`\`\`` })
+  actions.setScreen('leitstand')
   actions.notify('Kontext zum Chat hinzugefügt.', 'success')
 }
 
 export function taskFromProblem(problem: { path: string; line: number; message: string; source?: string }) {
   actions.setComposerDraft(appStore.get().workspace.activeSessionId, { mode: 'task', text: `Behebe diese Fehlermeldung und prüfe die betroffenen Tests:\n${problem.path}:${problem.line} ${problem.source ?? ''}\n${problem.message}` })
+  actions.setScreen('leitstand')
   actions.notify('Task aus Fehlermeldung im Chat vorbereitet.', 'info')
 }
 

@@ -347,7 +347,7 @@ export class SkillsService {
    */
   async promptContext(role: AgentRole, projectId: string | undefined, goal: string, options: { budgetChars?: number; canLoad: boolean; only?: string[] }) {
     const ranked = await this.forRole(role, projectId, goal, options.only)
-    if (!ranked.length) return { text: '', inlined: [] as string[], indexed: [] as string[] }
+    if (!ranked.length) return { text: '', inlined: [] as string[], indexed: [] as string[], requiresSkillLoad: false }
     let budget = options.budgetChars ?? 6000
     const inlined: string[] = []
     const sections: string[] = []
@@ -362,7 +362,8 @@ export class SkillsService {
     const lines: string[] = []
     if (sections.length) lines.push('## Relevant skills (follow these instructions)', ...sections)
     if (others.length && options.canLoad) lines.push('## Other available skills (call load_skill with the name when one applies)', ...others.slice(0, 40).map((skill) => `- ${skill.name}: ${skill.description}`))
-    return { text: lines.join('\n\n'), inlined, indexed: options.canLoad ? others.map((skill) => skill.name) : [] }
+    const requiresSkillLoad = ranked.some(({ skill, score }) => score > 0 && !inlined.includes(skill.name))
+    return { text: lines.join('\n\n'), inlined, indexed: options.canLoad ? others.map((skill) => skill.name) : [], requiresSkillLoad }
   }
 
   /** load_skill / read_skill_file / run_skill_script for an agent (scripts only when approved). */
@@ -378,6 +379,7 @@ export class SkillsService {
     const tools: AgentTool[] = [
       {
         name: 'load_skill',
+        readOnly: true,
         description: 'Load the full instructions of a skill listed under "Other available skills".',
         parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
         execute: async (args) => {
@@ -390,6 +392,7 @@ export class SkillsService {
     if (skills.some((skill) => skill.files.length)) {
       tools.push({
         name: 'read_skill_file',
+        readOnly: true,
         description: 'Read a reference file that belongs to a skill.',
         parameters: { type: 'object', properties: { skill: { type: 'string' }, path: { type: 'string' } }, required: ['skill', 'path'] },
         execute: async (args) => this.readFile(get(args.skill).key, String(args.path)),

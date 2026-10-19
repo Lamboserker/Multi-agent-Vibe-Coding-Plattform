@@ -11,6 +11,7 @@ const BUILTIN_AGENT_TOOLS = ['read_file', 'list_files', 'search_code', 'write_fi
 export interface AgentResources {
   tools: AgentTool[]
   instructions?: string
+  requiredTools?: string[]
   /** Short labels for the run log ("2 Skills", "MCP github"). */
   sources: string[]
 }
@@ -33,9 +34,11 @@ export class AgentResourcesService {
   async forAgent(role: AgentRole, input: { projectId?: string; goal: string; cwd: string; supportsTools: boolean; profile?: { skills: string[]; mcpServers: string[]; pluginTools: boolean } }): Promise<AgentResources> {
     const sources: string[] = []
     const only = input.profile?.skills.length ? input.profile.skills : undefined
-    const skillContext = await this.skills.promptContext(role, input.projectId, input.goal, { budgetChars: input.supportsTools ? 5000 : 8000, canLoad: input.supportsTools, only })
+    // 6500: a core skill plus one framework recipe (e.g. ui-design + ui-bootstrap) fit without load_skill
+    const skillContext = await this.skills.promptContext(role, input.projectId, input.goal, { budgetChars: input.supportsTools ? 6500 : 8000, canLoad: input.supportsTools, only })
+    const requiredTools = skillContext.requiresSkillLoad ? ['load_skill'] : []
     if (skillContext.inlined.length || skillContext.indexed.length) sources.push(`Skills: ${[...skillContext.inlined, ...skillContext.indexed].slice(0, 6).join(', ')}`)
-    if (!input.supportsTools) return { tools: [], instructions: skillContext.text || undefined, sources }
+    if (!input.supportsTools) return { tools: [], instructions: skillContext.text || undefined, sources, requiredTools }
     const [skillTools, mcpTools, pluginTools] = await Promise.all([
       skillContext.indexed.length || skillContext.inlined.length ? this.skills.agentTools(role, input.projectId, input.cwd, only) : Promise.resolve([]),
       this.mcp.agentTools(role, input.goal, input.profile?.mcpServers ?? ['*']).catch((error: unknown) => {
@@ -54,7 +57,7 @@ export class AgentResourcesService {
       ? `## Additional tools\nBesides the file tools you can call:\n${external.map((tool) => `- ${tool.name}: ${tool.description}`).join('\n')}\nWhen the task needs information one of these tools provides (or names the tool), call it first and use its result. Never guess or invent such values.`
       : ''
     const instructions = [skillContext.text, toolSection].filter(Boolean).join('\n\n')
-    return { tools, instructions: instructions || undefined, sources }
+    return { tools, instructions: instructions || undefined, sources, requiredTools }
   }
 
   /**

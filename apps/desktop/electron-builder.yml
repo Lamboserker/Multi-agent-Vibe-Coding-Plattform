@@ -37,13 +37,26 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   deleteAppDataOnUninstall: false
+# Native modules (Prisma engine, node-pty) are staged for the build machine's architecture only, so
+# each architecture is built on its own Mac: `--mac --arm64` on Apple Silicon, `--mac --x64` on Intel
+# (see .github/workflows/desktop-release.yml). Signing + notarization run when CSC_LINK and
+# APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are set; otherwise the app is ad-hoc signed.
 mac:
   target:
     - target: dmg
-      arch: [arm64, x64]
+    - target: zip
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
   category: public.app-category.developer-tools
   icon: build/icon.png
   hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSDocumentsFolderUsageDescription: Multi-AI Coder opens and edits the projects you choose.
+    NSDesktopFolderUsageDescription: Multi-AI Coder opens and edits the projects you choose.
+    NSDownloadsFolderUsageDescription: Multi-AI Coder opens and edits the projects you choose.
+dmg:
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
 linux:
   target:
     - AppImage

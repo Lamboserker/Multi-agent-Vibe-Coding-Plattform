@@ -1,0 +1,485 @@
+{
+  "analyzedAt": "2026-10-15T12:18:08.203Z",
+  "evidence": [
+    {
+      "historicalRunId": "task-latency-2026-10-15/after-release/feature/0",
+      "source": "D:\\Programmieren\\Multi-Agent-Vibe-Coding-Plattform\\.cache\\task-latency-after-release.json",
+      "sourceSha256": "98aba8efa29adbb01526dc2b17313f2f06560689d51c465b88399a306ce2f9f7",
+      "originalResponses": "C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-latency-6lxNmZ\\responses.jsonl",
+      "preservedResponses": "historical-feature-0-responses.jsonl",
+      "responsesSha256": "3e2cb3e5adf16d201a2395beec761def6eb32c3eb26c901f5dc27ae2f49fae5a",
+      "totalMs": 157736,
+      "firstAgentMs": 2865,
+      "firstAttemptMs": 6602,
+      "firstFailure": {
+        "ok": false,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2055,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "failed",
+            "blocking": true,
+            "durationMs": 1031,
+            "exitCode": 1,
+            "testsPassed": 0,
+            "testsFailed": 1,
+            "output": "node:internal/modules/esm/resolve:275\n    throw new ERR_MODULE_NOT_FOUND(\n          ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-latency-6lxNmZ\\wt\\bench\\59008972-task-001\\src\\slug' imported from C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-latency-6lxNmZ\\wt\\bench\\59008972-task-001\\src\\index.mjs\n    at finalizeResolution (node:internal/modules/esm/resolve:275:11)\n    at moduleResolve (node:internal/modules/esm/resolve:865:10)\n    at defaultResolve (node:internal/modules/esm/resolve:991:11)\n    at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)\n    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)\n    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)\n    at #resolve (node:internal/modules/esm/loader:701:17)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)\n    at ModuleJob.syncLink (node:internal/modules/esm/module_job:160:33)\n    at ModuleJob.link (node:internal/modules/esm/module_job:245:17) {\n  code: 'ERR_MODULE_NOT_FOUND',\n  url: 'file:///C:/Users/lukas/AppData/Local/Temp/mac-latency-6lxNmZ/wt/bench/59008972-task-001/src/slug'\n}\n\nNode.js v24.14.1\n✖ test\\slug.test.mjs (64.6525ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 82.3986\n\n✖ failing tests:\n\ntest at test\\slug.test.mjs:1:1\n✖ test\\slug.test.mjs (64.6525ms)\n  'test failed'"
+          }
+        ],
+        "testsPassed": 0,
+        "testsFailed": 1,
+        "summary": "typecheck: passed; test: failed (0 passed, 1 failed)"
+      },
+      "firstOperations": [
+        {
+          "action": "write",
+          "path": "src/slug.mjs",
+          "content": "export const slugify = (text) => {\n  if (text === '') return '';\n  text = text.toLowerCase().trim();\n  return text.replace(/[^a-z0-9]+/g, '-');\n};"
+        },
+        {
+          "action": "edit",
+          "path": "src/index.mjs",
+          "search": "export const version = 1",
+          "replace": "export const version = 1;\nexport { slugify } from './slug';"
+        }
+      ],
+      "repairAgentMs": 142359,
+      "repairAttemptMs": 146162,
+      "repairChecksMs": 3217,
+      "repairAttemptRemainderMs": 586,
+      "totalOutsideAttemptsMs": 4972,
+      "finalChecksMs": 3393,
+      "recordedRepairServerMs": 142351,
+      "repairAgentMinusRecordedServerMs": 8,
+      "calls": [
+        {
+          "index": 0,
+          "request": {
+            "think": false,
+            "structured": true,
+            "context": 16384
+          },
+          "requestedModelFromSeries": "qwen3:4b",
+          "actualReturnedModel": null,
+          "promptTokens": 2952,
+          "completionTokens": 172,
+          "serverTotalMs": 2857,
+          "loadMs": 149,
+          "promptEvalMs": null,
+          "evalMs": null,
+          "thinkingDurationMs": null,
+          "contentDurationMs": null,
+          "toolDurationMs": null,
+          "reportedThinkingChars": 0,
+          "contentChars": 556,
+          "toolCalls": [],
+          "hasFinalMetrics": true
+        },
+        {
+          "index": 1,
+          "request": {
+            "think": false,
+            "structured": false,
+            "context": 16384
+          },
+          "requestedModelFromSeries": "qwen3:4b",
+          "actualReturnedModel": null,
+          "promptTokens": 4072,
+          "completionTokens": 9284,
+          "serverTotalMs": 142351,
+          "loadMs": 143,
+          "promptEvalMs": null,
+          "evalMs": null,
+          "thinkingDurationMs": null,
+          "contentDurationMs": null,
+          "toolDurationMs": null,
+          "reportedThinkingChars": 0,
+          "contentChars": 36091,
+          "toolCalls": [
+            {
+              "id": "call_wl05rtbm",
+              "function": {
+                "index": 0,
+                "name": "edit_file",
+                "arguments": {
+                  "search": "export { slugify } from './slug';",
+                  "replace": "export { slugify } from './slug.mjs';",
+                  "path": "src/index.mjs"
+                }
+              }
+            },
+            {
+              "id": "call_cl460h56",
+              "function": {
+                "index": 1,
+                "name": "edit_file",
+                "arguments": {
+                  "path": "src/slug.mjs",
+                  "search": "return text.replace(/[^a-z0-9]+/g, '-');",
+                  "replace": "text = text.replace(/[^a-z0-9]+/g, '-');\n text = text.replace(/^-+|-+$/g, '');\n return text;"
+                }
+              }
+            },
+            {
+              "id": "call_573khq4l",
+              "function": {
+                "index": 2,
+                "name": "finish",
+                "arguments": {
+                  "summary": "Implemented slugify function in src/slug.mjs with leading/trailing hyphen removal and updated index.mjs to import from './slug.mjs'."
+                }
+              }
+            }
+          ],
+          "hasFinalMetrics": true
+        }
+      ],
+      "repairValidation": {
+        "ok": true,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2146,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 1071,
+            "exitCode": 0,
+            "testsPassed": 1,
+            "testsFailed": 0,
+            "output": "✔ slugify (0.841ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 93.2441"
+          }
+        ],
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+      },
+      "finalValidation": {
+        "ok": true,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2354,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 1039,
+            "exitCode": 0,
+            "testsPassed": 1,
+            "testsFailed": 0,
+            "output": "✔ slugify (0.6914ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 90.6959"
+          }
+        ],
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+      },
+      "gaps": [
+        "Historical client discarded prompt_eval_duration and eval_duration.",
+        "No per-chunk timestamps or per-tool durations retained.",
+        "No returned model identifier/digest retained per response; qwen3:4b comes from requested model/series.",
+        "think=false was requested; no separate thinking field is stored. Long reasoning-like prose appears in content; its time/tokens cannot be separated from other output."
+      ]
+    },
+    {
+      "historicalRunId": "task-latency-2026-10-15/after-release/feature/1",
+      "source": "D:\\Programmieren\\Multi-Agent-Vibe-Coding-Plattform\\.cache\\task-latency-after-release.json",
+      "sourceSha256": "98aba8efa29adbb01526dc2b17313f2f06560689d51c465b88399a306ce2f9f7",
+      "originalResponses": "C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-latency-5l4JRP\\responses.jsonl",
+      "preservedResponses": "historical-feature-1-responses.jsonl",
+      "responsesSha256": "77d3208ee734e1cd797e328b67ddaf3c8d44e644892ea37835f0111a1116af35",
+      "totalMs": 157720,
+      "firstAgentMs": 2733,
+      "firstAttemptMs": 6343,
+      "firstFailure": {
+        "ok": false,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2037,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "failed",
+            "blocking": true,
+            "durationMs": 950,
+            "exitCode": 1,
+            "testsPassed": 0,
+            "testsFailed": 1,
+            "output": "node:internal/modules/esm/resolve:275\n    throw new ERR_MODULE_NOT_FOUND(\n          ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-latency-5l4JRP\\wt\\bench\\59189674-task-001\\src\\slug' imported from C:\\Users\\lukas\\AppData\\Local\\Temp\\mac-latency-5l4JRP\\wt\\bench\\59189674-task-001\\src\\index.mjs\n    at finalizeResolution (node:internal/modules/esm/resolve:275:11)\n    at moduleResolve (node:internal/modules/esm/resolve:865:10)\n    at defaultResolve (node:internal/modules/esm/resolve:991:11)\n    at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)\n    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)\n    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)\n    at #resolve (node:internal/modules/esm/loader:701:17)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)\n    at ModuleJob.syncLink (node:internal/modules/esm/module_job:160:33)\n    at ModuleJob.link (node:internal/modules/esm/module_job:245:17) {\n  code: 'ERR_MODULE_NOT_FOUND',\n  url: 'file:///C:/Users/lukas/AppData/Local/Temp/mac-latency-5l4JRP/wt/bench/59189674-task-001/src/slug'\n}\n\nNode.js v24.14.1\n✖ test\\slug.test.mjs (52.9093ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 68.778\n\n✖ failing tests:\n\ntest at test\\slug.test.mjs:1:1\n✖ test\\slug.test.mjs (52.9093ms)\n  'test failed'"
+          }
+        ],
+        "testsPassed": 0,
+        "testsFailed": 1,
+        "summary": "typecheck: passed; test: failed (0 passed, 1 failed)"
+      },
+      "firstOperations": [
+        {
+          "action": "write",
+          "path": "src/slug.mjs",
+          "content": "export const slugify = (text) => {\n  if (text === '') return '';\n  text = text.toLowerCase().trim();\n  return text.replace(/[^a-z0-9]+/g, '-');\n};"
+        },
+        {
+          "action": "edit",
+          "path": "src/index.mjs",
+          "search": "export const version = 1",
+          "replace": "export const version = 1;\nexport { slugify } from './slug';"
+        }
+      ],
+      "repairAgentMs": 143429,
+      "repairAttemptMs": 146971,
+      "repairChecksMs": 3008,
+      "repairAttemptRemainderMs": 534,
+      "totalOutsideAttemptsMs": 4406,
+      "finalChecksMs": 3028,
+      "recordedRepairServerMs": 47455,
+      "repairAgentMinusRecordedServerMs": 95974,
+      "calls": [
+        {
+          "index": 0,
+          "request": {
+            "think": false,
+            "structured": true,
+            "context": 16384
+          },
+          "requestedModelFromSeries": "qwen3:4b",
+          "actualReturnedModel": null,
+          "promptTokens": 2952,
+          "completionTokens": 172,
+          "serverTotalMs": 2726,
+          "loadMs": 154,
+          "promptEvalMs": null,
+          "evalMs": null,
+          "thinkingDurationMs": null,
+          "contentDurationMs": null,
+          "toolDurationMs": null,
+          "reportedThinkingChars": 0,
+          "contentChars": 556,
+          "toolCalls": [],
+          "hasFinalMetrics": true
+        },
+        {
+          "index": 1,
+          "request": {
+            "think": false,
+            "structured": false,
+            "context": 16384
+          },
+          "requestedModelFromSeries": "qwen3:4b",
+          "actualReturnedModel": null,
+          "promptTokens": null,
+          "completionTokens": null,
+          "serverTotalMs": null,
+          "loadMs": null,
+          "promptEvalMs": null,
+          "evalMs": null,
+          "thinkingDurationMs": null,
+          "contentDurationMs": null,
+          "toolDurationMs": null,
+          "reportedThinkingChars": 0,
+          "contentChars": 26880,
+          "toolCalls": [],
+          "hasFinalMetrics": false
+        },
+        {
+          "index": 2,
+          "request": {
+            "think": false,
+            "structured": false,
+            "context": 16384
+          },
+          "requestedModelFromSeries": "qwen3:4b",
+          "actualReturnedModel": null,
+          "promptTokens": 10596,
+          "completionTokens": 2723,
+          "serverTotalMs": 47455,
+          "loadMs": 153,
+          "promptEvalMs": null,
+          "evalMs": null,
+          "thinkingDurationMs": null,
+          "contentDurationMs": null,
+          "toolDurationMs": null,
+          "reportedThinkingChars": 0,
+          "contentChars": 8235,
+          "toolCalls": [
+            {
+              "id": "call_si6tz0bj",
+              "function": {
+                "index": 0,
+                "name": "edit_file",
+                "arguments": {
+                  "path": "src/index.mjs",
+                  "search": "./slug",
+                  "replace": "./slug.mjs"
+                }
+              }
+            },
+            {
+              "id": "call_sx6z1sdh",
+              "function": {
+                "index": 1,
+                "name": "edit_file",
+                "arguments": {
+                  "path": "src/slug.mjs",
+                  "search": "return text.replace(/[^a-z0-9]+/g, '-');",
+                  "replace": "const result = text.replace(/[^a-z0-9]+/g, '-');\nreturn result.replace(/^-+|-+$/g, '');"
+                }
+              }
+            },
+            {
+              "id": "call_1ysmt31o",
+              "function": {
+                "index": 2,
+                "name": "finish",
+                "arguments": {
+                  "summary": "Implemented slugify function in src/slug.mjs with leading/trailing hyphen handling and corrected import path in src/index.mjs to resolve module resolution."
+                }
+              }
+            },
+            {
+              "id": "call_eg31bjmz",
+              "function": {
+                "index": 3,
+                "name": "edit_file",
+                "arguments": {
+                  "path": "src/index.mjs",
+                  "search": "./slug",
+                  "replace": "./slug.mjs"
+                }
+              }
+            },
+            {
+              "id": "call_a77d2ohs",
+              "function": {
+                "index": 4,
+                "name": "edit_file",
+                "arguments": {
+                  "replace": "const result = text.replace(/[^a-z0-9]+/g, '-');\nreturn result.replace(/^-+|-+$/g, '');",
+                  "path": "src/slug.mjs",
+                  "search": "return text.replace(/[^a-z0-9]+/g, '-');"
+                }
+              }
+            },
+            {
+              "id": "call_b1fsmh2i",
+              "function": {
+                "index": 5,
+                "name": "finish",
+                "arguments": {
+                  "summary": "Implemented slugify function in src/slug.mjs with leading/trailing hyphen handling and corrected import path in src/index.mjs to resolve module resolution."
+                }
+              }
+            }
+          ],
+          "hasFinalMetrics": true
+        }
+      ],
+      "repairValidation": {
+        "ok": true,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2028,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 980,
+            "exitCode": 0,
+            "testsPassed": 1,
+            "testsFailed": 0,
+            "output": "✔ slugify (0.6297ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 82.6854"
+          }
+        ],
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+      },
+      "finalValidation": {
+        "ok": true,
+        "results": [
+          {
+            "id": "typecheck",
+            "kind": "typecheck",
+            "command": "npm run typecheck --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 2045,
+            "exitCode": 0,
+            "output": ""
+          },
+          {
+            "id": "test",
+            "kind": "test",
+            "command": "npm run test --silent",
+            "status": "passed",
+            "blocking": true,
+            "durationMs": 983,
+            "exitCode": 0,
+            "testsPassed": 1,
+            "testsFailed": 0,
+            "output": "✔ slugify (0.6089ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 82.6839"
+          }
+        ],
+        "testsPassed": 1,
+        "testsFailed": 0,
+        "summary": "typecheck: passed; test: passed (1 passed, 0 failed)"
+      },
+      "gaps": [
+        "Historical client discarded prompt_eval_duration and eval_duration.",
+        "No per-chunk timestamps or per-tool durations retained.",
+        "No returned model identifier/digest retained per response; qwen3:4b comes from requested model/series.",
+        "think=false was requested; no separate thinking field is stored. Long reasoning-like prose appears in content; its time/tokens cannot be separated from other output.",
+        "First repair HTTP response has 26880 content characters but zero/absent terminal metrics. Treat its token counts and server time as unknown, not zero. Missing done event cannot be proven without the original wire stream."
+      ]
+    }
+  ]
+}

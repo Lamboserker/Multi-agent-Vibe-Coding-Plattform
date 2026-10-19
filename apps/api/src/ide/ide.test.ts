@@ -42,7 +42,10 @@ beforeAll(async () => {
   write('.gitignore', 'ignored/\n')
   execFileSync('git', ['init', '-q'], { cwd: repo })
   projectId = (await prisma.project.create({ data: { name: 'ide', repoPath: repo } })).id
-})
+  // Cold start of the TypeScript worker (thread + program, ~2 s alone, >5 s while all test files run
+  // in parallel) belongs to the setup; the feature tests below keep the default 5 s limit per call chain.
+  await ide.definition(projectId, 'src/main.ts', { line: 3, column: 22 })
+}, 60_000)
 
 afterAll(async () => {
   ide.onModuleDestroy()

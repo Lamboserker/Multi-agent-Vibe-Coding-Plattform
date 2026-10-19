@@ -15,7 +15,7 @@ const SETTINGS_VALIDATORS: Partial<Record<keyof AppSettings, (value: unknown) =>
   codexModel: (value) => typeof value === 'string' && /^[\w.:-]{0,80}$/.test(value),
   orchestratorAuthMode: (value) => value === 'subscription' || value === 'api_key',
   costMode: (value) => value === 'cheapest' || value === 'balanced' || value === 'quality',
-  approvalMode: (value) => value === 'manual' || value === 'auto_branch' || value === 'auto_working_tree',
+  approvalMode: (value) => value === 'manual' || value === 'auto_branch' || value === 'auto_working_tree' || value === 'auto_commit',
   premiumExecutionAllowed: (value) => typeof value === 'boolean',
   premiumReviewPolicy: (value) => value === 'risk_based' || value === 'always' || value === 'never',
   planApproval: (value) => typeof value === 'boolean',
@@ -38,6 +38,16 @@ const SETTINGS_VALIDATORS: Partial<Record<keyof AppSettings, (value: unknown) =>
   approvedCommands: (value) => Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length < 300),
   strictScope: (value) => typeof value === 'boolean',
   gpuWatts: (value) => value === null || (typeof value === 'number' && value > 0 && value < 2000),
+  electricity: (value) => {
+    if (value === null) return true
+    if (!value || typeof value !== 'object') return false
+    const tariff = value as Record<string, unknown>
+    const watts = (entry: unknown) => entry === undefined || entry === null || (typeof entry === 'number' && entry >= 0 && entry < 5000)
+    return typeof tariff.pricePerKwh === 'number' && tariff.pricePerKwh >= 0 && tariff.pricePerKwh < 10
+      && typeof tariff.basePricePerMonth === 'number' && tariff.basePricePerMonth >= 0 && tariff.basePricePerMonth < 1000
+      && watts(tariff.systemBaseWatts) && watts(tariff.cpuMaxWatts)
+      && Object.keys(tariff).every((key) => ['pricePerKwh', 'basePricePerMonth', 'systemBaseWatts', 'cpuMaxWatts'].includes(key))
+  },
   premiumPriceOverride: (value) =>
     value === null ||
     (typeof value === 'object' && typeof (value as Record<string, unknown>).inputPerMillion === 'number' && typeof (value as Record<string, unknown>).outputPerMillion === 'number' && typeof (value as Record<string, unknown>).source === 'string'),

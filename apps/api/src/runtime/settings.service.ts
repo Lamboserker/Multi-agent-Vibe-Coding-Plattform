@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common'
+import type { ElectricityTariff } from '@multi-ai-coder/engine'
 import { PrismaService } from '../common/prisma.service.js'
 import { asJson } from '../common/json.js'
 import { AsyncMutex } from '../common/locks.js'
 import { EventBusService } from './event-bus.service.js'
 
 export type OrchestratorChoice = 'claude-code' | 'codex'
-export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree'
+/** auto_commit: a validated result is committed onto the checked-out branch (e.g. main) without asking. */
+export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree' | 'auto_commit'
 
 export interface AppSettings {
   languageServers: Array<{ command: string; args: string[]; extensions: string[]; languageId: string }>
@@ -48,6 +50,8 @@ export interface AppSettings {
   approvedCommands: string[]
   strictScope: boolean
   gpuWatts: number | null
+  /** Electricity tariff for the energy costs (unit price per kWh, monthly base price, own estimates). */
+  electricity: ElectricityTariff | null
   premiumPriceOverride: { inputPerMillion: number; outputPerMillion: number; source: string } | null
   onboarding: { completed: boolean; steps: Record<string, { ok: boolean; at: string; detail?: string }> }
   lastProjectId: string | null
@@ -75,7 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   codexModel: '',
   orchestratorAuthMode: 'subscription',
   costMode: 'balanced',
-  approvalMode: 'manual',
+  approvalMode: 'auto_commit',
   premiumExecutionAllowed: true,
   premiumReviewPolicy: 'risk_based',
   planApproval: true,
@@ -99,6 +103,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   approvedCommands: [],
   strictScope: false,
   gpuWatts: null,
+  electricity: null,
   premiumPriceOverride: null,
   onboarding: { completed: false, steps: {} },
   lastProjectId: null,
@@ -108,6 +113,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 const ALLOWED_KEYS = new Set(Object.keys(DEFAULT_SETTINGS))
 /** Row that stores the monotonically increasing settings version. */
 const VERSION_KEY = '__version'
+/** Marker row: existing installations were switched to approvalMode auto_commit once. */
+const AUTO_COMMIT_MIGRATION_KEY = '__migration_auto_commit'
 
 /**
  * Patch semantics for object-valued settings. A patch only names the entries it changes, so a caller
@@ -147,6 +154,8 @@ export type VersionedSettings = AppSettings & { version: number }
 export class SettingsService {
   private cache?: AppSettings
   private version = 0
+  /** The one-time auto_commit migration is applied in memory but not yet stored. */
+  private migrationPending = false
   private readonly mutex = new AsyncMutex()
 
   constructor(
@@ -164,9 +173,33 @@ export class SettingsService {
         if (row.key === VERSION_KEY) this.version = Number(row.value) || 0
         else if (ALLOWED_KEYS.has(row.key)) stored[row.key] = row.value
       }
+      // one-time switch of existing installations to the new default (results are committed onto main);
+      // a mode chosen after this migration is kept
+      // (get() may run inside someone else's transaction: the write is not awaited here, and until it
+      // landed every settings update writes the migration along)
+      if (!rows.some((row) => row.key === AUTO_COMMIT_MIGRATION_KEY)) {
+        if (stored.approvalMode !== undefined && stored.approvalMode !== 'auto_commit') stored.approvalMode = 'auto_commit'
+        this.migrationPending = true
+        // queued behind this load and before any update (same mutex): it writes the value current then
+        void this.mutex
+          .run(async () => {
+            if (!this.migrationPending) return
+            await this.prisma.$transaction(this.migrationWrites(this.cache!.approvalMode))
+            this.migrationPending = false
+          })
+          .catch(() => undefined)
+      }
       this.cache = mergeSettings(DEFAULT_SETTINGS, stored as Partial<AppSettings>)
       return this.cache
     })
+  }
+
+  /** Rows of the one-time auto_commit migration (approvalMode as it is now, plus the marker). */
+  private migrationWrites(approvalMode: ApprovalMode) {
+    return [
+      this.prisma.appSetting.upsert({ where: { key: 'approvalMode' }, create: { key: 'approvalMode', value: approvalMode }, update: { value: approvalMode } }),
+      this.prisma.appSetting.upsert({ where: { key: AUTO_COMMIT_MIGRATION_KEY }, create: { key: AUTO_COMMIT_MIGRATION_KEY, value: true }, update: { value: true } }),
+    ]
   }
 
   async getVersioned(): Promise<VersionedSettings> {
@@ -197,7 +230,9 @@ export class SettingsService {
           return this.prisma.appSetting.upsert({ where: { key }, create: { key, value }, update: { value } })
         }),
         this.prisma.appSetting.upsert({ where: { key: VERSION_KEY }, create: { key: VERSION_KEY, value: version }, update: { value: version } }),
+        ...(this.migrationPending ? this.migrationWrites(next.approvalMode) : []),
       ])
+      this.migrationPending = false
       // The cache only changes after the transaction committed.
       this.cache = next
       this.version = version

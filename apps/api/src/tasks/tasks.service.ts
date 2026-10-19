@@ -153,10 +153,12 @@ export class TasksService {
     return this.executions.start(id)
   }
 
-  async apply(id: string, mode: 'working_tree' | 'branch' | 'fast_forward' = 'working_tree') {
+  /** Without a mode the result goes where the approval mode says (default: committed onto the main branch). */
+  async apply(id: string, mode?: 'working_tree' | 'branch' | 'fast_forward' | 'commit') {
     const execution = await this.latestExecution(id)
     if (!execution || execution.status !== 'awaiting_approval') return { ok: false, status: 'nothing_to_apply', message: 'No validated change set is waiting for approval.' }
-    return this.executions.approve(execution.id, mode)
+    const approvalMode = (await this.settings.get()).approvalMode
+    return this.executions.approve(execution.id, mode ?? (approvalMode === 'auto_commit' ? 'commit' : approvalMode === 'auto_branch' ? 'branch' : 'working_tree'))
   }
 
   async discard(id: string) {

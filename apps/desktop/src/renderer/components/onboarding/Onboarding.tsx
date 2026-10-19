@@ -171,11 +171,11 @@ function WorkspaceStep({ onNext }: { onNext: () => void }) {
   return (
     <>
       <h1>Workspace</h1>
-      <p className="muted">Öffne ein bestehendes Git-Repository, lege ein neues Projekt an oder klone ein Repository.</p>
+      <p className="muted">Öffne einen beliebigen Projektordner, lege ein neues Projekt an oder klone ein Repository. Git richtet die App selbst ein.</p>
       <div className="card">
         <ProjectSetup />
       </div>
-      {project ? <div className="callout ok">Geöffnet: <strong>{project.name}</strong> – <code>{project.repoPath}</code>{project.isGit === false ? ' (kein Git-Repository – Git kann im Git-Bereich initialisiert werden)' : ''}</div> : null}
+      {project ? <div className="callout ok">Geöffnet: <strong>{project.name}</strong> – <code>{project.repoPath}</code>{project.isGit === false ? ' (Git wird beim ersten Lauf automatisch eingerichtet)' : ''}</div> : null}
       <div className="row">
         <span className="spacer" />
         <AsyncButton className="btn primary" onClick={async () => { await markStep('workspace', Boolean(project), project?.repoPath); await reloadSettings(); onNext() }}>

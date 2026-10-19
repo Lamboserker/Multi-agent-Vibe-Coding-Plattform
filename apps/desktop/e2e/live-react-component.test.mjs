@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { go } from './helpers.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const appDir = path.resolve(here, '..')
@@ -107,9 +108,7 @@ test('user requests a React component; local model implements it; user approves'
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] })
     }, repo)
     await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
-    await page.getByText('Badge.tsx').first().waitFor({ timeout: 30_000 }).catch(async () => {
-      await page.getByText('src', { exact: true }).first().click()
-    })
+    await page.locator('.project-name', { hasText: path.basename(repo) }).waitFor({ timeout: 30_000 })
     await shot(page, '01-project-open')
     step('repository opened')
 
@@ -127,8 +126,7 @@ test('user requests a React component; local model implements it; user approves'
 
     // 5. user starts the execution; agents work in isolated worktrees
     await page.getByRole('button', { name: 'Ausführung starten' }).click()
-    await page.getByText('Änderungen bereit zur Freigabe').first().waitFor({ timeout: 45 * 60_000 })
-    await page.locator('nav.activity-bar button[title="Agenten"]').click()
+    await page.locator('[data-testid="workflow"][data-state="approval"]').waitFor({ timeout: 45 * 60_000 })
     await shot(page, '03-agents-awaiting-approval')
     const execution = (await api('GET', `/executions/${(await api('GET', `/tasks/${task.id}`)).data.executions[0].id}`)).data
     const localSuccess = execution.agentRuns.filter((runEntry) => runEntry.selectedModelClass === 'local_llm' && runEntry.outcome === 'success')
@@ -144,10 +142,10 @@ test('user requests a React component; local model implements it; user approves'
     assert.ok(execution.finalValidation.results.some((result) => result.kind === 'test' && result.status === 'passed'), 'tests must run and pass')
     assert.ok(!existsSync(path.join(repo, 'src', 'components', 'Greeting.tsx')), 'nothing may be written to the checkout before approval')
 
-    // 6. the diff is shown in the editor
-    await page.getByRole('button', { name: 'Diff im Editor' }).first().click()
-    await page.locator('.monaco-editor').first().waitFor({ timeout: 30_000 })
-    await page.waitForFunction(() => document.querySelector('.editor-host')?.textContent?.includes('Greeting'), null, { timeout: 30_000 })
+    // 6. the diff is shown on the approval screen
+    await go(page, 'Freigabe')
+    await page.locator('[data-testid="workflow-approval"] .review-file', { hasText: 'Greeting' }).first().click()
+    await page.locator('[data-testid="workflow-approval"] .diff-row.add', { hasText: 'Greeting' }).first().waitFor({ timeout: 30_000 })
     await shot(page, '04-diff')
     step('diff shown', { files: (execution.finalDiff.match(/^diff --git a\/(\S+)/gm) ?? []).map((line) => line.slice(13)) })
 

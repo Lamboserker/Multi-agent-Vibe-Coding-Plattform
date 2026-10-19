@@ -1,0 +1,103 @@
+# Builds the desktop installers for Windows and macOS (Apple Silicon + Intel).
+#
+#   - Manual run (Actions → "Desktop release" → Run workflow): installers as workflow artifacts.
+#   - Tag push `v*` (e.g. `git tag v0.3.0 && git push origin v0.3.0`): additionally a draft GitHub release.
+#
+# Native modules (Prisma engine, node-pty) are staged for the runner's own platform/architecture,
+# so every target builds on a matching runner.
+#
+# Optional secrets for trusted (warning-free) macOS builds:
+#   MAC_CSC_LINK (base64 .p12 "Developer ID Application"), MAC_CSC_KEY_PASSWORD,
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID (notarization).
+# Without them the mac app is ad-hoc signed: it runs, but Gatekeeper asks on first start.
+name: Desktop release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            script: package:win
+            arch: --x64
+          - name: mac-arm64
+            os: macos-latest
+            script: package:mac
+            arch: --arm64
+          - name: mac-x64
+            os: macos-15-intel
+            script: package:mac
+            arch: --x64
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm prisma:generate
+
+      - name: Signing mode (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+        run: |
+          if [ -z "$MAC_CSC_LINK" ]; then
+            echo "No Developer ID certificate: ad-hoc signing."
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "MAC_SIGN_ARGS=-c.mac.identity=- -c.mac.notarize=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Package
+        shell: bash
+        env:
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm --filter @multi-ai-coder/desktop run ${{ matrix.script }} ${{ matrix.arch }} $MAC_SIGN_ARGS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multi-ai-coder-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { answerFolderDialog, appDir, launch, newProfile, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { appDir, go, launch, newProfile, openProject, prepareRepository, quit, resultsDir, setupSection, stamp, waitUntil } from './helpers.mjs'
 
 const testServer = path.resolve(appDir, '../api/src/mcp/testing/test-server.mjs')
 
@@ -22,12 +22,12 @@ test('skills and MCP servers through the UI', { timeout: 10 * 60_000 }, async ()
     await api('POST', '/onboarding/complete')
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().waitFor()
 
     // ---------------- Skills ----------------
-    await page.locator('nav.activity-bar button[aria-label="Skills"]').click()
+    await setupSection(page, 'Skills')
     const skillsView = page.locator('[data-view="skills"]')
     await skillsView.locator('.plugin-item', { hasText: 'writing-tests' }).waitFor({ timeout: 30_000 })
     // builder: a project skill
@@ -61,7 +61,7 @@ test('skills and MCP servers through the UI', { timeout: 10 * 60_000 }, async ()
     await skillsView.getByText('genehmigt', { exact: true }).waitFor()
 
     // ---------------- MCP ----------------
-    await page.locator('nav.activity-bar button[aria-label="MCP-Server"]').click()
+    await setupSection(page, 'MCP-Server')
     const mcpView = page.locator('[data-view="mcp"]')
     await mcpView.getByRole('button', { name: 'Server hinzufügen' }).click()
     await mcpView.locator('label').filter({ has: page.locator('span', { hasText: /^Name$/ }) }).locator('input').fill('testserver')

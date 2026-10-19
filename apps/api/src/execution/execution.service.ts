@@ -3,8 +3,18 @@ import { Prisma, type ExecutionRun, type Subtask } from '@prisma/client'
 import {
   aggregateSuitability,
   applyChangeSet,
+  catchUpIntegration,
+  failureDigest,
+  diffBetween,
+  git,
+  isSensitivePath,
+  runValidationChecks,
+  type ApplyOutcome,
+  type ConflictHunk,
+  type HunkResolver,
   deterministicPlan,
   ExecutionRunner,
+  headCommit,
   isGitRepository,
   OrchestratorError,
   revertChangeSet,
@@ -20,9 +30,11 @@ import {
   type SuitabilityStats,
   type UsageCall,
   classifyFastPath,
+  planningContextOptions,
   type FastPathTool,
 } from '@multi-ai-coder/engine'
 import { PrismaService } from '../common/prisma.service.js'
+import { acceptMerge, cleanMergeAnswer, mergePrompt } from './conflict-merge.js'
 import { asJson, stringList } from '../common/json.js'
 import { KeyedMutex } from '../common/locks.js'
 import { LocalModelsService } from '../local-models/local-models.service.js'
@@ -36,6 +48,7 @@ import { RepoContextService } from './repo-context.service.js'
 import { PluginsService } from '../plugins/plugins.service.js'
 import { AgentResourcesService } from '../agents/agent-resources.service.js'
 import { AgentProfilesService } from '../agents/agent-profiles.service.js'
+import { ensureRepository } from '../workspace-fs/workspace-fs.service.js'
 
 const ACTIVE_STATUSES = ['pending', 'planning', 'running', 'paused', 'integrating'] as const
 
@@ -127,7 +140,12 @@ export class ExecutionService implements OnModuleInit {
     // Planning by the orchestrator takes seconds; the default local executor loads meanwhile.
     void this.settings
       .get()
-      .then((settings) => this.localModels.warmup([settings.modelRoles.balanced ?? settings.modelRoles.fast ?? settings.modelRoles.advanced], 'planning'))
+      .then((settings) => {
+        // With several role models the route is not known yet: guessing can fill VRAM with the
+        // wrong model and force the actual executor to evict/reload it immediately afterwards.
+        const models = [...new Set(Object.values(settings.modelRoles).filter((model): model is string => Boolean(model)))]
+        return models.length === 1 ? this.localModels.warmup(models, 'planning') : []
+      })
       .catch(() => undefined)
     // ... and the worktrees for the integration and the first task are checked out (pool slots)
     // (best effort: never allowed to fail the request, not even synchronously)
@@ -169,10 +187,11 @@ export class ExecutionService implements OnModuleInit {
     // plugin/skill context is only awaited when the premium planner is actually called
     const pluginContextPromise = (this.plugins?.collectContext(task.userPrompt, projectRef).catch(() => []) ?? Promise.resolve([]))
     const skillContextPromise = (this.agentResources?.promptContext('planner', task.projectId, task.userPrompt).catch(() => undefined) ?? Promise.resolve(undefined))
+    const contextOptions = planningContextOptions(task.userPrompt)
     const [settings, { index, checks, digest }, profiles, orchestrator] = await Promise.all([
       this.settings.get(),
       // precise per-file instructions need the file contents; every planner read costs a slow turn
-      this.repoContext.digest(task.projectId, task.project.repoPath, task.userPrompt, 18_000, { excerptFiles: 12, excerptChars: 20_000, excerptMaxLines: 500, fillUnranked: true }),
+      this.repoContext.digest(task.projectId, task.project.repoPath, task.userPrompt, contextOptions.budgetTokens, contextOptions),
       this.localModels.engineProfiles(),
       this.orchestrators.active(),
     ])
@@ -469,7 +488,13 @@ export class ExecutionService implements OnModuleInit {
   private async startLocked(taskId: string) {
     const task = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, include: { project: true, subtasks: true } })
     if (!task.subtasks.length) throw new BadRequestException('The task has no plan yet.')
-    if (!(await isGitRepository(task.project.repoPath))) throw new BadRequestException('The project is not a git repository. Initialise git and create a first commit to enable isolated execution.')
+    // git is set up here at the latest (no repository or no commit yet): the user never has to do it.
+    // Checked before a run exists: otherwise the run is created and fails right away.
+    if (!(await isGitRepository(task.project.repoPath)) || !(await headCommit(task.project.repoPath))) {
+      const repository = await ensureRepository(task.project.repoPath, { allowLarge: true })
+      if (!repository.hasCommit) throw new BadRequestException(`Git could not be set up automatically in this folder: ${repository.skipped ?? 'no commit could be created'}`)
+      await this.chat(taskId, 'system', `Git wurde für dieses Projekt automatisch eingerichtet (erster Commit). Ergebnisse landen nach jedem Lauf direkt auf dem Hauptbranch.${repository.excluded?.length ? ` Nicht übernommen: ${repository.excluded.join(', ')}.` : ''}`, { kind: 'repository_initialized' })
+    }
     const active = await this.prisma.executionRun.findFirst({ where: { taskId, status: { in: [...ACTIVE_STATUSES] } } })
     if (active) return active
     const settings = await this.settings.get()
@@ -649,12 +674,19 @@ export class ExecutionService implements OnModuleInit {
     const validation = run.finalValidation as { ok?: boolean }
     const diffFiles = (run.finalDiff ?? '').match(/^diff --git a\/(\S+)/gm)?.map((line) => line.replace('diff --git a/', '')) ?? []
     const safe = validation?.ok === true && (review?.kind === 'deterministic' || review?.result?.verdict === 'approve') && !diffFiles.some(isSecurityCriticalPath)
-    if (!safe) {
+    const why = safe ? '' : validation?.ok !== true ? 'die Prüfungen (Typecheck/Tests) sind nicht bestanden' : diffFiles.some(isSecurityCriticalPath) ? 'sicherheitskritische Dateien sind betroffen' : 'der Review hat das Ergebnis nicht freigegeben'
+    // auto_commit: the result always goes into the main code; concerns are only reported (undo stays possible)
+    if (!safe && settings.approvalMode !== 'auto_commit') {
       this.events.publish('run', 'auto_apply_skipped', { executionId: run.id, reason: 'Validation, review or security checks require manual approval.' }, run.id)
+      await this.chat(run.taskId, 'system', `Nicht automatisch übernommen, weil ${why}. Prüfe das Ergebnis unter „Freigabe“.`, { kind: 'auto_apply_skipped', executionId: run.id })
       return
     }
-    const result = await this.approve(run.id, settings.approvalMode === 'auto_working_tree' ? 'working_tree' : 'branch')
+    const mode: ApplyMode = settings.approvalMode === 'auto_commit' ? 'commit' : settings.approvalMode === 'auto_working_tree' ? 'working_tree' : 'branch'
+    const result = await this.approve(run.id, mode)
     this.events.publish('run', result.ok ? 'auto_applied' : 'auto_apply_skipped', { executionId: run.id, message: result.message }, run.id)
+    if (result.ok && !safe) await this.chat(run.taskId, 'system', `Automatisch committet, obwohl ${why}. Unter „Freigabe“ kannst du den Commit prüfen oder rückgängig machen.`, { kind: 'auto_applied_with_concerns', executionId: run.id })
+    // a refusal (own uncommitted changes in the same files, a conflict) waits under "Freigabe" with the reason
+    if (!result.ok) await this.chat(run.taskId, 'system', 'Nicht automatisch übernommen: deine Arbeitskopie oder dein Branch kollidiert mit dem Ergebnis. Nichts wurde verändert – Details und Optionen unter „Freigabe“.', { kind: 'auto_apply_skipped', executionId: run.id })
   }
 
   private async activeRunnerForTask(taskId: string) {
@@ -701,11 +733,21 @@ export class ExecutionService implements OnModuleInit {
   }
 
   private async approveLocked(executionId: string, mode: ApplyMode) {
-    if (!['branch', 'working_tree', 'fast_forward'].includes(mode)) throw new BadRequestException('Unknown apply mode.')
-    const run = await this.prisma.executionRun.findUniqueOrThrow({ where: { id: executionId }, include: { project: true } })
+    if (!['branch', 'working_tree', 'fast_forward', 'commit'].includes(mode)) throw new BadRequestException('Unknown apply mode.')
+    const run = await this.prisma.executionRun.findUniqueOrThrow({ where: { id: executionId }, include: { project: true, task: { select: { userPrompt: true, session: { select: { title: true } } } } } })
     if (run.status !== 'awaiting_approval') throw new BadRequestException(`Run is ${run.status}, not awaiting approval.`)
     if (!run.integrationWorktree || !run.integrationBranch || !run.baseCommit) throw new BadRequestException('Run has no integration result.')
-    const outcome = await applyChangeSet({ repoPath: run.project.repoPath, integrationWorktree: run.integrationWorktree, integrationBranch: run.integrationBranch, baseCommit: run.baseCommit, mode })
+    const title = (run.task.session?.title || run.task.userPrompt.split('\n')[0] || 'Änderungen').slice(0, 72)
+    const commitMessage = `Multi-AI Coder: ${title}`
+    let outcome = await applyChangeSet({ repoPath: run.project.repoPath, integrationWorktree: run.integrationWorktree, integrationBranch: run.integrationBranch, baseCommit: run.baseCommit, mode, commitMessage })
+    // the project moved on (newer commits, conflicting lines, own edits in the same files): the result is
+    // brought up to date in the integration worktree, validated again and applied once more
+    if (!outcome.ok && (mode === 'commit' || mode === 'working_tree')) {
+      outcome = (await this.catchUp({ ...run, integrationWorktree: run.integrationWorktree, integrationBranch: run.integrationBranch }, mode, outcome, commitMessage).catch((error: unknown) => {
+        this.logger.warn(`Catching up run ${executionId} failed: ${error instanceof Error ? error.message : String(error)}`)
+        return undefined
+      })) ?? outcome
+    }
     const record = await this.prisma.applyRecord.create({
       data: {
         executionId,
@@ -728,6 +770,134 @@ export class ExecutionService implements OnModuleInit {
     }
     this.events.publish('run', outcome.ok ? 'applied' : 'apply_rejected', { executionId, mode, message: outcome.message, blockedBy: outcome.blockedBy }, executionId)
     return { ...outcome, patch: undefined, applyRecordId: record.id }
+  }
+
+  /**
+   * A refused apply because the project moved on: the current state of the branch is merged into the
+   * result in the integration worktree (the user's checkout is not touched), conflicting regions are
+   * merged by a model, the checks run again and the result is applied once more. When committing, own
+   * uncommitted edits in the same files are saved as a commit first instead of blocking.
+   * Undefined when that is not possible (the refusal stays, with the reason in the chat).
+   */
+  private async catchUp(
+    run: ExecutionRun & { project: { id: string; repoPath: string }; task: { userPrompt: string }; integrationWorktree: string; integrationBranch: string },
+    mode: ApplyMode,
+    refused: ApplyOutcome,
+    commitMessage: string,
+  ): Promise<ApplyOutcome | undefined> {
+    const repoPath = run.project.repoPath
+    if (refused.reason === 'dirty') {
+      const files = refused.blockedBy ?? []
+      if (mode !== 'commit' || !files.length || files.some(isSensitivePath)) return undefined
+      await git(repoPath, ['add', '-A', '--', ...files])
+      const message = 'Eigene Änderungen vor der Übernahme gesichert'
+      let saved = await git(repoPath, ['commit', '-q', '-m', message, '--', ...files], { allowFailure: true })
+      // no git identity configured: the app's identity
+      if (saved.exitCode !== 0) saved = await git(repoPath, ['commit', '-q', '-m', message, '--', ...files], { allowFailure: true, internal: true })
+      if (saved.exitCode !== 0) return undefined
+      await this.chat(run.taskId, 'system', `Deine nicht committeten Änderungen in ${files.join(', ')} wurden vor der Übernahme als Commit gesichert und werden mit dem Ergebnis zusammengeführt.`, { kind: 'own_changes_saved', executionId: run.id })
+    } else if (refused.reason !== 'conflict' && refused.reason !== 'base_moved') return undefined
+
+    const target = await headCommit(repoPath)
+    if (!target) return undefined
+    const before = await headCommit(run.integrationWorktree)
+    const settings = await this.settings.get()
+    let checks: Awaited<ReturnType<RepoContextService['runContext']>>['checks'] | undefined
+    let feedback: string | undefined
+    let caughtUp: Awaited<ReturnType<typeof catchUpIntegration>> | undefined
+    let resolver: Awaited<ReturnType<ExecutionService['conflictResolver']>>
+    // up to three attempts: a merge that fails the checks goes back to the model with the error
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      resolver = await this.conflictResolver(run.id, run.integrationWorktree, feedback)
+      const merge = await catchUpIntegration({ integrationWorktree: run.integrationWorktree, target, message: 'Multi-AI Coder: aktuellen Projektstand zusammengeführt', resolve: resolver?.resolve, renames: attempt === 0 })
+      if (!merge.ok) {
+        const why = merge.unresolved.length
+          ? `${merge.unresolved.join(', ')} ${resolver ? `konnte(n) auch mit ${resolver.label} nicht sicher zusammengeführt werden` : 'konnte(n) nicht zusammengeführt werden (kein lokales Modell oder Orchestrator verfügbar)'}`
+          : merge.message
+        await this.chat(run.taskId, 'system', `Das Ergebnis konnte nicht automatisch an den neueren Projektstand angepasst werden: ${why}. Nichts wurde verändert.`, { kind: 'catch_up_failed', executionId: run.id })
+        return undefined
+      }
+      if (!merge.resolved.length) {
+        caughtUp = merge
+        break
+      }
+      // merged text is new code: the project's checks decide whether it is kept
+      checks ??= (await this.repoContext.runContext(run.project.id, repoPath, run.task.userPrompt)).checks
+      const report = await runValidationChecks(run.integrationWorktree, checks, { allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+      if (report.ok) {
+        caughtUp = merge
+        break
+      }
+      await git(run.integrationWorktree, ['reset', '-q', '--hard', before!], { allowFailure: true })
+      feedback = failureDigest(report).slice(0, 2000)
+      if (attempt === 2 || !resolver) {
+        await this.chat(run.taskId, 'system', `Die Konflikte in ${merge.resolved.join(', ')} wurden zusammengeführt, aber die Prüfungen schlagen danach fehl (${report.summary}). Nichts wurde verändert.`, { kind: 'catch_up_failed', executionId: run.id })
+        return undefined
+      }
+    }
+    if (!caughtUp) return undefined
+    const finalDiff = await diffBetween(run.integrationWorktree, target, caughtUp.head!)
+    await this.prisma.executionRun.update({ where: { id: run.id }, data: { baseCommit: target, finalDiff } })
+    const outcome = await applyChangeSet({ repoPath, integrationWorktree: run.integrationWorktree, integrationBranch: run.integrationBranch, baseCommit: target, mode, commitMessage })
+    if (outcome.ok && caughtUp.resolved.length) {
+      await this.chat(run.taskId, 'system', `Konflikte mit dem neueren Projektstand in ${caughtUp.resolved.join(', ')} automatisch zusammengeführt (${resolver?.used() ? resolver.label : 'ohne Modell'}); Prüfungen danach bestanden.`, { kind: 'conflicts_resolved', executionId: run.id, files: caughtUp.resolved })
+    }
+    return outcome
+  }
+
+  /** Merges conflicting regions: a local model first (no cost), else the connected orchestrator. */
+  private async conflictResolver(executionId: string, cwd: string, feedback?: string): Promise<{ label: string; resolve: HunkResolver; used: () => boolean } | undefined> {
+    const settings = await this.settings.get()
+    const profiles = await this.localModels.engineProfiles().catch(() => [])
+    const local = (['advanced', 'balanced', 'fast'] as const).map((role) => settings.modelRoles[role]).find((model) => model && profiles.some((profile) => profile.model === model && profile.available))
+    const accepted = (hunk: ConflictHunk, answer: string) => {
+      const merged = cleanMergeAnswer(answer, hunk)
+      return merged !== undefined && acceptMerge(hunk, merged) ? merged : undefined
+    }
+    let calls = 0
+    const used = () => calls > 0
+    if (local) {
+      const client = this.localModels.clientFor(local, await this.localModels.client())
+      return {
+        label: local,
+        used,
+        resolve: async (hunk) => {
+          calls += 1
+          // two attempts: a small model occasionally drops one side
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const result = await client.chat({ model: local, messages: mergePrompt(hunk, feedback), options: { temperature: attempt ? 0.3 : 0, num_ctx: 8192 } }, { timeoutMs: 3 * 60_000, idleTimeoutMs: 60_000 })
+            const merged = accepted(hunk, result.message.content)
+            if (merged !== undefined) return merged
+          }
+          return undefined
+        },
+      }
+    }
+    const orchestrator = await this.orchestrators.active()
+    if (!orchestrator) return undefined
+    return {
+      label: orchestrator.displayName,
+      used,
+      resolve: async (hunk) => {
+        calls += 1
+        const started = Date.now()
+        const [system, user] = mergePrompt(hunk, feedback)
+        try {
+          const { result, meta } = await orchestrator.chat({ question: `${system!.content}\n\n${user!.content}`, context: { summary: '', relevantFiles: [], validationCommands: [] } }, { runId: `merge-${executionId}-${started}`, cwd, timeoutMs: 5 * 60_000, effort: 'low' })
+          await this.prisma.modelCall.create({
+            data: {
+              kind: 'orchestrator', provider: orchestrator.id, model: meta.model ?? orchestrator.id, purpose: 'merge', status: 'ok', durationMs: meta.durationMs, executionId,
+              inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, cachedInputTokens: meta.usage.cachedInputTokens, tokensMeasured: meta.usage.measured,
+              apiEquivalentUsd: meta.usage.apiEquivalentUsd === undefined ? undefined : new Prisma.Decimal(meta.usage.apiEquivalentUsd), billing: meta.usage.billing,
+            },
+          })
+          return accepted(hunk, result.answer)
+        } catch (error) {
+          await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: orchestrator.id, model: orchestrator.id, purpose: 'merge', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, executionId } })
+          return undefined
+        }
+      },
+    }
   }
 
   async discard(executionId: string) {

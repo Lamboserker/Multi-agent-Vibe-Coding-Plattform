@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { answerFolderDialog, launch, newProfile, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { go, launch, newProfile, openProject, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
 
 const activeTab = (page) => page.locator('.tab.active').textContent()
 
@@ -37,8 +37,8 @@ test('IDE features: navigation, search/replace, language features, problems, his
     await api('POST', '/onboarding/complete')
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="src"]').first().waitFor()
 
     // --- quick open (Ctrl+P) ---
@@ -50,8 +50,7 @@ test('IDE features: navigation, search/replace, language features, problems, his
 
     // --- command palette (Ctrl+Shift+P) ---
     await palette(page, 'Ansicht: Git')
-    await page.locator('nav.activity-bar button[aria-label="Git"].active').waitFor()
-
+    
     // --- go to line + go to definition (F12) across files ---
     await page.locator('[data-testid="code-editor"] .view-lines').click()
     await gotoLine(page, 6, 8) // "<Badge label" → on "Badge"

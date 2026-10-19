@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { answerFolderDialog, launch, newProfile, prepareRepository, quit, resultsDir, stamp, waitUntil } from './helpers.mjs'
+import { answerFolderDialog, go, launch, newProfile, openProject, prepareRepository, quit, resultsDir, setupSection, stamp, waitUntil } from './helpers.mjs'
 
 async function openPlugin(page, name) {
   const back = page.locator('button[aria-label="Zurück zur Liste"]')
@@ -62,12 +62,12 @@ test('plugin manager: permissions, views, secrets, third-party sandbox, restart'
     await api('POST', '/onboarding/complete')
     await page.reload()
     await page.waitForSelector('.ide', { timeout: 60_000 })
-    await answerFolderDialog(app, repo)
-    await page.getByRole('button', { name: 'Ordner öffnen' }).first().click()
+    await openProject(app, page, repo)
+    await go(page, 'Code')
     await page.locator('[data-path="data"]').first().waitFor()
 
     // --- the shipped plugins are listed, disabled until permissions are granted ---
-    await page.locator('nav.activity-bar button[aria-label="Erweiterungen"]').click()
+    await setupSection(page, 'Erweiterungen')
     await waitUntil(async () => (await page.locator('.plugin-item').count()) === 7, 30_000, 'seven shipped plugins listed')
 
     // --- Database Tools: grant, view with form, read query, confirmed write ---
@@ -123,7 +123,7 @@ test('plugin manager: permissions, views, secrets, third-party sandbox, restart'
     }, 60_000, 'plugins active after restart')
 
     // --- disable and uninstall ---
-    await page.locator('nav.activity-bar button[aria-label="Erweiterungen"]').click()
+    await setupSection(page, 'Erweiterungen')
     await openPlugin(page, 'E2E Sneaky')
     await page.getByRole('button', { name: 'Deinstallieren' }).click()
     await page.locator('.modal .btn.danger').click()

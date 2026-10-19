@@ -16,10 +16,20 @@ import type { Activity, ChatMessage, ExecutionRun, Project, RunEvent, SessionDet
 export type SideView = 'projects' | 'explorer' | 'search' | 'git' | 'tasks' | 'agents' | 'models' | 'plugins' | 'skills' | 'mcp' | 'usage' | 'diagnostics' | 'settings'
 export type BottomTab = 'terminal' | 'logs' | 'tests' | 'diff' | 'run' | 'problems'
 export type Theme = 'dark' | 'light'
+/** Main screens of the navigation rail. */
+export type Screen = 'leitstand' | 'code' | 'review' | 'sessions' | 'models' | 'usage' | 'setup'
+export type SetupSection = 'onboarding' | 'settings' | 'agents' | 'plugins' | 'skills' | 'mcp' | 'diagnostics'
+export type LeitstandVariant = 'graph' | 'tiles'
 
 /** Window-level layout, persisted globally ("ui" document). */
 export interface UiState {
   theme: Theme
+  screen: Screen
+  setupSection: SetupSection
+  /** Leitstand: agents as a flow graph or as live tiles. */
+  leitstandVariant: LeitstandVariant
+  /** Leitstand: details of the selected agent below the graph. */
+  inspectorOpen: boolean
   sideView: SideView
   bottomTab: BottomTab
   bottomOpen: boolean
@@ -45,6 +55,8 @@ export interface ComposerDraft {
 /** Per-project work state, persisted as "workspace:<projectId>". */
 export interface WorkspaceState {
   activeSessionId?: string
+  /** Sessions whose tab in the header was closed (the sessions themselves stay). */
+  closedSessionTabs?: string[]
   chatView?: 'workflow' | 'history'
   explorer: { expanded: string[]; selected?: string }
   /** Chat composer drafts per session ("new" = no session yet). */
@@ -83,7 +95,7 @@ function initialTheme(): Theme {
 export const appStore = createStore<AppState>({
   booted: false,
   reconnecting: false,
-  ui: { theme: initialTheme(), sideView: 'explorer', bottomTab: 'terminal', bottomOpen: true, bottomMaximized: false, sideOpen: true, chatOpen: true, sideWidths: {} },
+  ui: { theme: initialTheme(), screen: 'leitstand', setupSection: 'onboarding', leitstandVariant: 'graph', inspectorOpen: true, sideView: 'explorer', bottomTab: 'terminal', bottomOpen: true, bottomMaximized: false, sideOpen: true, chatOpen: true, sideWidths: {} },
   workspace: EMPTY_WORKSPACE,
   activity: { executions: [], plans: [], asks: [] },
 })
@@ -142,7 +154,8 @@ export const terminalStore = createStore<{ list: TerminalInfo[] }>({ list: [] })
 
 export interface EditorTab {
   id: string
-  kind: 'file' | 'diff'
+  /** preview: a local dev server (path is its URL) shown inside the app */
+  kind: 'file' | 'diff' | 'preview'
   path: string
   title: string
   dirty: boolean

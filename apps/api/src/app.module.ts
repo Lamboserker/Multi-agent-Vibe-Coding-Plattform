@@ -37,6 +37,9 @@ import { LocalModelsController } from './local-models/local-models.controller.js
 import { ExecutionService } from './execution/execution.service.js'
 import { ExecutionController } from './execution/execution.controller.js'
 import { RepoContextService } from './execution/repo-context.service.js'
+import { PlanInsightsService } from './execution/plan-insights.service.js'
+import { PlanInsightsController } from './execution/plan-insights.controller.js'
+import { ResourceMonitorService } from './local-models/resource-monitor.service.js'
 import { WorkspaceFsService } from './workspace-fs/workspace-fs.service.js'
 import { WorkspaceFsController } from './workspace-fs/workspace-fs.controller.js'
 import { SelfTestController } from './runtime/self-test.controller.js'
@@ -72,6 +75,7 @@ import { LocalHistoryService } from './ide/local-history.service.js'
     OrchestratorController,
     LocalModelsController,
     ExecutionController,
+    PlanInsightsController,
     WorkspaceFsController,
     SelfTestController,
     SessionsController,
@@ -104,6 +108,8 @@ import { LocalHistoryService } from './ide/local-history.service.js'
     OrchestratorService,
     LocalModelsService,
     ExecutionService,
+    PlanInsightsService,
+    ResourceMonitorService,
     RepoContextService,
     WorkspaceFsService,
     SessionsService,

@@ -1,0 +1,133 @@
+[
+  {
+    "id": "cmv9lyof0000lv2hc2v47j9an",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": null,
+    "level": "info",
+    "type": "integration_ready",
+    "message": "Integration worktree on mac/yyzs4ac5/integration (base b1f94a9b).",
+    "data": {},
+    "createdAt": "2026-10-15T14:02:27.996Z"
+  },
+  {
+    "id": "cmv9lyofa000ov2hcm7u8vq6o",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "info",
+    "type": "task_state",
+    "message": "task-001: running",
+    "data": {
+      "state": "running"
+    },
+    "createdAt": "2026-10-15T14:02:28.006Z"
+  },
+  {
+    "id": "cmv9lyofa000pv2hc9p3osc1u",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "info",
+    "type": "task_routed",
+    "message": "task-001 → qwen3:4b (fast).",
+    "data": {
+      "reasons": [
+        "Simple task (complexity 1, risk 1).",
+        "qwen3:4b: no history for \"general\" yet (insufficient data)."
+      ]
+    },
+    "createdAt": "2026-10-15T14:02:28.006Z"
+  },
+  {
+    "id": "cmv9lyoq2000rv2hcby3b0tlk",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "info",
+    "type": "worktree_created",
+    "message": "task-001: worktree at b1f94a9b.",
+    "data": {
+      "path": "C:\\Users\\lukas\\AppData\\Local\\Temp\\comparison-after-slug-2026-10-15T14-01-49-442Z-ooHDif\\profile\\worktrees\\cmv9ly0l90000v2hcujsckbab\\pool-0"
+    },
+    "createdAt": "2026-10-15T14:02:28.394Z"
+  },
+  {
+    "id": "cmv9lyos2000vv2hcrhu3zdk0",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "info",
+    "type": "agent_started",
+    "message": "task-001: qwen3:4b, tool calling, mit Skills: writing-tests, code-review, changelog.",
+    "data": {},
+    "createdAt": "2026-10-15T14:02:28.466Z"
+  },
+  {
+    "id": "cmv9lyrk0000xv2hc3o44552v",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ write src/slug.mjs – Created src/slug.mjs (1 lines).",
+    "data": {},
+    "createdAt": "2026-10-15T14:02:32.064Z"
+  },
+  {
+    "id": "cmv9lyrk2000zv2hcmc9bnjoa",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "debug",
+    "type": "tool_call",
+    "message": "✓ edit src/index.mjs – Edited src/index.mjs.",
+    "data": {},
+    "createdAt": "2026-10-15T14:02:32.066Z"
+  },
+  {
+    "id": "cmv9lyuol0014v2hcczoc160w",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "debug",
+    "type": "task_handoff",
+    "message": "task-001: handoff for dependent tasks (2 file(s)).",
+    "data": {
+      "handoff": {
+        "key": "task-001",
+        "title": "Add slugify and export it publicly",
+        "files": [
+          "src/index.mjs",
+          "src/slug.mjs"
+        ],
+        "summary": "Added slugify utility with named exports; preserved version and tests"
+      }
+    },
+    "createdAt": "2026-10-15T14:02:36.117Z"
+  },
+  {
+    "id": "cmv9lyuol0015v2hchkaec89p",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "info",
+    "type": "task_integrated",
+    "message": "task-001: integrated (2 file(s), tests 1 passed).",
+    "data": {},
+    "createdAt": "2026-10-15T14:02:36.117Z"
+  },
+  {
+    "id": "cmv9lyuwa0017v2hc3f5zkx4r",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": "cmv9lyl32000cv2hcsbu4ibq3",
+    "level": "info",
+    "type": "task_state",
+    "message": "task-001: succeeded",
+    "data": {
+      "state": "succeeded"
+    },
+    "createdAt": "2026-10-15T14:02:36.394Z"
+  },
+  {
+    "id": "cmv9lyxme0019v2hcaqvklark",
+    "executionId": "cmv9lyo3t000iv2hcyyzs4ac5",
+    "subtaskId": null,
+    "level": "info",
+    "type": "run_ready",
+    "message": "Run finished; waiting for approval.",
+    "data": {},
+    "createdAt": "2026-10-15T14:02:39.927Z"
+  }
+]

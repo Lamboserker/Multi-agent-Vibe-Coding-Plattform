@@ -22,6 +22,10 @@ export type LocalAgentEvent =
 export interface AgentTool {
   name: string
   description: string
+  /** A prerequisite for this task, rather than merely an available tool. */
+  required?: boolean
+  /** Information/instruction tool; its required result must precede dependent edits. */
+  readOnly?: boolean
   /** JSON schema of the arguments. */
   parameters: Record<string, unknown>
   /** Returns the text handed back to the model (truncated by the agent loop). */
@@ -34,6 +38,8 @@ export interface LocalAgentInput {
   /** Ollama keep_alive for the agent's calls (default 15m). */
   keepAlive?: string
   supportsTools: boolean
+  /** One structured response for a small self-contained task; otherwise use the tool loop. */
+  preferStructured?: boolean
   supportsThinking?: boolean
   workspace: WorkspaceFiles
   task: LocalAgentTask
@@ -49,6 +55,8 @@ export interface LocalAgentInput {
   onEvent?: (event: LocalAgentEvent) => void
   /** Additional tools (only offered in tool-calling mode). */
   extraTools?: AgentTool[]
+  /** Prerequisites resolved from the original goal by the application. */
+  requiredTools?: string[]
   /** Appended to the system prompt (e.g. the index of available skills). */
   extraInstructions?: string
 }
@@ -76,7 +84,21 @@ Use the provided tools to read and change files. Rules:
 - Use edit_file with an exact, unique "search" snippet copied from the file for small changes; use write_file for new files or full rewrites.
 - Only touch files needed for the task. Never touch .env files, credentials, lockfiles or CI configuration.
 - Follow the existing code style, imports and conventions of the repository.
-- When the task is complete, call finish with a one-paragraph summary.`
+- When you use a symbol from another file, import it from that exact file path.
+- Files supplied below are already read: edit them directly. Prefer edit_file over rewriting an existing file.
+- Batch independent file operations in one response. Include finish after the final edits in that response; the engine runs validation afterwards.
+- Follow the supplied solution directly. Do not narrate your reasoning or repeat the plan.
+- When the task is complete, call finish with a summary below 300 characters.`
+
+const STRUCTURED_SYSTEM_PROMPT = `You are a careful software engineer implementing ONE task inside a git worktree.
+The current target files are provided. Respond ONLY with a JSON object containing a short summary and an operations array.
+Use action "edit" with path, an exact unique search snippet and the corrected replace text for existing files.
+Use action "write" with path and complete content for new files. Each operation must implement an actual change.
+Preserve unrelated code, exports and conventions. Never touch .env files, credentials, lockfiles or CI configuration.
+Include the imports needed for symbols used from other files. Export each symbol only once.
+Follow the supplied plan directly; do not repeat analysis or explain your reasoning. Keep summary below 300 characters.
+If a skill applies but its full instructions are not supplied, or you need any tool, resource or further exploration before editing, return needs_tools: true and an EMPTY operations array. The engine will offer the full tool set before any changes. Otherwise return needs_tools: false and the complete operations. Never skip required skill instructions or tool access.
+The engine applies your operations and runs the project checks.`
 
 export const LOCAL_AGENT_TOOLS: OllamaToolDefinition[] = [
   {
@@ -146,6 +168,7 @@ export const STRUCTURED_PATCH_SCHEMA = {
   type: 'object',
   properties: {
     summary: { type: 'string' },
+    needs_tools: { type: 'boolean' },
     operations: {
       type: 'array',
       items: {
@@ -157,11 +180,11 @@ export const STRUCTURED_PATCH_SCHEMA = {
           search: { type: 'string', description: 'exact unique snippet for edit, empty for write' },
           replace: { type: 'string', description: 'replacement for edit, empty for write' },
         },
-        required: ['action', 'path', 'content', 'search', 'replace'],
+        required: ['action', 'path'],
       },
     },
   },
-  required: ['summary', 'operations'],
+  required: ['summary', 'needs_tools', 'operations'],
 }
 
 function taskPrompt(input: LocalAgentInput, preloaded: string): string {
@@ -176,7 +199,7 @@ function taskPrompt(input: LocalAgentInput, preloaded: string): string {
       ? `## The previous attempt failed validation – fix these errors
 ${input.previousFailures}
 
-The files below contain your previous attempt. Do not repeat it unchanged: change exactly what is needed to make the failing checks pass (the tests may be wrong as well as the code).`
+The files below contain your previous attempt. Do not repeat it unchanged: change exactly what is needed to meet the original task and failing checks. Preserve supplied acceptance tests unless the task explicitly requests test changes.`
       : '',
     `## Repository context\n${input.context}`,
     preloaded ? `## Current content of the files to edit\n${preloaded}` : '',
@@ -186,24 +209,58 @@ The files below contain your previous attempt. Do not repeat it unchanged: chang
 }
 
 /** Puts the content of small target files directly into the prompt (saves tool round-trips). */
-async function preloadFiles(workspace: WorkspaceFiles, files: string[], budgetChars: number): Promise<string> {
+async function preloadFiles(workspace: WorkspaceFiles, files: string[], budgetChars: number, completeFiles?: Set<string>, missingFiles?: Set<string>): Promise<string> {
   const parts: string[] = []
   let used = 0
   for (const file of files.slice(0, 6)) {
     try {
       const read = await workspace.read(file)
-      const block = `### ${read.path}\n\`\`\`\n${read.content}\n\`\`\``
-      if (used + block.length > budgetChars) break
+      const block = `### ${read.path}${read.truncated ? ' (partial; read the needed range before editing)' : ' (complete)'}\n\`\`\`\n${read.content}\n\`\`\``
+      if (used + block.length > budgetChars) continue
       parts.push(block)
+      if (!read.truncated) completeFiles?.add(file)
       used += block.length
-    } catch {
-      // file does not exist yet or is not readable
+    } catch (error) {
+      // Only confirmed absence permits a new file without preloaded content.
+      if (error instanceof ToolInputError && error.code === 'not_found') missingFiles?.add(file)
     }
   }
   return parts.join('\n\n')
 }
 
+/** Conservative estimate, not a tokenizer. Reserve space before Ollama can silently drop the task. */
+function requestTokens(messages: OllamaMessage[], schema: unknown): number {
+  return Math.ceil(Buffer.byteLength(JSON.stringify({ messages, schema }), 'utf8') / 3) + messages.length * 16
+}
+
+function ensureContext(messages: OllamaMessage[], schema: unknown, numCtx: number, responseTokens: number): void {
+  if (requestTokens(messages, schema) > numCtx - responseTokens) {
+    throw new OllamaError('Task instructions/tools exceed the context budget. Split the task or increase its context limit; no model call was started.', 'resource_limit')
+  }
+}
+
+/** Some templates leak a completed reasoning block even with think:false. Only parse the final
+ * answer, never JSON examples inside that block. File operations still pass the normal validator. */
+function structuredAnswer(content: string): unknown {
+  const end = content.lastIndexOf('</think>')
+  const answer = (end >= 0 ? content.slice(end + '</think>'.length) : content).trim()
+  const fenced = answer.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/)
+  return JSON.parse(fenced?.[1] ?? answer)
+}
+
 const TOOL_NAMES = new Set(LOCAL_AGENT_TOOLS.map((tool) => tool.function.name))
+
+/** Strong task requirements; a catalogue entry or a negated mention is not sufficient. */
+export function requiredToolNames(tools: AgentTool[], taskText: string): string[] {
+  return tools.filter(tool => {
+    if (tool.required) return true
+    const escaped = tool.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const named = new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`, 'iu')
+    return taskText.split(/[\n;:,]|[.!?](?=\s)/u).some(clause => named.test(clause) &&
+      /\b(call|use|invoke|query|fetch|load|run|read|rufe?|verwende|nutze|lade|lies|hole|aufrufen)\b/iu.test(clause) &&
+      !/\b(not|never|without|don't|mustn't|can't|cannot|nicht|ohne|kein|keine|keinen)\b/iu.test(clause))
+  }).map(tool => tool.name)
+}
 
 /**
  * Some models (e.g. qwen2.5-coder via Ollama) emit tool calls as JSON text in the message content
@@ -211,11 +268,13 @@ const TOOL_NAMES = new Set(LOCAL_AGENT_TOOLS.map((tool) => tool.function.name))
  * <tool_call> blocks – for known tool names only. Recovered calls are validated like native ones.
  */
 export function recoverTextToolCalls(content: string, extraNames: ReadonlySet<string> = new Set()): OllamaToolCall[] {
-  const text = content.trim()
+  const thinkingEnd = content.lastIndexOf('</think>')
+  const text = (thinkingEnd >= 0 ? content.slice(thinkingEnd + '</think>'.length) : content).trim()
   if (!text) return []
   const candidates: string[] = []
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) candidates.push(match[1]!)
-  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) candidates.push(match[1]!)
+  // XML often lives inside a Markdown fence: those are two views of ONE call, not two calls.
+  if (!candidates.length) for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) candidates.push(match[1]!)
   if (!candidates.length) candidates.push(text)
   const calls: OllamaToolCall[] = []
   const accept = (value: unknown) => {
@@ -343,12 +402,28 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
   const deadlineSignal = AbortSignal.timeout(input.timeoutMs ?? 15 * 60_000)
   input = { ...input, signal: AbortSignal.any([deadlineSignal, ...(callerSignal ? [callerSignal] : [])]) }
   const numCtx = input.numCtx ?? 16_384
-  // Repair rounds also show the files created by the previous attempt (still present in the worktree).
-  const preloadTargets = [...new Set([...input.task.relevantFiles, ...(input.previousFailures ? input.task.newFiles : [])])]
-  const preloaded = await preloadFiles(input.workspace, preloadTargets, Math.floor(numCtx * 4 * 0.35))
+  // File tools cannot be shadowed by application tools.
+  const extraTools = (input.extraTools ?? []).filter(tool => !TOOL_NAMES.has(tool.name))
+  const extraNames = new Set(extraTools.map(tool => tool.name))
+  const requiredTools = new Set([...(input.requiredTools ?? []), ...requiredToolNames(extraTools, [input.task.title, input.task.description, ...input.task.acceptanceCriteria].join('\n'))])
+  const requiredDataTools = new Set(extraTools.filter(tool => requiredTools.has(tool.name) && (tool.required || tool.readOnly)).map(tool => tool.name))
+  // A nominally new file may already exist, including after a repair attempt. Read it too.
+  const preloadTargets = [...new Set([...input.task.relevantFiles, ...input.task.newFiles])]
+  const preloadBudget = Math.floor(numCtx * 3 * 0.3)
+  const completeFiles = new Set<string>()
+  const missingFiles = new Set<string>()
+  let preloaded = await preloadFiles(input.workspace, preloadTargets, preloadBudget, completeFiles, missingFiles)
+  // Available tools do not imply that this task needs them. The structured response can
+  // request the full tool loop before editing; all skill instructions are retained.
+  const structured = input.preferStructured && !requiredTools.size &&
+    preloadTargets.length > 0 && preloadTargets.length <= 6 &&
+    preloadTargets.every(file => completeFiles.has(file) || (input.task.newFiles.includes(file) && missingFiles.has(file)))
+  const useTools = input.supportsTools && !structured
+  const outputBudget = input.maxOutputTokens ?? (structured ? 8192 : 16384)
+  const responseBudget = Math.min(structured ? 2048 : 4096, Math.max(1, Math.floor(numCtx / 4)))
   const result: LocalAgentResult = {
     status: 'failed',
-    mode: input.supportsTools ? 'tools' : 'structured',
+    mode: useTools ? 'tools' : 'structured',
     summary: '',
     steps: 0,
     toolCalls: 0,
@@ -362,17 +437,20 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
   const deadline = started + (input.timeoutMs ?? 15 * 60_000)
   const remaining = () => Math.max(1, deadline - Date.now())
   // A slightly higher temperature on repairs avoids repeating the identical failing output.
-  const options = { num_ctx: numCtx, temperature: input.previousFailures ? 0.35 : 0.15, ...(input.maxOutputTokens ? { num_predict: input.maxOutputTokens } : {}) }
+  const options = { num_ctx: numCtx, temperature: input.previousFailures ? 0.35 : 0.15, num_predict: Math.min(responseBudget, outputBudget) }
   const think = input.supportsThinking ? false : undefined
 
-  const systemPrompt = input.extraInstructions ? `${SYSTEM_PROMPT}\n\n${input.extraInstructions}` : SYSTEM_PROMPT
-  // file tools keep their names; application tools must not shadow them
-  const extraTools = (input.extraTools ?? []).filter((tool) => !TOOL_NAMES.has(tool.name))
-  const extraNames = new Set(extraTools.map((tool) => tool.name))
+  const systemPrompt = [SYSTEM_PROMPT, input.extraInstructions,
+    requiredTools.size ? `Required task tools: ${[...requiredTools].join(', ')}. Use them before finishing, following the task's operation order; never invent their results.` : '',
+    requiredDataTools.size ? `Before editing, obtain these required information/instruction results: ${[...requiredDataTools].join(', ')}. Use their actual results in a subsequent response.` : '',
+  ].filter(Boolean).join('\n\n')
   const tools: OllamaToolDefinition[] = [...LOCAL_AGENT_TOOLS, ...extraTools.map((tool) => ({ type: 'function' as const, function: { name: tool.name, description: tool.description, parameters: tool.parameters } }))]
 
   try {
-    if (input.supportsTools) {
+    if (requiredTools.size && (!useTools || [...requiredTools].some(name => !extraNames.has(name)))) {
+      throw new OllamaError('Required task tools are unavailable; no changes were applied.', 'invalid_response')
+    }
+    if (useTools) {
       const messages: OllamaMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: taskPrompt(input, preloaded) },
@@ -381,8 +459,20 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
       let nudged = false
       for (let step = 1; step <= maxSteps; step += 1) {
         if (Date.now() > deadline) throw new OllamaError('Task time limit reached.', 'timeout')
-        if (input.maxOutputTokens && result.completionTokens >= input.maxOutputTokens) throw new OllamaError('Agent output token resource limit reached.', 'resource_limit')
-        if (input.maxOutputTokens) options.num_predict = input.maxOutputTokens - result.completionTokens
+        if (result.completionTokens >= outputBudget) throw new OllamaError('Agent output token resource limit reached.', 'resource_limit')
+        options.num_predict = Math.min(responseBudget, outputBudget - result.completionTokens)
+        // Keep the task and the latest complete tool round. Refresh supplied files after writes,
+        // rather than retaining a stale original alongside an ever growing history.
+        if (requestTokens(messages, tools) > numCtx - options.num_predict && messages.length > 4) {
+          let lastAssistant = messages.length - 1
+          while (lastAssistant > 2 && messages[lastAssistant]?.role !== 'assistant') lastAssistant--
+          if (lastAssistant > 2) {
+            preloaded = await preloadFiles(input.workspace, [...new Set([...preloadTargets, ...input.workspace.touched])], preloadBudget)
+            messages[1] = { role: 'user', content: taskPrompt(input, preloaded) + '\n\nOlder tool rounds omitted to fit context. Current files above include edits already applied. Re-read any other file you still need.' }
+            messages.splice(2, lastAssistant - 2)
+          }
+        }
+        ensureContext(messages, tools, numCtx, options.num_predict)
         result.steps = step
         input.onEvent?.({ type: 'step', step, mode: 'tools' })
         const response = await input.client.chat(
@@ -391,8 +481,10 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
         )
         result.promptTokens += response.promptTokens
         result.completionTokens += response.completionTokens
-        if (response.promptTokens > numCtx || (input.maxOutputTokens && result.completionTokens > input.maxOutputTokens)) throw new OllamaError('Model exceeded the agent context/output token limit; response discarded before applying tools.', 'resource_limit')
+        if (response.promptTokens > numCtx || result.completionTokens > outputBudget) throw new OllamaError('Model exceeded the agent context/output token limit; response discarded before applying tools.', 'resource_limit')
         input.onEvent?.({ type: 'usage', promptTokens: response.promptTokens, completionTokens: response.completionTokens })
+        if (input.signal?.aborted) throw new OllamaError('Agent aborted before applying response.', 'aborted')
+        if (response.doneReason === 'length' || response.completionTokens >= options.num_predict) throw new OllamaError('Model response reached its output limit; incomplete response discarded.', 'resource_limit')
         messages.push(response.message)
         let calls = response.message.tool_calls ?? []
         if (!calls.length) {
@@ -411,36 +503,42 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
         if (response.message.content.trim() && !calls.length) input.onEvent?.({ type: 'text', text: response.message.content.slice(0, 2000) })
 
         if (!calls.length) {
-          if (input.workspace.touched.size) {
-            result.summary = response.message.content.trim().slice(0, 2000) || 'Changes applied.'
-            break
-          }
+
           if (nudged) {
-            result.error = 'The model answered without using the tools to change any file.'
+            result.error = 'The model did not explicitly finish the task using the tools.'
             result.errorKind = 'tool_misuse'
             break
           }
           nudged = true
-          messages.push({ role: 'user', content: 'You have not changed any file yet. Use write_file or edit_file to implement the task now, then call finish.' })
+          messages.push({ role: 'user', content: 'Complete the remaining task using write_file or edit_file as needed, then explicitly call finish.' })
           continue
         }
 
         let finished: string | undefined
+        let batchFailed = false
+        // A patch generated in the same response cannot yet depend on the returned tool result.
+        const awaitingRequiredResults = requiredTools.size > 0
+        const awaitingRequiredData = requiredDataTools.size > 0
         for (const call of calls) {
           result.toolCalls += 1
-          const outcome = await executeToolCall(call, input.workspace, input.search, extraTools, input.signal)
-          if (!outcome.ok) result.invalidToolCalls += 1
+          const mutating = ['write_file', 'edit_file'].includes(call.function?.name)
+          const outcome = (awaitingRequiredData && mutating) || (awaitingRequiredResults && call.function?.name === 'finish')
+            ? { ok: false, output: mutating ? 'Required information tools must return before editing. Use their results in your next response.' : 'Required task tools must return before finishing. Read their results in your next response.' }
+            : await executeToolCall(call, input.workspace, input.search, extraTools, input.signal)
+          if (outcome.ok) { requiredTools.delete(call.function?.name); requiredDataTools.delete(call.function?.name) }
+          if (!outcome.ok) { result.invalidToolCalls += 1; batchFailed = true }
           input.onEvent?.({ type: 'tool_call', name: call.function?.name ?? '?', args: summarizeArgs(call), ok: outcome.ok, result: outcome.output.slice(0, 300) })
-          messages.push({ role: 'tool', content: outcome.output.slice(0, 12_000), tool_name: call.function?.name })
-          if (outcome.finished !== undefined) finished = outcome.finished
+          const limit = Math.min(12_000, Math.floor(numCtx * 0.75))
+          messages.push({ role: 'tool', content: outcome.output.length > limit ? `${outcome.output.slice(0, limit)}\n[partial tool result; request a narrower range if needed]` : outcome.output, tool_name: call.function?.name })
+          if (outcome.finished !== undefined && !batchFailed) { finished = outcome.finished; break }
         }
         if (result.invalidToolCalls >= 6) {
           result.error = `Too many invalid tool calls (${result.invalidToolCalls}).`
           result.errorKind = 'tool_misuse'
           break
         }
-        if (finished !== undefined) {
-          result.summary = finished
+        if (finished !== undefined && !batchFailed) {
+          result.summary = finished.slice(0, 300)
           break
         }
         if (step === maxSteps) result.error = `Step limit (${maxSteps}) reached before the model called finish.`
@@ -448,24 +546,24 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
     } else {
       // Structured output mode: up to two rounds (second round gets apply errors back).
       let feedback = ''
-      for (let round = 1; round <= 2; round += 1) {
-        if (input.maxOutputTokens) {
-          const left = input.maxOutputTokens - result.completionTokens
+      for (let round = 1; round <= Math.min(2, input.maxSteps ?? 16); round += 1) {
+        {
+          const left = outputBudget - result.completionTokens
           if (left <= 0) throw new OllamaError('Agent output token resource limit reached.', 'resource_limit')
-          options.num_predict = left
+          options.num_predict = Math.min(responseBudget, left)
         }
         result.steps = round
         input.onEvent?.({ type: 'step', step: round, mode: 'structured' })
+        if (round > 1) preloaded = await preloadFiles(input.workspace, [...new Set([...preloadTargets, ...input.workspace.touched])], preloadBudget)
+        const messages: OllamaMessage[] = [
+          { role: 'system', content: STRUCTURED_SYSTEM_PROMPT + (extraTools.length ? '\nAvailable additional tools (request needs_tools before using any): ' + extraTools.map(tool => tool.name + ': ' + tool.description).join('\n') : '') + (input.extraInstructions ? `\n\n${input.extraInstructions}` : '') },
+          { role: 'user', content: taskPrompt(input, preloaded) + (feedback ? `\n\n## Your previous operations failed\n${feedback}\nSuccessful operations are already applied in the current files above. Return only remaining fixes.` : '') },
+        ]
+        ensureContext(messages, STRUCTURED_PATCH_SCHEMA, numCtx, options.num_predict)
         const response = await input.client.chat(
           {
             model: input.model,
-            messages: [
-              {
-                role: 'system',
-                content: `${systemPrompt}\nYou cannot call tools. Respond ONLY with JSON: {"summary": string, "operations": [{"action":"write"|"edit","path":string,"content":string,"search":string,"replace":string}]}. For "write" give the complete file in content; for "edit" give an exact unique search snippet and its replacement.`,
-              },
-              { role: 'user', content: taskPrompt(input, preloaded) + (feedback ? `\n\n## Your previous operations failed\n${feedback}` : '') },
-            ],
+            messages,
             format: STRUCTURED_PATCH_SCHEMA,
             options,
             keep_alive: input.keepAlive ?? '15m',
@@ -476,16 +574,28 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
         result.promptTokens += response.promptTokens
         result.completionTokens += response.completionTokens
         input.onEvent?.({ type: 'usage', promptTokens: response.promptTokens, completionTokens: response.completionTokens })
-        let parsed: { summary?: unknown; operations?: unknown }
-        if (response.promptTokens > numCtx || (input.maxOutputTokens && result.completionTokens > input.maxOutputTokens)) throw new OllamaError('Model exceeded the agent context/output token limit; response discarded before applying operations.', 'resource_limit')
+        if (input.signal?.aborted) throw new OllamaError('Agent aborted before applying response.', 'aborted')
+        if (response.doneReason === 'length' || response.completionTokens >= options.num_predict) throw new OllamaError('Model response reached its output limit; incomplete response discarded.', 'resource_limit')
+        let parsed: { summary?: unknown; operations?: unknown; needs_tools?: unknown }
+        if (response.promptTokens > numCtx || result.completionTokens > outputBudget) throw new OllamaError('Model exceeded the agent context/output token limit; response discarded before applying operations.', 'resource_limit')
         try {
-          parsed = JSON.parse(response.message.content) as typeof parsed
+          const value = structuredAnswer(response.message.content)
+          if (!value || typeof value !== 'object' || !Array.isArray((value as { operations?: unknown }).operations)) throw new Error('Expected an operations array.')
+          parsed = value as typeof parsed
         } catch {
           feedback = 'Your answer was not valid JSON.'
           continue
         }
+        if (parsed.needs_tools === true) {
+          if (!input.supportsTools || (parsed.operations as unknown[]).length) throw new OllamaError('Required tools unavailable or mixed with premature operations; response discarded.', 'invalid_response')
+          const remainingSteps = (input.maxSteps ?? 16) - result.steps
+          if (remainingSteps <= 0) throw new OllamaError('No steps left for required tools.', 'resource_limit')
+          const fallback = await runLocalAgent({ ...input, preferStructured: false, maxSteps: remainingSteps, maxOutputTokens: outputBudget - result.completionTokens, timeoutMs: remaining() })
+          return { ...fallback, steps: result.steps + fallback.steps, promptTokens: result.promptTokens + fallback.promptTokens, completionTokens: result.completionTokens + fallback.completionTokens, durationMs: Date.now() - started }
+        }
         const operations = Array.isArray(parsed.operations) ? parsed.operations : []
         const errors: string[] = []
+        let appliedOperations = 0
         for (const raw of operations) {
           const operation = toOperation(raw)
           if (!operation) {
@@ -494,7 +604,20 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
           }
           result.toolCalls += 1
           try {
+            // A complete response can redundantly restate already-correct content. Verify it
+            // through the normal scope/read rules; do not count it as an actual change.
+            if (operation.action === 'edit' && operation.search.replace(/\r\n/g, '\n') === operation.replace.replace(/\r\n/g, '\n')) {
+              input.workspace.assertWritable(operation.path)
+              const current = await input.workspace.read(operation.path)
+              const needle = operation.search.replace(/\r\n/g, '\n')
+              const first = current.content.indexOf(needle)
+              if (!current.truncated && first >= 0 && current.content.indexOf(needle, first + needle.length) < 0) {
+                input.onEvent?.({ type: 'tool_call', name: operation.action, args: operation.path, ok: true, result: 'Verified unchanged content; no operation needed.' })
+                continue
+              }
+            }
             const applied = await input.workspace.apply(operation)
+            appliedOperations++
             input.onEvent?.({ type: 'tool_call', name: operation.action, args: operation.path, ok: true, result: applied.summary })
           } catch (error) {
             result.invalidToolCalls += 1
@@ -503,12 +626,12 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
             input.onEvent?.({ type: 'tool_call', name: operation.action, args: operation.path, ok: false, result: message })
           }
         }
-        result.summary = typeof parsed.summary === 'string' ? parsed.summary : ''
-        if (!errors.length && input.workspace.touched.size) break
-        feedback = errors.join('\n') || 'No operations were returned.'
+        result.summary = typeof parsed.summary === 'string' ? parsed.summary.slice(0, 300) : ''
+        if (appliedOperations && !errors.length && input.workspace.touched.size) { feedback = ''; break }
+        feedback = errors.join('\n') || 'No actual changes were returned.'
       }
-      if (!input.workspace.touched.size) {
-        result.error = 'The model did not produce applicable file operations.'
+      if (feedback || !input.workspace.touched.size) {
+        result.error = feedback || 'The model did not produce applicable file operations.'
         result.errorKind = 'invalid_output'
       }
     }
@@ -520,12 +643,8 @@ export async function runLocalAgent(input: LocalAgentInput): Promise<LocalAgentR
 
   result.filesTouched = [...input.workspace.touched]
   result.durationMs = Date.now() - started
-  // Infrastructure failures (timeout, stall, OOM, cancel) discard partial work; soft failures
-  // (step limit, missing finish call) with changes go on to validation, which has the final say.
-  const hardFailure = result.errorKind !== undefined && result.errorKind !== 'tool_misuse' && result.errorKind !== 'invalid_output'
-  if (!result.filesTouched.length) result.status = result.error ? 'failed' : 'no_changes'
-  else result.status = hardFailure ? 'failed' : 'completed'
-  if (result.status === 'completed' && result.error) result.summary = `${result.summary}\n(${result.error})`.trim()
+  // An incomplete attempt must never turn into success just because some files changed.
+  result.status = result.error ? 'failed' : result.filesTouched.length ? 'completed' : 'no_changes'
   return result
 }
 

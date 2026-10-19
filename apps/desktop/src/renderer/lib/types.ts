@@ -1,7 +1,7 @@
 // DTOs returned by the local runtime (subset of the Prisma models + engine types).
 
 export type CostMode = 'cheapest' | 'balanced' | 'quality'
-export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree'
+export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree' | 'auto_commit'
 export type OrchestratorId = 'claude-code' | 'codex'
 export type LocalRole = 'fast' | 'balanced' | 'advanced'
 
@@ -47,6 +47,7 @@ export interface Settings {
   approvedCommands: string[]
   strictScope: boolean
   gpuWatts: number | null
+  electricity: ElectricityTariff | null
   premiumPriceOverride: { inputPerMillion: number; outputPerMillion: number; source: string } | null
   onboarding: { completed: boolean; steps: Record<string, { ok: boolean; at: string; detail?: string }> }
   lastProjectId: string | null
@@ -95,6 +96,8 @@ export interface Project {
   isGit?: boolean
   exists?: boolean
   _count?: { tasks: number }
+  /** Result of the automatic git setup when the project was opened. */
+  repository?: { initialized: boolean; committed: boolean; hasCommit: boolean; skipped?: string; excluded?: string[] }
 }
 
 export interface TreeEntry {
@@ -273,7 +276,7 @@ export interface ModelCall {
 
 export interface ApplyRecord {
   id: string
-  mode: 'branch' | 'working_tree' | 'fast_forward'
+  mode: 'branch' | 'working_tree' | 'fast_forward' | 'commit'
   files: string[]
   targetBranch?: string | null
   status: string
@@ -453,4 +456,82 @@ export interface SuitabilityStats {
   successRate: number
   lowerBound: number
   confidence: 'insufficient_data' | 'low' | 'medium' | 'high'
+}
+
+// ---------------------------------------------------------------------------
+// Resource monitor (GET /system/resources)
+// ---------------------------------------------------------------------------
+
+export interface ResourceWarning {
+  code: string
+  severity: 'info' | 'warn' | 'error'
+  message: string
+  model?: string
+}
+
+export interface ResourceSnapshot {
+  at: string
+  cpu: { pct: number; model: string; logicalCores: number; physicalCores?: number }
+  ram: { usedBytes: number; totalBytes: number }
+  gpu?: { name: string; utilizationPct?: number; vramUsedMb?: number; vramTotalMb?: number; temperatureC?: number; powerW?: number; powerLimitW?: number; source: 'nvidia-smi' | 'ollama' | 'none' }
+  disk?: { path: string; freeBytes?: number; totalBytes?: number }
+  history: Array<{ at: string; cpuPct: number; ramUsedBytes: number; gpuPct?: number; vramUsedMb?: number }>
+  ollama: { reachable: boolean }
+  models: Array<{ name: string; sizeBytes: number; vramBytes: number; gpuShare: number; contextLength?: number; expiresAt?: string; agents: string[] }>
+  slots: { local: number; premium: number; busyLocal: number; busyPremium: number }
+  waiting: Array<{ key: string; title: string; model?: string; reason: string }>
+  warnings: ResourceWarning[]
+}
+
+// ---------------------------------------------------------------------------
+// Execution forecast (GET /tasks/:id/forecast)
+// ---------------------------------------------------------------------------
+
+export type ForecastReason = 'ready' | 'running' | 'done' | 'dependencies' | 'file_conflict' | 'local_slot' | 'premium_slot' | 'memory' | 'blocked'
+
+export interface ScheduleForecast {
+  waves: Array<{ index: number; tasks: string[]; localModels: string[]; memoryBytes: number; fitsVram?: boolean; durationMs: number }>
+  tasks: Record<string, { wave?: number; reason: ForecastReason; waitsFor: string[]; detail: string; startsAtMs?: number; critical: boolean }>
+  criticalPath: string[]
+  estimatedMs: number
+  maxParallel: number
+  warnings: string[]
+  slots: { local: number; premium: number }
+  vramBytes: number | null
+  measuredDurations: number
+  generatedAt: string
+}
+
+// ---------------------------------------------------------------------------
+// Electricity (GET /system/energy)
+// ---------------------------------------------------------------------------
+
+export interface ElectricityTariff {
+  /** € per kWh */
+  pricePerKwh: number
+  /** € per month */
+  basePricePerMonth: number
+  systemBaseWatts?: number | null
+  cpuMaxWatts?: number | null
+}
+
+export interface EnergySummary {
+  kWh: number
+  inferenceKWh: number
+  hours: number
+  energyCost: number | null
+  baseCost: number | null
+  totalCost: number | null
+  days: number
+}
+
+export interface EnergyStatus {
+  at: string
+  live: { gpuW?: number; gpuSource: 'nvidia-smi' | 'setting' | 'none'; systemW?: number; systemSource: 'estimate' | 'none'; totalW: number; inferenceActive: boolean; costPerHour: { energy: number; base: number; total: number } | null }
+  tariff: ElectricityTariff | null
+  today: EnergySummary
+  period: EnergySummary
+  daily: Array<{ date: string; kWh: number; inferenceKWh: number; hours: number; energyCost: number | null }>
+  measuringSince: string | null
+  sampleIntervalMs: number
 }
