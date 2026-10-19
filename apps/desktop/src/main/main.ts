@@ -6,6 +6,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { adoptLoginShellPath } from './login-path.js'
 import { resourcePaths } from './paths.js'
+import { developmentProfileDir } from './profile.js'
 import type { PreviewEvent } from '../shared/bridge.js'
 import { PreviewManager, validatePreviewBounds, validatePreviewId, validatePreviewUrl } from './preview.js'
 import { RuntimeManager } from './runtime.js'
@@ -34,6 +35,8 @@ app.setName('Multi-AI Coder')
 // Isolated profile for automated tests (never set in normal use). Must be set before the
 // single-instance lock, which is scoped to the user-data directory.
 if (process.env.MAC_USER_DATA_DIR) app.setPath('userData', process.env.MAC_USER_DATA_DIR)
+// development builds never share the installed app's profile (an installation starts empty)
+else if (!app.isPackaged) app.setPath('userData', developmentProfileDir(app.getPath('appData'), (message) => console.log(`[profile] ${message}`)))
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()

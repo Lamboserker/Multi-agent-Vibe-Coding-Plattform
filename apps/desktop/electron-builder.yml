@@ -36,7 +36,16 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  shortcutName: Multi-AI Coder
+  runAfterFinish: true
+  # the uninstaller asks instead (build/installer.nsh, customUnInstall)
   deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/uninstallerSidebar.bmp
+  installerHeader: build/installerHeader.bmp
+  installerLanguages: [de_DE]
+  language: '1031'
 # Native modules (Prisma engine, node-pty) are staged for the build machine's architecture only, so
 # each architecture is built on its own Mac: `--mac --arm64` on Apple Silicon, `--mac --x64` on Intel
 # (see .github/workflows/desktop-release.yml). Signing + notarization run when CSC_LINK and
@@ -55,8 +64,23 @@ mac:
     NSDocumentsFolderUsageDescription: Multi-AI Coder opens and edits the projects you choose.
     NSDesktopFolderUsageDescription: Multi-AI Coder opens and edits the projects you choose.
     NSDownloadsFolderUsageDescription: Multi-AI Coder opens and edits the projects you choose.
+# DMG window: background (build/background.png + @2x) is drawn for these icon positions.
 dmg:
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  title: ${productName} ${version}
+  background: build/background.png
+  iconSize: 96
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 196
+      type: file
+    - x: 400
+      y: 196
+      type: link
+      path: /Applications
 linux:
   target:
     - AppImage

@@ -37,6 +37,13 @@ test('packaged app: startup, plugins, skills, TypeScript worker, MCP, runtime cr
     }
 
     // shipped plugins and skills are part of the package
+    // a fresh installation is empty and opens the setup wizard
+    const fresh = (await api('GET', '/settings')).data
+    assert.equal(fresh.onboarding.completed, false, 'setup wizard pending')
+    assert.equal(fresh.lastProjectId, null)
+    assert.deepEqual((await api('GET', '/projects')).data, [], 'no projects')
+    await page.locator('.onboarding').waitFor({ timeout: 30_000 })
+
     const plugins = (await api('GET', '/plugins')).data
     assert.equal(plugins.length, 7, JSON.stringify(plugins.map((plugin) => plugin.id)))
     const skills = (await api('GET', '/skills')).data
