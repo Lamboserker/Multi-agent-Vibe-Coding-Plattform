@@ -42,11 +42,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
@@ -55,13 +55,31 @@ jobs:
 
       - run: pnpm prisma:generate
 
+      # electron-builder treats an EMPTY CSC_LINK as a certificate path, so the signing variables
+      # are only exported when the secrets exist.
       - name: Signing mode (macOS)
         if: runner.os == 'macOS'
         shell: bash
         env:
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -z "$MAC_CSC_LINK" ]; then
+          if [ -n "$MAC_CSC_LINK" ]; then
+            echo "Developer ID certificate found: signing."
+            echo "CSC_LINK=$MAC_CSC_LINK" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              echo "Apple ID found: notarizing."
+              echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD" >> "$GITHUB_ENV"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+            else
+              echo "MAC_SIGN_ARGS=-c.mac.notarize=false" >> "$GITHUB_ENV"
+            fi
+          else
             echo "No Developer ID certificate: ad-hoc signing."
             echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
             echo "MAC_SIGN_ARGS=-c.mac.identity=- -c.mac.notarize=false" >> "$GITHUB_ENV"
@@ -69,12 +87,6 @@ jobs:
 
       - name: Package
         shell: bash
-        env:
-          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm --filter @multi-ai-coder/desktop run ${{ matrix.script }} ${{ matrix.arch }} $MAC_SIGN_ARGS
 
       - uses: actions/upload-artifact@v4
