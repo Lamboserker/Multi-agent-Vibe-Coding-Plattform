@@ -11,7 +11,7 @@ keiner. Nächster Kandidat: TASK-010 – Token-meta bei verworfenen Review-/Exec
 ## Nächste Schritte
 1. Nächster Task: TASK-010, Start nach `/clear` mit `/weiter TASK-010`.
 2. Committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
-   + Doku, TASK-009 `34c0831` + Doku `6e0f556`. TASK-008 (2026-10-20, vom Nutzer in der Dev-App bestätigt) nicht committet. Commits nur auf Nachfrage.
+   + Doku, TASK-009 `34c0831` + Doku `6e0f556`. TASK-008 `eb3bd57` + Doku `cfc62d7`. Commits nur auf Nachfrage.
 3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
    zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
 
