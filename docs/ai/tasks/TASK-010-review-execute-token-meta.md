@@ -33,3 +33,6 @@ Lücke besteht bei Premium-Review und -Ausführung: Ist die Ausgabe unbrauchbar,
 
 ## Übergabe
 Noch nicht begonnen. Vorlage: TASK-007 (`tasks/done/TASK-007-rueckfrage-token-meta.md`).
+Startpunkte: `packages/engine/src/execution.ts` (`reviewResult`, Execute-Pfad). Muster aus TASK-007: Normalisierung in
+`normalizeWithMeta(call.meta, …)` kapseln, Aufrufer buchen `error.details.meta`. Nach Engine-Änderungen
+`pnpm --filter @multi-ai-coder/engine build` vor api-Typecheck/-Tests (Lesson 9).

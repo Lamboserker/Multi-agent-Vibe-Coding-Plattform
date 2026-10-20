@@ -6,12 +6,12 @@ Premium-Orchestrator (Codex / Claude Code) plant und kleine lokale Modelle (Olla
 **Stand:** 2026-10-20
 
 ## Aktiver Task
-keiner. Nächster Kandidat: TASK-008 – Mehrzeiliges Antwortfeld für Rückfragen – `docs/ai/tasks/TASK-008-mehrzeilige-antworten.md`
+keiner. Nächster Kandidat: TASK-010 – Token-meta bei verworfenen Review-/Execute-Ergebnissen – `docs/ai/tasks/TASK-010-review-execute-token-meta.md`
 
 ## Nächste Schritte
-1. Nutzer wählt den nächsten Task (Vorschlag: TASK-008, dann TASK-010) und startet ihn mit `/weiter TASK-0NN`.
+1. Nächster Task: TASK-010, Start nach `/clear` mit `/weiter TASK-010`.
 2. Committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
-   + Doku, TASK-009 `34c0831` + Doku `6e0f556`. Commits nur auf Nachfrage.
+   + Doku, TASK-009 `34c0831` + Doku `6e0f556`. TASK-008 (2026-10-20, vom Nutzer in der Dev-App bestätigt) nicht committet. Commits nur auf Nachfrage.
 3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
    zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
 
@@ -46,6 +46,8 @@ keiner. Nächster Kandidat: TASK-008 – Mehrzeiliges Antwortfeld für Rückfrag
 - Verworfene Premium-Ausgaben: Normalisierung in `normalizeWithMeta(call.meta, …)` kapseln, Aufrufer buchen
   `error.details.meta` (Planung erledigt in TASK-007; Review/Execute offen in TASK-010).
 - Vor Live-Tests prüfen, ob der aktuelle Code läuft: `pnpm dev` bündelt das Backend nur beim Start (Lesson 14).
+- `PromptDialog` (`components/common.tsx`) kann `multiline` + `children`; Rückfragen holt `openQuestions()` (`lib/leitstand.ts`)
+  aus den Chat-Metadaten. Renderer hat kein DOM-Testsetup – UI-Verhalten per Sichtprüfung belegen.
 - Dev-Daten liegen in `%APPDATA%\Multi-AI Coder Dev` (DB `multi-ai-coder.db`, User-Skills unter `skills/`).
 
 ## Wichtige Entscheidungen
@@ -54,6 +56,5 @@ keiner. Nächster Kandidat: TASK-008 – Mehrzeiliges Antwortfeld für Rückfrag
 - ADR-003 Feine Zerlegung (1 Task ≈ 1 Datei), maxTasks 12
 
 ## Offene Tasks
-- TASK-008 Mehrzeiliges Antwortfeld für Rückfragen (`PromptDialog`)
 - TASK-010 Token-meta bei verworfenen Review-/Execute-Ergebnissen (`engine/execution.ts`, `reviewResult`)
-- TASK-001 … TASK-007, TASK-009 in `tasks/done/`
+- TASK-001 … TASK-009 in `tasks/done/`
