@@ -1,6 +1,6 @@
 import { localizeEngineText } from './engine-text'
 import type { LiveLine } from './stores'
-import type { AgentRun, ExecutionRun, RunEvent, ScheduleForecast, Subtask, Task, TaskPlan, ValidationReport } from './types'
+import type { AgentRun, ChatMessage, ExecutionRun, RunEvent, ScheduleForecast, Subtask, Task, TaskPlan, ValidationReport } from './types'
 import { SUBTASK_STATUS, workflowState, type WorkflowState } from './workflow'
 
 /*
@@ -31,6 +31,14 @@ export interface StageInfo {
   tone: Tone
   /** 0 Aufgabe · 1 Plan · 2 Ausführung · 3 Freigabe · 4 abgeschlossen */
   phase: number
+}
+
+/** The planner's latest open questions for a task (from its `plan_questions` chat message); empty when none are loaded. */
+export function openQuestions(messages: ChatMessage[], taskId: string | undefined): string[] {
+  if (!taskId) return []
+  const message = [...messages].reverse().find((entry) => entry.taskId === taskId && entry.role === 'assistant' && entry.metadata?.kind === 'plan_questions')
+  const questions = message?.metadata.questions
+  return Array.isArray(questions) ? questions.map(String).filter((question) => question.trim()) : []
 }
 
 export function stageInfo(task: Task | undefined, execution: ExecutionRun | undefined): StageInfo {

@@ -3,7 +3,7 @@ import { ArrowUpRight, Brain, CheckCircle2, ChevronDown, ChevronRight, ChevronUp
 import * as actions from '../../lib/actions'
 import { api, errorMessage } from '../../lib/api'
 import { openChangedFile } from '../../lib/agent-files'
-import { formatClock, TONE, type AgentCard, type StageInfo, type Tone } from '../../lib/leitstand'
+import { formatClock, openQuestions, TONE, type AgentCard, type StageInfo, type Tone } from '../../lib/leitstand'
 import { useAppState, useSessionState } from '../../lib/store'
 import type { ExecutionRun, InstalledModel, ReviewSummary, ScheduleForecast, Subtask, Task, ValidationReport } from '../../lib/types'
 import { useLoader } from '../../lib/hooks'
@@ -74,6 +74,7 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
   const done = cards.filter((card) => card.status === 'completed').length
   const blocked = cards.filter((card) => card.kind === 'blocked').length
   const sessionTitle = useSessionState((state) => state.active?.title)
+  const messages = useSessionState((state) => state.active?.messages)
   // the session title is known before its task has loaded (restore after a reload)
   const title = sessionTitle || (task ? task.userPrompt.split('\n')[0]!.slice(0, 120) : 'Neue Sitzung')
   return (
@@ -171,10 +172,25 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
           </span>
         ) : null}
       </div>
-      {replan && task ? (
+      {replan && task && stage.state === 'plan_questions' ? (
         <PromptDialog
-          title={stage.state === 'plan_questions' ? 'Rückfragen beantworten' : 'Neu planen – was soll anders sein?'}
-          placeholder={stage.state === 'plan_questions' ? 'Deine Antworten auf die Fragen im Chat …' : 'z. B. Tests in eine eigene Teilaufgabe, T3 lokal statt Premium …'}
+          key="questions"
+          title="Rückfragen beantworten"
+          placeholder="Deine Antworten – gern eine Zeile pro Frage …"
+          multiline
+          onCancel={() => setReplan(false)}
+          onSubmit={(feedback) => {
+            setReplan(false)
+            void replanTask(task.id, feedback).catch((error: unknown) => actions.notify(errorMessage(error), 'error'))
+          }}
+        >
+          <ClarificationQuestions questions={openQuestions(messages ?? [], task.id)} />
+        </PromptDialog>
+      ) : replan && task ? (
+        <PromptDialog
+          key="replan"
+          title="Neu planen – was soll anders sein?"
+          placeholder="z. B. Tests in eine eigene Teilaufgabe, T3 lokal statt Premium …"
           onCancel={() => setReplan(false)}
           onSubmit={(feedback) => {
             setReplan(false)
@@ -441,6 +457,16 @@ function PlanError({ task }: { task: Task }) {
       <div style={{ fontSize: 18, fontWeight: 600 }}>{task.currentStep === 'plan_interrupted' ? 'Die Planung wurde unterbrochen' : 'Die Planung ist fehlgeschlagen'}</div>
       <div className="muted">Details stehen im Chat. „Erneut planen“ startet sie neu – es wird nichts automatisch wiederholt.</div>
     </div>
+  )
+}
+
+/** The planner's questions above the answer field (falls back to the chat when they are not loaded). */
+function ClarificationQuestions({ questions }: { questions: string[] }) {
+  if (!questions.length) return <div className="muted">Die Fragen stehen im Chat.</div>
+  return (
+    <ol style={{ margin: 0, paddingLeft: 20, maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }} data-testid="clarification-questions">
+      {questions.map((question, index) => <li key={index} style={{ whiteSpace: 'pre-wrap' }}>{question}</li>)}
+    </ol>
   )
 }
 

@@ -82,21 +82,44 @@ export function Confirm({ title, children, confirmLabel = 'Bestätigen', danger,
   )
 }
 
-export function PromptDialog({ title, initial = '', placeholder, onSubmit, onCancel }: { title: string; initial?: string; placeholder?: string; onSubmit: (value: string) => void; onCancel: () => void }) {
+/** Asks for one value. `multiline`: a textarea where Enter adds a line and Ctrl+Enter (or the button) submits. */
+export function PromptDialog({ title, initial = '', placeholder, multiline, children, onSubmit, onCancel }: { title: string; initial?: string; placeholder?: string; multiline?: boolean; children?: ReactNode; onSubmit: (value: string) => void; onCancel: () => void }) {
   const [value, setValue] = useState(initial)
+  const submit = () => {
+    if (value.trim()) onSubmit(value.trim())
+  }
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop" onClick={multiline && value.trim() ? undefined : onCancel}>
       <form
         className="modal"
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault()
-          if (value.trim()) onSubmit(value.trim())
+          submit()
         }}
       >
         <h3>{title}</h3>
-        <input className="input" autoFocus value={value} placeholder={placeholder} onChange={(event) => setValue(event.target.value)} />
+        {children}
+        {multiline ? (
+          <textarea
+            className="textarea"
+            autoFocus
+            rows={6}
+            value={value}
+            placeholder={placeholder}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault()
+                submit()
+              }
+            }}
+          />
+        ) : (
+          <input className="input" autoFocus value={value} placeholder={placeholder} onChange={(event) => setValue(event.target.value)} />
+        )}
         <div className="row">
+          {multiline ? <span className="faint" style={{ fontSize: 11.5 }}>Strg+Enter sendet</span> : null}
           <span className="spacer" />
           <button type="button" className="btn" onClick={onCancel}>
             Abbrechen

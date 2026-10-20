@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { addedLines, parseUnifiedDiff } from './diff'
-import { agentCards, decisions, localizeReason, milestones, shortModel, stageInfo, tokenShare } from './leitstand'
-import type { ExecutionRun, RunEvent, Subtask, Task, TaskPlan } from './types'
+import { agentCards, decisions, localizeReason, milestones, openQuestions, shortModel, stageInfo, tokenShare } from './leitstand'
+import type { ChatMessage, ExecutionRun, RunEvent, Subtask, Task, TaskPlan } from './types'
 
 const subtask = (key: string, patch: Partial<Subtask> = {}): Subtask => ({
   id: `id-${key}`, taskId: 'task', key, title: `Aufgabe ${key}`, goal: '', status: 'planned', selectedModelClass: 'local_llm', selectedModelName: 'qwen2.5-coder:14b', allowedFiles: [`src/${key}.ts`], newFiles: [], dependsOn: [],
@@ -82,5 +82,27 @@ describe('leitstand derivations', () => {
     const usage = { local: { inputTokens: 800, outputTokens: 60 }, premium: { inputTokens: 100, outputTokens: 40 } }
     expect(tokenShare({ usage } as unknown as ExecutionRun)).toEqual({ localPct: 86, total: 1000 })
     expect(tokenShare(undefined)).toEqual({ localPct: 0, total: 0 })
+  })
+})
+
+describe('openQuestions', () => {
+  let next = 0
+  const message = (patch: Partial<ChatMessage>): ChatMessage => ({ id: `m${(next += 1)}`, taskId: 'task', role: 'assistant', content: '', metadata: {}, createdAt: '2026-10-20T08:00:00.000Z', ...patch })
+
+  it('returns the latest plan_questions of the task', () => {
+    const messages = [
+      message({ metadata: { kind: 'plan_questions', questions: ['Alt?'] } }),
+      message({ taskId: 'other', metadata: { kind: 'plan_questions', questions: ['Fremd?'] } }),
+      message({ metadata: { kind: 'plan_questions', questions: ['Welche Datei?', ' ', 'Welches Format?'] } }),
+      message({ role: 'user', metadata: { kind: 'plan_questions', questions: ['Nutzer?'] } }),
+      message({ metadata: { kind: 'task_plan' } }),
+    ]
+    expect(openQuestions(messages, 'task')).toEqual(['Welche Datei?', 'Welches Format?'])
+  })
+
+  it('is empty without a task, without questions or with malformed metadata', () => {
+    expect(openQuestions([message({ metadata: { kind: 'plan_questions', questions: ['Frage?'] } })], undefined)).toEqual([])
+    expect(openQuestions([message({ metadata: { kind: 'task_plan' } })], 'task')).toEqual([])
+    expect(openQuestions([message({ metadata: { kind: 'plan_questions', questions: 'keine Liste' } })], 'task')).toEqual([])
   })
 })
