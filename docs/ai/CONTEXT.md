@@ -6,12 +6,12 @@ Premium-Orchestrator (Codex / Claude Code) plant und kleine lokale Modelle (Olla
 **Stand:** 2026-10-20
 
 ## Aktiver Task
-keiner. Nächster Kandidat: TASK-009 – Test für den Chat-Antwortweg – `docs/ai/tasks/TASK-009-test-chat-antwortweg.md`
+keiner. Nächster Kandidat: TASK-008 – Mehrzeiliges Antwortfeld für Rückfragen – `docs/ai/tasks/TASK-008-mehrzeilige-antworten.md`
 
 ## Nächste Schritte
-1. Nutzer wählt den nächsten Task (Vorschlag: TASK-009, dann TASK-008, TASK-010) und startet ihn mit `/weiter TASK-0NN`.
-2. Alles committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
-   + Doku. Commits nur auf Nachfrage.
+1. Nutzer wählt den nächsten Task (Vorschlag: TASK-008, dann TASK-010) und startet ihn mit `/weiter TASK-0NN`.
+2. Committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
+   + Doku. TASK-009 (nur Tests, `sessions.test.ts`) erledigt, **nicht committet**. Commits nur auf Nachfrage.
 3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
    zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
 
@@ -39,6 +39,8 @@ keiner. Nächster Kandidat: TASK-009 – Test für den Chat-Antwortweg – `docs
 - Planner-Prompt: neue Regeln immer gegen den ganzen Prompt und die ADRs lesen (Lesson 11); Tests in `prompts.test.ts`.
 - `catch-up.test.ts` (engine) und `plugins/reference-extensions.test.ts` (api) sind unter Volllast timeout-anfällig –
   einzeln nachprüfen, bevor man Rot dem Diff zuschreibt.
+- `sessions.test.ts` (api) loggt sporadisch `Session refresh failed … Response from the Engine was empty` im Teardown
+  (`refresh` nach `$disconnect`) – harmlos, Test bleibt grün.
 - Rückfragen: `needs_clarification` → Task `currentStep: 'plan_clarification'`, Chat `plan_questions`, Renderer-State
   `plan_questions`; Antworten werden per `clarificationAnswer()` samt Fragen an `userPrompt` angehängt; `startLocked` sperrt.
 - Verworfene Premium-Ausgaben: Normalisierung in `normalizeWithMeta(call.meta, …)` kapseln, Aufrufer buchen
@@ -53,6 +55,5 @@ keiner. Nächster Kandidat: TASK-009 – Test für den Chat-Antwortweg – `docs
 
 ## Offene Tasks
 - TASK-008 Mehrzeiliges Antwortfeld für Rückfragen (`PromptDialog`)
-- TASK-009 Test für den Chat-Antwortweg (`sessions.service.ts:264`)
 - TASK-010 Token-meta bei verworfenen Review-/Execute-Ergebnissen (`engine/execution.ts`, `reviewResult`)
-- TASK-001 … TASK-007 in `tasks/done/`
+- TASK-001 … TASK-007, TASK-009 in `tasks/done/`
