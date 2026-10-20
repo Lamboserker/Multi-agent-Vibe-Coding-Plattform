@@ -11,7 +11,7 @@ keiner – Masterplan Orchestrierung erledigt. Nächster Kandidat: TASK-007 – 
 
 ## Nächste Schritte
 1. Nutzer wählt den nächsten Task (Vorschlag: TASK-007, dann TASK-009, TASK-008) und startet ihn mit `/weiter TASK-00N`.
-2. TASK-001–003 committet als `61ba058` (nicht gepusht); TASK-004–006 uncommitted. Commits nur auf Nachfrage.
+2. Alles committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`. Commits nur auf Nachfrage.
 3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
    zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
 
@@ -21,9 +21,9 @@ keiner – Masterplan Orchestrierung erledigt. Nächster Kandidat: TASK-007 – 
 | 1 | TASK-001 Planner kennt Agenten und Skills | done (2026-10-20, `61ba058`) |
 | 2 | TASK-002 Agenten-Zuweisung | done (2026-10-20, `61ba058`) |
 | 3 | TASK-003 Skills erreichen den Agenten | done (2026-10-20, `61ba058`) |
-| 4 | TASK-004 Feine Zerlegung, maxTasks 12 | done (2026-10-20, uncommitted) |
-| 5 | TASK-005 Leerer Plan → Rückfragen | done (2026-10-20, uncommitted) |
-| 6 | TASK-006 Gesamtverifikation | done (2026-10-20, uncommitted; Live-Plan: 5 Tasks, Doku-Agent + projekt-doku) |
+| 4 | TASK-004 Feine Zerlegung, maxTasks 12 | done (2026-10-20, `24f6e37`) |
+| 5 | TASK-005 Leerer Plan → Rückfragen | done (2026-10-20, `24f6e37`) |
+| 6 | TASK-006 Gesamtverifikation | done (2026-10-20, `24f6e37`; Live-Plan: 5 Tasks, Doku-Agent + projekt-doku) |
 
 ## Bekannte Stolpersteine
 - Keine Live-Aufrufe von `claude`/`codex` (Planung, Ausführung, Diagnose) ohne Zustimmung des Nutzers.
