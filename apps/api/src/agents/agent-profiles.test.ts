@@ -85,6 +85,12 @@ describe('agent assignment helpers', () => {
     expect(idOf(assignAgents(profiles, [task], 'Doku-Agent und Test-Agent sollen helfen')[0])).toBe('frontend')
   })
 
+  it('assigns a mixed plan by category although the request names the Doku-Agent', () => {
+    const prompt = 'Erstelle eine Grundstruktur für modernes Vibe Coding. Nutze den Skill "projekt-doku" und einen Doku-Agent.'
+    const docTask = { ...task, category: 'documentation', title: 'Vibe-Coding-Einstieg', newFiles: ['docs/vibe-coding.md'] }
+    expect(assignAgents(profiles, [docTask, task], prompt).map(idOf)).toEqual(['docs', 'frontend'])
+  })
+
   it('prefers project profiles by name and ignores disabled ones', () => {
     const docs = AGENT_TEMPLATES.find((entry) => entry.id === 'docs')!
     const list = [profile(docs), profile(docs, { id: 'mine', projectId: 'p' }), profile(AGENT_TEMPLATES[0]!, { name: 'Off', enabled: false })]

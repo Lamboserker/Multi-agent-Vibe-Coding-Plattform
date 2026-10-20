@@ -27,6 +27,12 @@ describe('mergeSettings', () => {
     expect(next.modelRoles).toEqual({ fast: 'm1', balanced: 'm2', advanced: 'm3' })
   })
 
+  it('defaults maxTasks to 12 but keeps a stored user value', () => {
+    expect(DEFAULT_SETTINGS.maxTasks).toBe(12)
+    expect(mergeSettings(DEFAULT_SETTINGS, {}).maxTasks).toBe(12)
+    expect(mergeSettings(DEFAULT_SETTINGS, { maxTasks: 8 }).maxTasks).toBe(8)
+  })
+
   it('removes a self-test entry with null and ignores unknown keys', () => {
     const current = { ...DEFAULT_SETTINGS, modelSelfTests: { a: { at: '1', ok: true, toolCalling: 'verified' as const, structuredOutput: true } } }
     const next = mergeSettings(current, { modelSelfTests: { a: null } as never, ...({ evil: 1 } as object) })

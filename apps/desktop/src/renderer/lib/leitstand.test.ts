@@ -39,6 +39,7 @@ describe('leitstand derivations', () => {
     expect(stageInfo(task, undefined)).toMatchObject({ state: 'planning', tone: 'accent', phase: 1 })
     const run = { taskId: 'task', status: 'awaiting_approval' } as ExecutionRun
     expect(stageInfo({ ...task, currentStep: 'awaiting_approval' }, run)).toMatchObject({ state: 'approval', phase: 3 })
+    expect(stageInfo({ ...task, currentStep: 'plan_clarification' }, run)).toMatchObject({ state: 'plan_questions', tone: 'tool', phase: 1 })
   })
 
   it('builds agent cards with kind, role, forecast wait and checks', () => {

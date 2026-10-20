@@ -216,10 +216,18 @@ export function normalizePlan(raw: unknown, maxTasks = 12): ExecutionPlan {
     task.dependsOn = [...new Set(mapped)]
   }
 
-  if (!tasks.length) throw new OrchestratorError('The plan contained no usable tasks.', 'invalid_output')
+  const analysis = normalizeAnalysis(data.analysis ?? {})
+  if (!tasks.length) {
+    // No tasks but open questions: the planner needs input, so surface them instead of failing
+    const questions = analysis.openQuestions.length ? analysis.openQuestions : warnings
+    if (questions.length) {
+      throw new OrchestratorError(`The planner returned no tasks and asks for clarification: ${questions.join('; ')}`, 'needs_clarification', { retryable: false, questions })
+    }
+    throw new OrchestratorError('The plan contained no usable tasks.', 'invalid_output')
+  }
   return {
     summary: str(data.summary),
-    analysis: normalizeAnalysis(data.analysis ?? {}),
+    analysis,
     tasks,
     warnings,
   }

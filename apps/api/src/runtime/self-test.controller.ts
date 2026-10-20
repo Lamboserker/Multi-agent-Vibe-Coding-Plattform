@@ -63,7 +63,7 @@ export class SelfTestController {
     const anySuccess = execution?.agentRuns.some((run) => run.outcome === 'success')
     const validation = (execution?.finalValidation ?? {}) as { ok?: boolean; testsPassed?: number; results?: Array<{ kind: string; status: string }> }
     const testsRan = Boolean(validation.results?.some((result) => result.kind === 'test' && result.status === 'passed'))
-    const finished = execution ? ['awaiting_approval', 'failed', 'cancelled', 'applied', 'completed', 'interrupted'].includes(execution.status) : task.currentStep === 'plan_failed'
+    const finished = execution ? ['awaiting_approval', 'failed', 'cancelled', 'applied', 'completed', 'interrupted'].includes(execution.status) : ['plan_failed', 'plan_clarification'].includes(task.currentStep)
     const checks = [
       { id: 'orchestrator', label: 'Orchestrator plant die Aufgabe', ok: Boolean(plan && plan.source !== 'deterministic-fallback'), detail: plan ? `Plan-Quelle: ${plan.source}` : 'noch kein Plan' },
       { id: 'local_model', label: 'Lokales Modell erzeugt Code', ok: Boolean(localSuccess), detail: execution ? `${execution.agentRuns.length} Versuch(e); lokal erfolgreich: ${localSuccess ? 'ja' : 'nein'}` : '–' },
@@ -80,7 +80,7 @@ export class SelfTestController {
       ok: checks.every((check) => check.ok),
       checks,
       diff: execution?.finalDiff ?? null,
-      error: execution?.errorMessage ?? (task.currentStep === 'plan_failed' ? 'Planung fehlgeschlagen' : null),
+      error: execution?.errorMessage ?? (task.currentStep === 'plan_failed' ? 'Planung fehlgeschlagen' : task.currentStep === 'plan_clarification' ? 'Der Orchestrator hat Rückfragen statt eines Plans geliefert' : null),
       files: task.subtasks.flatMap((subtask) => [...stringList(subtask.allowedFiles), ...stringList(subtask.newFiles)]),
     }
   }

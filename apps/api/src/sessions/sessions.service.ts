@@ -258,10 +258,13 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     }
 
     // A task that has not been executed yet is refined; otherwise a new task starts in this session.
-    const continueTask = active && !execution && !['completed', 'cancelled'].includes(active.status) && active.currentStep !== 'planning'
+    // An answer to the planner's questions refines the same task, even if an older execution exists.
+    const clarifying = active?.currentStep === 'plan_clarification'
+    const continueTask = active && (!execution || clarifying) && !['completed', 'cancelled'].includes(active.status) && active.currentStep !== 'planning'
+    const followUp = continueTask ? ((clarifying ? await this.executions.clarificationAnswer(active.id, content) : undefined) ?? `Follow-up: ${content}`) : ''
     const { task, message } = await this.prisma.$transaction(async (tx) => {
       const task = continueTask
-        ? await tx.task.update({ where: { id: active.id }, data: { userPrompt: `${active.userPrompt}\n\nFollow-up: ${content}`, status: 'created', currentStep: 'draft' } })
+        ? await tx.task.update({ where: { id: active.id }, data: { userPrompt: `${active.userPrompt}\n\n${followUp}`, status: 'created', currentStep: 'draft' } })
         : await tx.task.create({
             data: {
               projectId: session.projectId,

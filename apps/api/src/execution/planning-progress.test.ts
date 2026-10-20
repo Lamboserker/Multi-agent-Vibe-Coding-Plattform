@@ -33,6 +33,39 @@ describe('planning timing', () => {
     expect(events.publish).toHaveBeenLastCalledWith('run', 'plan_requested', { taskId: 'task', jobId: 'job', requestedAt })
   })
 
+  describe('answers to planner questions', () => {
+    const clarifying = (messages: unknown[]) => {
+      const ctx = fixture()
+      ctx.prisma.task.findUniqueOrThrow.mockResolvedValue({ currentStep: 'plan_clarification', userPrompt: 'Mach es besser' })
+      Object.assign(ctx.prisma, { chatMessage: { findMany: vi.fn().mockResolvedValue(messages) } })
+      return ctx
+    }
+
+    it('stores questions and answer in the request and enqueues without feedback', async () => {
+      const { service, prisma, jobs } = clarifying([
+        { metadata: { kind: 'plan_progress' } },
+        { metadata: { kind: 'plan_questions', questions: ['Welche Datei?', 'Welches Format?'] } },
+      ])
+      await service.requestPlan('task', ' src/a.ts, JSON ')
+      const block = 'Clarification – the planner asked:\n1. Welche Datei?\n2. Welches Format?\nThe user answered:\nsrc/a.ts, JSON'
+      expect(prisma.task.update).toHaveBeenCalledWith({ where: { id: 'task' }, data: { currentStep: 'planning', status: 'running', userPrompt: `Mach es besser\n\n${block}` } })
+      expect(jobs.enqueue).toHaveBeenCalledWith('execution.plan', expect.objectContaining({ taskId: 'task', feedback: undefined }), { dedupeKey: 'plan:task' })
+    })
+
+    it('passes the feedback on unchanged when no questions message exists', async () => {
+      const { service, prisma, jobs } = clarifying([{ metadata: { kind: 'plan_progress' } }])
+      await service.requestPlan('task', 'nur Feedback')
+      expect(prisma.task.update).toHaveBeenCalledWith({ where: { id: 'task' }, data: { currentStep: 'planning', status: 'running' } })
+      expect(jobs.enqueue).toHaveBeenCalledWith('execution.plan', expect.objectContaining({ feedback: 'nur Feedback' }), { dedupeKey: 'plan:task' })
+    })
+
+    it('refuses to start while questions are open', async () => {
+      const { service, prisma } = fixture()
+      prisma.task.findUniqueOrThrow.mockResolvedValue({ currentStep: 'plan_clarification', subtasks: [{ id: 's' }] })
+      await expect(service.start('task')).rejects.toThrow('Rückfragen')
+    })
+  })
+
   it('announces preparation while the repository digest is still pending', async () => {
     const { service, repoContext, events } = fixture()
     let fail!: (error: Error) => void
@@ -115,6 +148,50 @@ describe('planning timing', () => {
     // several tasks: only the planner's (known, deduplicated) choice, the named skill is not spread over all tasks
     const multi = await run([plannedTask('task-001', ['invented-skill', 'other', 'other']), plannedTask('task-002', [])])
     expect(multi.saved).toEqual([['other'], []])
+  })
+
+  describe('planner without tasks', () => {
+    const setup = (rejection: OrchestratorError) => {
+      const { service, prisma, repoContext, events } = fixture()
+      const createPlan = vi.fn().mockRejectedValue(rejection)
+      const chat = vi.fn().mockResolvedValue(undefined)
+      const modelCallCreate = vi.fn().mockResolvedValue({})
+      const subtask = { deleteMany: vi.fn().mockResolvedValue({}), create: vi.fn().mockImplementation(async ({ data }) => data) }
+      const taskPlan = { create: vi.fn().mockResolvedValue({ id: 'plan' }) }
+      Object.assign(service as object, {
+        settings: { get: vi.fn().mockResolvedValue({ modelRoles: {}, fastPath: false, costMode: 'balanced', maxTasks: 8, planApproval: true, autoStartSmallPlans: false }) },
+        orchestrators: { active: vi.fn().mockResolvedValue({ id: 'codex', displayName: 'Codex', createPlan }), invalidate: vi.fn() },
+        previewRouting: vi.fn().mockResolvedValue({ assignments: [] }),
+        chat,
+      })
+      Object.assign(prisma, { modelCall: { create: modelCallCreate }, subtask, taskPlan, $transaction: vi.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)) })
+      repoContext.digest.mockResolvedValue({ index: { files: [], frameworks: [] }, checks: [], digest: { summary: 'digest', tokenEstimate: 1 } })
+      return { service, prisma, events, createPlan, chat, modelCallCreate, subtask, taskPlan }
+    }
+
+    it('shows the open questions instead of a fallback plan and calls the planner once', async () => {
+      const questions = ['Welche Datei?', 'Welches Format?']
+      const { service, prisma, events, createPlan, chat, modelCallCreate, subtask, taskPlan } = setup(new OrchestratorError('needs input', 'needs_clarification', { retryable: false, questions }))
+      const result = await service.plan('task')
+      expect(result.source).toBe('clarification')
+      expect(createPlan).toHaveBeenCalledTimes(1)
+      expect(subtask.deleteMany).not.toHaveBeenCalled()
+      expect(subtask.create).not.toHaveBeenCalled()
+      expect(taskPlan.create).not.toHaveBeenCalled()
+      expect(prisma.task.update).toHaveBeenCalledWith({ where: { id: 'task' }, data: { status: 'planned', currentStep: 'plan_clarification' } })
+      expect(chat).toHaveBeenCalledWith('task', 'assistant', expect.stringContaining('1. Welche Datei?'), { kind: 'plan_questions', questions })
+      expect(String(chat.mock.calls[0]![2])).toContain('2. Welches Format?')
+      expect(modelCallCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'error', errorClass: 'needs_clarification' }) })
+      expect(events.publish).toHaveBeenCalledWith('run', 'planned', { taskId: 'task', tasks: 0, source: 'clarification', autoStarted: false })
+    })
+
+    it('still falls back to the deterministic plan for invalid output', async () => {
+      const { service, createPlan, subtask } = setup(new OrchestratorError('The plan contained no usable tasks.', 'invalid_output'))
+      const result = await service.plan('task')
+      expect(result.source).toBe('deterministic-fallback')
+      expect(createPlan).toHaveBeenCalledTimes(1)
+      expect(subtask.create).toHaveBeenCalled()
+    })
   })
 
   it('hands the pinned skills of a subtask to the engine task', async () => {

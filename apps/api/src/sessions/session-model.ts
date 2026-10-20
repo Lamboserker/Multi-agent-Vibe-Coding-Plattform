@@ -30,6 +30,7 @@ export function deriveSessionStatus({ session, tasks, activePlanTaskIds, askRunn
   const execution = latest?.executions[0]
   if (askRunning || tasks.some((task) => activePlanTaskIds.has(task.id)) || tasks.some((task) => RUNNING_EXECUTION.includes(task.executions[0]?.status ?? ''))) return 'running'
   if (execution?.status === 'paused') return 'paused'
+  if (latest?.currentStep === 'plan_clarification') return 'active'
   if (execution?.status === 'interrupted' || latest?.currentStep === 'plan_interrupted' || recovery.interruptedAsk) return 'interrupted'
   if (execution?.status === 'failed' || latest?.currentStep === 'plan_failed' || (latest?.status === 'failed' && !execution)) return 'failed'
   if (execution?.status === 'applied' || latest?.status === 'completed') return 'completed'

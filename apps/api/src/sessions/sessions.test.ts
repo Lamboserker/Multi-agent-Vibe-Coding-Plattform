@@ -87,6 +87,8 @@ describe('deriveSessionStatus', () => {
     expect(deriveSessionStatus({ ...base, tasks: [task('failed', 'plan_failed')] })).toBe('failed')
     expect(deriveSessionStatus({ ...base, tasks: [task('completed', 'applied', 'applied')] })).toBe('completed')
     expect(deriveSessionStatus({ ...base, tasks: [task('planned', 'awaiting_plan_approval')], session: { ...base.session, lastActivityAt: new Date(0) } })).toBe('active')
+    expect(deriveSessionStatus({ ...base, tasks: [task('planned', 'plan_clarification')], session: { ...base.session, lastActivityAt: new Date(0) } })).toBe('active')
+    expect(deriveSessionStatus({ ...base, tasks: [task('planned', 'plan_clarification', 'failed')], session: { ...base.session, lastActivityAt: new Date(0) } })).toBe('active')
     expect(deriveSessionStatus({ ...base, tasks: [], session: { ...base.session, lastActivityAt: new Date(0) } })).toBe('idle')
     expect(deriveSessionStatus({ ...base, tasks: [task('planning', 'planning')], activePlanTaskIds: new Set(['t']) })).toBe('running')
     expect(deriveSessionStatus({ ...base, tasks: [], session: { ...base.session, archivedAt: new Date() } })).toBe('archived')

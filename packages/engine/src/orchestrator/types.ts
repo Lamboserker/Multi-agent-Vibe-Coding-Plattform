@@ -12,12 +12,13 @@ export type OrchestratorErrorKind =
   | 'invalid_output'
   | 'process_failed'
   | 'resource_limit'
+  | 'needs_clarification'
 
 export class OrchestratorError extends Error {
   constructor(
     message: string,
     readonly kind: OrchestratorErrorKind,
-    readonly details: { retryable?: boolean; resetsAt?: string; exitCode?: number | null; stderr?: string } = {},
+    readonly details: { retryable?: boolean; resetsAt?: string; exitCode?: number | null; stderr?: string; questions?: string[] } = {},
   ) {
     super(message)
     this.name = 'OrchestratorError'

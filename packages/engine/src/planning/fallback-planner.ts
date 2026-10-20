@@ -76,7 +76,7 @@ function fileComplexity(entry: FileEntry | undefined): number {
 export function deterministicPlan(goal: string, index: RepoIndex, options: { maxTasks?: number } = {}): ExecutionPlan {
   const category = categorize(goal)
   if (isProjectWide(goal) && category !== 'auth-security' && category !== 'database-migration') {
-    const plan = decomposedPlan(goal, index, category, Math.max(2, options.maxTasks ?? 8))
+    const plan = decomposedPlan(goal, index, category, Math.max(2, options.maxTasks ?? 12))
     if (plan) return plan
   }
   // files the request names explicitly are the task's scope: existing ones to edit, the others to create

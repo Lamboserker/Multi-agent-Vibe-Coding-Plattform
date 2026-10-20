@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { ArrowUpRight, Brain, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleDashed, GitMerge, GitPullRequestArrow, LayoutGrid, MessageCircle, Orbit, Pause, Play, RotateCcw, Search, ShieldCheck, Sparkles, Square, Terminal, XCircle } from 'lucide-react'
+import { ArrowUpRight, Brain, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleDashed, GitMerge, GitPullRequestArrow, LayoutGrid, MessageCircle, MessageCircleQuestion, Orbit, Pause, Play, RotateCcw, Search, ShieldCheck, Sparkles, Square, Terminal, XCircle } from 'lucide-react'
 import * as actions from '../../lib/actions'
 import { api, errorMessage } from '../../lib/api'
 import { openChangedFile } from '../../lib/agent-files'
@@ -115,6 +115,11 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
             <RotateCcw size={13} /> Erneut planen
           </AsyncButton>
         ) : null}
+        {stage.state === 'plan_questions' && task ? (
+          <button className="btn primary" disabled={busy} onClick={() => setReplan(true)}>
+            <MessageCircleQuestion size={13} /> Antworten &amp; neu planen
+          </button>
+        ) : null}
         {(stage.state === 'running' || stage.state === 'paused') && execution ? (
           <div className="row" style={{ gap: 8 }} data-testid="run-running">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 140 }}>
@@ -168,8 +173,8 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
       </div>
       {replan && task ? (
         <PromptDialog
-          title="Neu planen – was soll anders sein?"
-          placeholder="z. B. Tests in eine eigene Teilaufgabe, T3 lokal statt Premium …"
+          title={stage.state === 'plan_questions' ? 'Rückfragen beantworten' : 'Neu planen – was soll anders sein?'}
+          placeholder={stage.state === 'plan_questions' ? 'Deine Antworten auf die Fragen im Chat …' : 'z. B. Tests in eine eigene Teilaufgabe, T3 lokal statt Premium …'}
           onCancel={() => setReplan(false)}
           onSubmit={(feedback) => {
             setReplan(false)
@@ -195,6 +200,7 @@ function orchestratorSummary(stage: StageInfo, cards: AgentCard[], execution?: E
     case 'approval': return 'Review fertig, wartet auf dich'
     case 'done': return 'Lauf abgeschlossen'
     case 'plan_error': return 'Planung fehlgeschlagen'
+    case 'plan_questions': return 'Wartet auf deine Antworten zu Rückfragen'
     case 'recoverable': return execution?.status === 'failed' ? 'Lauf fehlgeschlagen' : 'Lauf unterbrochen – fortsetzbar'
     case 'cancelled': return 'Lauf abgebrochen'
     default: return 'Wartet auf eine Aufgabe'
@@ -438,6 +444,16 @@ function PlanError({ task }: { task: Task }) {
   )
 }
 
+function PlanQuestions() {
+  return (
+    <div className="ls-empty">
+      <MessageCircleQuestion size={28} style={{ color: 'var(--warn)' }} />
+      <div style={{ fontSize: 18, fontWeight: 600 }}>Der Orchestrator hat Rückfragen</div>
+      <div className="muted">Die Fragen stehen im Chat. „Antworten &amp; neu planen“ schickt deine Antworten als Hinweis an die nächste Planung – es entsteht kein Ersatzplan.</div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Variant A: flow graph
 // ---------------------------------------------------------------------------
@@ -445,12 +461,12 @@ function PlanError({ task }: { task: Task }) {
 function RunGraph(data: Data) {
   const { task, execution, stage, cards, plan, forecast, selected, subtasks } = data
   const inspectorOpen = useAppState((state) => state.ui.inspectorOpen)
-  const pre = stage.state === 'draft' || stage.state === 'planning' || stage.state === 'plan_error'
+  const pre = stage.state === 'draft' || stage.state === 'planning' || stage.state === 'plan_error' || stage.state === 'plan_questions'
   const pipe = pipelineStates(stage, execution)
   return (
     <>
       <div className="graph-canvas">
-        {stage.state === 'draft' ? <DraftState /> : stage.state === 'plan_error' && task ? <PlanError task={task} /> : (
+        {stage.state === 'draft' ? <DraftState /> : stage.state === 'plan_error' && task ? <PlanError task={task} /> : stage.state === 'plan_questions' ? <PlanQuestions /> : (
           <div className="graph-row">
             <div className="node orch-node" style={{ borderColor: ['planning', 'running'].includes(stage.state) ? 'var(--accent)' : 'var(--line2)', boxShadow: ['planning', 'running'].includes(stage.state) ? 'var(--glow)' : 'none' }}>
               <div className="row" style={{ gap: 8 }}>
@@ -566,7 +582,7 @@ function AgentNode({ card, selected }: { card: AgentCard; selected: boolean }) {
 
 function RunTiles(data: Data) {
   const { task, execution, stage, cards, decisions, forecast, selected, elapsedMs } = data
-  const pre = stage.state === 'draft' || stage.state === 'planning' || stage.state === 'plan_error'
+  const pre = stage.state === 'draft' || stage.state === 'planning' || stage.state === 'plan_error' || stage.state === 'plan_questions'
   const pipe = pipelineStates(stage, execution)
   const done = cards.filter((card) => card.status === 'completed').length
   const usage = execution?.usage
@@ -603,7 +619,7 @@ function RunTiles(data: Data) {
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)' }}>Noch keine Agenten aktiv</div>
             <div>Sobald der Plan steht, bekommt jeder Agent hier seine eigene Live-Kachel.</div>
           </div>
-        ) : stage.state === 'plan_error' && task ? <div style={{ gridColumn: '1 / -1' }}><PlanError task={task} /></div> : (
+        ) : stage.state === 'plan_error' && task ? <div style={{ gridColumn: '1 / -1' }}><PlanError task={task} /></div> : stage.state === 'plan_questions' ? <div style={{ gridColumn: '1 / -1' }}><PlanQuestions /></div> : (
           <div className="orch-tile" style={{ borderColor: ['planning', 'running'].includes(stage.state) ? 'var(--accent)' : 'var(--line2)', boxShadow: ['planning', 'running'].includes(stage.state) ? 'var(--glow)' : 'none' }}>
             <div className="stack" style={{ gap: 10 }}>
               <div className="row" style={{ gap: 10 }}>

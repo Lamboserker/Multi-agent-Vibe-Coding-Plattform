@@ -54,6 +54,11 @@ import { ensureRepository } from '../workspace-fs/workspace-fs.service.js'
 
 const ACTIVE_STATUSES = ['pending', 'planning', 'running', 'paused', 'integrating'] as const
 
+/** Chat text for a planner that returned open questions instead of tasks. */
+function questionsMessage(questions: string[]) {
+  return `Der Orchestrator hat Rückfragen, bevor er planen kann:\n\n${questions.map((question, index) => `${index + 1}. ${question}`).join('\n')}\n\nBeantworte sie über „Antworten & neu planen“ – deine Antworten gehen als Hinweis in die nächste Planung.`
+}
+
 /**
  * A plan that may start without a plan confirmation: at most two subtasks, low complexity and risk,
  * nothing security-relevant, no open questions/warnings, executed only by local agents (no premium
@@ -134,10 +139,25 @@ export class ExecutionService implements OnModuleInit {
   // Planning
   // ---------------------------------------------------------------------------
 
+  /** The planner's last open questions together with the user's answer (undefined when the task has no pending questions). */
+  async clarificationAnswer(taskId: string, answer: string): Promise<string | undefined> {
+    const messages = await this.prisma.chatMessage.findMany({ where: { taskId, role: 'assistant' }, orderBy: { createdAt: 'desc' }, take: 20 })
+    for (const message of messages) {
+      const metadata = message.metadata as { kind?: string; questions?: unknown } | null
+      if (metadata?.kind !== 'plan_questions') continue
+      const questions = Array.isArray(metadata.questions) ? metadata.questions.map(String) : []
+      return `Clarification – the planner asked:\n${questions.map((question, i) => `${i + 1}. ${question}`).join('\n')}\nThe user answered:\n${answer}`
+    }
+    return undefined
+  }
+
   async requestPlan(taskId: string, feedback?: string, autoStart = false) {
     const requestedAt = new Date().toISOString()
-    await this.prisma.task.update({ where: { id: taskId }, data: { currentStep: 'planning', status: 'running' } })
-    const job = await this.jobs.enqueue('execution.plan', { taskId, feedback, autoStart, requestedAt }, { dedupeKey: `plan:${taskId}` })
+    const current = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, select: { currentStep: true, userPrompt: true } })
+    // Answers to the planner's questions become part of the request: later re-plans keep them, no duplicate feedback.
+    const block = current.currentStep === 'plan_clarification' && feedback?.trim() ? await this.clarificationAnswer(taskId, feedback.trim()) : undefined
+    await this.prisma.task.update({ where: { id: taskId }, data: { currentStep: 'planning', status: 'running', ...(block ? { userPrompt: `${current.userPrompt}\n\n${block}` } : {}) } })
+    const job = await this.jobs.enqueue('execution.plan', { taskId, feedback: block ? undefined : feedback, autoStart, requestedAt }, { dedupeKey: `plan:${taskId}` })
     this.events.publish('run', 'plan_requested', { taskId, jobId: job.id, requestedAt: (job.payload as Record<string, unknown>).requestedAt ?? job.createdAt.toISOString() })
     // Planning by the orchestrator takes seconds; the default local executor loads meanwhile.
     void this.settings
@@ -282,6 +302,14 @@ export class ExecutionService implements OnModuleInit {
         await this.recordPlanCall(orchestrator, 'error', Date.now() - started, undefined, kind)
         if (kind === 'not_authenticated' || kind === 'session_expired') this.orchestrators.invalidate()
         if (kind === 'cancelled') throw error
+        if (kind === 'needs_clarification') {
+          // no fallback plan and no second premium call: show the questions, keep any existing plan untouched
+          const questions = error instanceof OrchestratorError ? error.details.questions ?? [] : []
+          await this.prisma.task.update({ where: { id: taskId }, data: { status: 'planned', currentStep: 'plan_clarification' } })
+          await this.chat(taskId, 'assistant', questionsMessage(questions), { kind: 'plan_questions', questions })
+          this.events.publish('run', 'planned', { taskId, tasks: 0, source: 'clarification', autoStarted: false })
+          return { taskPlan: undefined, subtasks: [] as Subtask[], routing: undefined, warnings, source: 'clarification', questions }
+        }
         warnings.push(`${orchestrator.displayName} planning failed (${kind}): ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)
         plan = deterministicPlan(task.userPrompt, index, { maxTasks: settings.maxTasks })
         source = 'deterministic-fallback'
@@ -506,6 +534,7 @@ export class ExecutionService implements OnModuleInit {
 
   private async startLocked(taskId: string) {
     const task = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, include: { project: true, subtasks: true } })
+    if (task.currentStep === 'plan_clarification') throw new BadRequestException('Der Orchestrator hat Rückfragen – bitte beantworten und neu planen.')
     if (!task.subtasks.length) throw new BadRequestException('The task has no plan yet.')
     // git is set up here at the latest (no repository or no commit yet): the user never has to do it.
     // Checked before a run exists: otherwise the run is created and fails right away.

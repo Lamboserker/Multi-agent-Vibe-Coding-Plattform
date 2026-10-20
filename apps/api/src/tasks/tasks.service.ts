@@ -137,7 +137,11 @@ export class TasksService {
   /** Real execution in isolated worktrees (the former dry-run mode has been removed). */
   async run(id: string) {
     const subtasks = await this.prisma.subtask.count({ where: { taskId: id } })
-    if (subtasks === 0) await this.executions.plan(id)
+    if (subtasks === 0) {
+      const planned = await this.executions.plan(id)
+      // the planner asked questions instead of planning: nothing to run yet
+      if (planned.source === 'clarification') throw new BadRequestException('Der Orchestrator hat Rückfragen – bitte beantworten und neu planen.')
+    }
     return this.executions.start(id)
   }
 

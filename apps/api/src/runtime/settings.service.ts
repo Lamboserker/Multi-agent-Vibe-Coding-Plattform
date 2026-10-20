@@ -84,7 +84,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   premiumReviewPolicy: 'risk_based',
   planApproval: true,
   autoStartSmallPlans: true,
-  maxTasks: 8,
+  maxTasks: 12,
   maxLocalRepairs: 2,
   maxEscalationSteps: 2,
   reviewFixRounds: 1,

@@ -35,7 +35,7 @@ export interface StageInfo {
 
 export function stageInfo(task: Task | undefined, execution: ExecutionRun | undefined): StageInfo {
   const current = workflowState(task, execution)
-  const tone: Record<WorkflowState, Tone> = { draft: 'muted', planning: 'accent', plan_error: 'err', ready: 'tool', running: 'accent', paused: 'tool', recoverable: 'err', cancelled: 'faint', approval: 'tool', done: 'ok' }
+  const tone: Record<WorkflowState, Tone> = { draft: 'muted', planning: 'accent', plan_error: 'err', plan_questions: 'tool', ready: 'tool', running: 'accent', paused: 'tool', recoverable: 'err', cancelled: 'faint', approval: 'tool', done: 'ok' }
   const phase = current.state === 'done' ? 4 : { task: 0, plan: 1, execution: 2, approval: 3 }[current.phase]
   // the workflow label names the next action; the Leitstand header names what happened
   const label = current.state === 'draft' && !task ? 'Neue Sitzung' : current.state === 'recoverable' ? (execution?.status === 'interrupted' ? 'Ausführung unterbrochen' : 'Ausführung fehlgeschlagen') : current.label

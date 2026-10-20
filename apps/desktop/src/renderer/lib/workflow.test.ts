@@ -14,6 +14,10 @@ describe('central workflow lifecycle', () => {
   it.each(['plan_interrupted', 'plan_failed'])('offers planning recovery for %s rather than a stale execution', (step) => {
     expect(workflowState(task(step), run('applied'))).toMatchObject({ phase: 'plan', state: 'plan_error' })
   })
+  it('asks for answers on plan_clarification, even with old subtasks or an old run', () => {
+    expect(workflowState(task('plan_clarification'))).toMatchObject({ phase: 'plan', state: 'plan_questions' })
+    for (const status of ['applied', 'failed'] as const) expect(workflowState(task('plan_clarification'), run(status))).toMatchObject({ phase: 'plan', state: 'plan_questions' })
+  })
   it.each([
     ['pending', 'running'], ['running', 'running'], ['integrating', 'running'], ['paused', 'paused'],
     ['interrupted', 'recoverable'], ['failed', 'recoverable'], ['cancelled', 'cancelled'],
