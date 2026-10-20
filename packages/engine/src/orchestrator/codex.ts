@@ -6,6 +6,7 @@ import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from 
 import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
 import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
+  normalizeWithMeta,
   OrchestratorError,
   type AnalysisInput,
   type CallContext,
@@ -220,7 +221,7 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
 
   async createPlan(input: PlanningInput, ctx: CallContext) {
     const call = await this.callStructured(withSystem(planningPrompt(input)), { schema: PLAN_SCHEMA, sandbox: 'read-only', ephemeral: true }, ctx)
-    return { result: normalizePlan(call.structured, input.maxTasks), meta: call.meta }
+    return { result: normalizeWithMeta(call.meta, () => normalizePlan(call.structured, input.maxTasks)), meta: call.meta }
   }
 
   async reviewResult(input: ReviewInput, ctx: CallContext) {

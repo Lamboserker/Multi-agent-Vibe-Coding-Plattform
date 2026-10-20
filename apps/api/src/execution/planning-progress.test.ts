@@ -185,12 +185,42 @@ describe('planning timing', () => {
       expect(events.publish).toHaveBeenCalledWith('run', 'planned', { taskId: 'task', tasks: 0, source: 'clarification', autoStarted: false })
     })
 
+    it('books the tokens of the planner call that ended with questions', async () => {
+      const questions = ['Welche Datei?']
+      const meta = { model: 'gpt-x', durationMs: 5, usage: { inputTokens: 1200, outputTokens: 300, cachedInputTokens: 100, measured: true, billing: 'subscription' as const } }
+      const { service, createPlan, modelCallCreate, subtask, taskPlan } = setup(new OrchestratorError('needs input', 'needs_clarification', { retryable: false, questions, meta }))
+      const result = await service.plan('task')
+      expect(result.source).toBe('clarification')
+      expect(createPlan).toHaveBeenCalledTimes(1)
+      expect(subtask.create).not.toHaveBeenCalled()
+      expect(taskPlan.create).not.toHaveBeenCalled()
+      expect(modelCallCreate).toHaveBeenCalledTimes(1)
+      expect(modelCallCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({ status: 'error', errorClass: 'needs_clarification', purpose: 'plan', inputTokens: 1200, outputTokens: 300, cachedInputTokens: 100, tokensMeasured: true, billing: 'subscription', model: 'gpt-x' }),
+      })
+    })
+
+    it('books zero unmeasured tokens when the error carries no meta', async () => {
+      const { service, modelCallCreate } = setup(new OrchestratorError('needs input', 'needs_clarification', { retryable: false, questions: ['Welche Datei?'] }))
+      await service.plan('task')
+      expect(modelCallCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ errorClass: 'needs_clarification', inputTokens: 0, outputTokens: 0, tokensMeasured: false }) })
+    })
+
     it('still falls back to the deterministic plan for invalid output', async () => {
       const { service, createPlan, subtask } = setup(new OrchestratorError('The plan contained no usable tasks.', 'invalid_output'))
       const result = await service.plan('task')
       expect(result.source).toBe('deterministic-fallback')
       expect(createPlan).toHaveBeenCalledTimes(1)
       expect(subtask.create).toHaveBeenCalled()
+    })
+
+    it('books the tokens of an invalid plan and still falls back', async () => {
+      const meta = { durationMs: 5, usage: { inputTokens: 800, outputTokens: 40, cachedInputTokens: 0, measured: true, billing: 'subscription' as const } }
+      const { service, createPlan, modelCallCreate } = setup(new OrchestratorError('The plan contained no usable tasks.', 'invalid_output', { meta }))
+      const result = await service.plan('task')
+      expect(result.source).toBe('deterministic-fallback')
+      expect(createPlan).toHaveBeenCalledTimes(1)
+      expect(modelCallCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ status: 'error', errorClass: 'invalid_output', inputTokens: 800, outputTokens: 40, tokensMeasured: true }) })
     })
   })
 

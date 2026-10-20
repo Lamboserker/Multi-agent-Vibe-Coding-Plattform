@@ -18,7 +18,8 @@ export class OrchestratorError extends Error {
   constructor(
     message: string,
     readonly kind: OrchestratorErrorKind,
-    readonly details: { retryable?: boolean; resetsAt?: string; exitCode?: number | null; stderr?: string; questions?: string[] } = {},
+    /** `meta`: usage of a call that completed but whose output was rejected (e.g. needs_clarification) – it still used the quota. */
+    readonly details: { retryable?: boolean; resetsAt?: string; exitCode?: number | null; stderr?: string; questions?: string[]; meta?: CallMeta } = {},
   ) {
     super(message)
     this.name = 'OrchestratorError'
@@ -26,6 +27,21 @@ export class OrchestratorError extends Error {
 
   get retryable(): boolean {
     return this.details.retryable ?? (this.kind === 'timeout' || this.kind === 'process_failed')
+  }
+}
+
+/** Runs `normalize` on a completed call's output; an OrchestratorError it throws carries the call's meta so the tokens can still be booked. */
+export function normalizeWithMeta<T>(meta: CallMeta, normalize: () => T): T {
+  try {
+    return normalize()
+  } catch (error) {
+    if (error instanceof OrchestratorError && !error.details.meta) {
+      const withMeta = new OrchestratorError(error.message, error.kind, { ...error.details, meta })
+      // keep the throw site inside the normalizer for diagnostics
+      withMeta.stack = error.stack
+      throw withMeta
+    }
+    throw error
   }
 }
 

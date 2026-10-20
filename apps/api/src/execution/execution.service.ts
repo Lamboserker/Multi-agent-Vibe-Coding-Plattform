@@ -299,7 +299,8 @@ export class ExecutionService implements OnModuleInit {
         await this.recordPlanCall(orchestrator, 'ok', Date.now() - started, meta)
       } catch (error) {
         const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
-        await this.recordPlanCall(orchestrator, 'error', Date.now() - started, undefined, kind)
+        // a rejected plan (needs_clarification, invalid_output) still used the quota: book its tokens
+        await this.recordPlanCall(orchestrator, 'error', Date.now() - started, error instanceof OrchestratorError ? error.details.meta : undefined, kind)
         if (kind === 'not_authenticated' || kind === 'session_expired') this.orchestrators.invalidate()
         if (kind === 'cancelled') throw error
         if (kind === 'needs_clarification') {

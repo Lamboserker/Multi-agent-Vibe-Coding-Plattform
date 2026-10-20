@@ -95,6 +95,13 @@ const plan = {
   ],
 }
 
+const questionPlan = {
+  summary: 'Needs input',
+  analysis: { ...plan.analysis, openQuestions: ['Welche Datei?', 'Welches Format?'] },
+  warnings: [],
+  tasks: [],
+}
+
 const saved = { ...process.env }
 afterEach(() => {
   process.env = { ...saved }
@@ -133,6 +140,18 @@ describe('ClaudeCodeAdapter', () => {
     expect(log.apiKey).toBeNull()
     expect(log.args).toEqual(expect.arrayContaining(['-p', '--output-format', 'stream-json', '--json-schema', '--no-session-persistence', '--tools', 'Read,Glob,Grep']))
     expect(log.args[log.args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep')
+  })
+
+  it('keeps the measured usage on a needs_clarification error when the plan has no tasks', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(questionPlan)
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createPlan({ goal: 'x', context, costMode: 'balanced', localModels: [], maxTasks: 8 }, { runId: 'r-q', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('needs_clarification')
+    expect(error.details.questions).toEqual(questionPlan.analysis.openQuestions)
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
   })
 
   it('executes complex tasks with edit tools and acceptEdits, without shell access', async () => {
@@ -206,6 +225,18 @@ describe('CodexAdapter', () => {
     const exec = log.find((entry) => entry.args[0] === 'exec')!
     expect(exec.apiKey).toBeNull()
     expect(exec.args).toEqual(expect.arrayContaining(['--json', '--output-schema', '--sandbox', 'read-only', '--ephemeral', 'model_reasoning_effort="low"']))
+  })
+
+  it('keeps the measured usage on a needs_clarification error when the plan has no tasks', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(questionPlan)
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createPlan({ goal: 'x', context, costMode: 'cheapest', localModels: [], maxTasks: 5 }, { runId: 'c-q', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('needs_clarification')
+    expect(error.details.questions).toEqual(questionPlan.analysis.openQuestions)
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
   })
 
   it('falls back once to a listed model when the configured one is not available for the account', async () => {

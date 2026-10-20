@@ -6,6 +6,7 @@ import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from 
 import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
 import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
+  normalizeWithMeta,
   OrchestratorError,
   type AnalysisInput,
   type CallContext,
@@ -221,7 +222,7 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
     // Read-only tools let the planner verify a file when the digest is insufficient. The turn cap
     // keeps it from exploring a large repository for minutes (seen: 10 min until the timeout).
     const call = await this.callStructured(planningPrompt(input) + repositoryRootNote(ctx.cwd), { schema: PLAN_SCHEMA, tools: 'Read,Glob,Grep', maxTurns: ctx.effort === 'high' ? 16 : 8 }, ctx)
-    return { result: normalizePlan(call.structured, input.maxTasks), meta: call.meta }
+    return { result: normalizeWithMeta(call.meta, () => normalizePlan(call.structured, input.maxTasks)), meta: call.meta }
   }
 
   async reviewResult(input: ReviewInput, ctx: CallContext) {
