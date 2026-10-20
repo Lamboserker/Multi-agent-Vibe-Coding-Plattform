@@ -35,8 +35,16 @@ const repoContext = { digest: async () => ({ digest: { summary: '', relevantFile
 function makeSessions(jobs = new JobQueueService(prisma, events)) {
   queues.push(jobs)
   // Planning is not under test here: requestPlan only marks the task and queues the job.
+  const clarificationCalls: Array<{ taskId: string; answer: string }> = []
+  const planRequests: Array<{ taskId: string; feedback: unknown; autoStart: unknown }> = []
   const executions = {
-    requestPlan: async (taskId: string) => {
+    // Records the call and delegates to the real implementation (it only needs prisma).
+    clarificationAnswer: async (taskId: string, answer: string) => {
+      clarificationCalls.push({ taskId, answer })
+      return ExecutionService.prototype.clarificationAnswer.call({ prisma } as never, taskId, answer)
+    },
+    requestPlan: async (taskId: string, feedback?: unknown, autoStart?: unknown) => {
+      planRequests.push({ taskId, feedback, autoStart })
       await prisma.task.update({ where: { id: taskId }, data: { currentStep: 'planning', status: 'running' } })
       await jobs.enqueue('execution.plan', { taskId }, { dedupeKey: `plan:${taskId}` })
       return { jobId: 'x' }
@@ -45,7 +53,7 @@ function makeSessions(jobs = new JobQueueService(prisma, events)) {
   }
   const service = new SessionsService(prisma, events, jobs, settings, orchestrators as never, repoContext as never, executions as never)
   service.onModuleInit()
-  return { service, jobs }
+  return { service, jobs, clarificationCalls, planRequests }
 }
 
 async function waitFor<T>(fn: () => Promise<T | undefined | false>, timeoutMs = 5000): Promise<T> {
@@ -113,6 +121,78 @@ describe('SessionsService', () => {
     expect(detail.activeTaskId).toBeTruthy()
     expect(detail.messages.map((message) => message.role)).toEqual(['user', 'system'])
     expect(detail.tasks[0]!.id).toBe(detail.activeTaskId)
+  })
+
+  async function taskInState(service: ReturnType<typeof makeSessions>['service'], currentStep: string) {
+    const session = await service.create(projectId)
+    await service.send(session.id, { content: 'Baue eine Login-Seite', mode: 'task' })
+    const task = await prisma.task.findFirstOrThrow({ where: { sessionId: session.id } })
+    await prisma.task.update({ where: { id: task.id }, data: { currentStep, status: 'planned' } })
+    return { session, task }
+  }
+
+  it('feeds the answer to planner questions into the prompt as a clarification, not a follow-up', async () => {
+    const { service, clarificationCalls, planRequests } = makeSessions()
+    const { session, task } = await taskInState(service, 'plan_clarification')
+    await prisma.chatMessage.create({ data: { projectId, sessionId: session.id, taskId: task.id, role: 'assistant', content: 'Rückfragen', metadata: { kind: 'plan_questions', questions: ['Welches Framework?', 'Mit Registrierung?'] } } })
+    planRequests.length = 0
+
+    await service.send(session.id, { content: 'React, ohne Registrierung', mode: 'task' })
+    expect(clarificationCalls).toEqual([{ taskId: task.id, answer: 'React, ohne Registrierung' }])
+    expect(await prisma.task.count({ where: { sessionId: session.id } })).toBe(1)
+    const refined = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(refined.userPrompt).toBe('Baue eine Login-Seite\n\nClarification – the planner asked:\n1. Welches Framework?\n2. Mit Registrierung?\nThe user answered:\nReact, ohne Registrierung')
+    expect(refined.userPrompt).not.toContain('Follow-up:')
+    expect(planRequests).toHaveLength(1)
+    expect(planRequests[0]!.taskId).toBe(task.id)
+    expect(planRequests[0]!.feedback).toBeUndefined()
+  })
+
+  it('uses a plain follow-up when the task is not waiting for a clarification', async () => {
+    const { service, clarificationCalls } = makeSessions()
+    const { session, task } = await taskInState(service, 'awaiting_plan_approval')
+    // Questions from an earlier, already answered clarification must not be picked up again.
+    await prisma.chatMessage.create({ data: { projectId, sessionId: session.id, taskId: task.id, role: 'assistant', content: 'Rückfragen', metadata: { kind: 'plan_questions', questions: ['Welches Framework?'] } } })
+
+    await service.send(session.id, { content: 'Bitte mit Dark Mode', mode: 'task' })
+    expect(clarificationCalls).toEqual([])
+    expect(await prisma.task.count({ where: { sessionId: session.id } })).toBe(1)
+    const refined = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(refined.userPrompt).toBe('Baue eine Login-Seite\n\nFollow-up: Bitte mit Dark Mode')
+  })
+
+  it('refines the same task with the answer even if an older execution exists', async () => {
+    const { service, clarificationCalls } = makeSessions()
+    const { session, task } = await taskInState(service, 'plan_clarification')
+    await prisma.executionRun.create({ data: { taskId: task.id, projectId, status: 'failed' } })
+    await prisma.chatMessage.create({ data: { projectId, sessionId: session.id, taskId: task.id, role: 'assistant', content: 'Rückfragen', metadata: { kind: 'plan_questions', questions: ['Welches Framework?'] } } })
+
+    await service.send(session.id, { content: 'React', mode: 'task' })
+    expect(clarificationCalls).toEqual([{ taskId: task.id, answer: 'React' }])
+    expect(await prisma.task.count({ where: { sessionId: session.id } })).toBe(1)
+    const refined = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(refined.userPrompt).toBe('Baue eine Login-Seite\n\nClarification – the planner asked:\n1. Welches Framework?\nThe user answered:\nReact')
+  })
+
+  it('starts a new task after an execution when no clarification is pending', async () => {
+    const { service, clarificationCalls } = makeSessions()
+    const { session, task } = await taskInState(service, 'awaiting_plan_approval')
+    await prisma.executionRun.create({ data: { taskId: task.id, projectId, status: 'failed' } })
+
+    await service.send(session.id, { content: 'Jetzt mit Dark Mode', mode: 'task' })
+    expect(clarificationCalls).toEqual([])
+    expect(await prisma.task.count({ where: { sessionId: session.id } })).toBe(2)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).userPrompt).toBe('Baue eine Login-Seite')
+  })
+
+  it('falls back to a follow-up when the clarification has no stored questions', async () => {
+    const { service, clarificationCalls } = makeSessions()
+    const { session, task } = await taskInState(service, 'plan_clarification')
+
+    await service.send(session.id, { content: 'React', mode: 'task' })
+    expect(clarificationCalls).toEqual([{ taskId: task.id, answer: 'React' }])
+    const refined = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(refined.userPrompt).toBe('Baue eine Login-Seite\n\nFollow-up: React')
   })
 
   it('answers a question as a background job and keeps it in the session history', async () => {
