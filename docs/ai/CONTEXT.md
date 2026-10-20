@@ -6,14 +6,14 @@ Premium-Orchestrator (Codex / Claude Code) plant und kleine lokale Modelle (Olla
 **Stand:** 2026-10-20
 
 ## Aktiver Task
-keiner. Nächster Kandidat: TASK-010 – Token-meta bei verworfenen Review-/Execute-Ergebnissen – `docs/ai/tasks/TASK-010-review-execute-token-meta.md`
+keiner. Kein offener Task-Kandidat – nächste Aufgabe vom Nutzer.
 
 ## Nächste Schritte
-1. Nächster Task: TASK-010, Start nach `/clear` mit `/weiter TASK-010`.
-2. Committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
-   + Doku, TASK-009 `34c0831` + Doku `6e0f556`. TASK-008 `eb3bd57` + Doku `cfc62d7`. Commits nur auf Nachfrage.
-3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
-   zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
+1. Alles committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
+   + Doku, TASK-009 `34c0831` + Doku `6e0f556`, TASK-008 `eb3bd57` + Doku `cfc62d7`, TASK-010/011 gemeinsam `17d523a`
+   + Doku. Commits nur auf Nachfrage.
+2. Optionale Ideen ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern (`tasks/done/TASK-006-*.md`);
+   Merge-Erfolgszeile im conflictResolver ohne `sessionId` (`tasks/done/TASK-011-*.md`) – jeweils Abschnitt Übergabe.
 
 ## Phasen (Masterplan `docs/ai/plans/2026-10-20-orchestrierung.md`, erledigt)
 | Phase | Task | Status |
@@ -44,7 +44,11 @@ keiner. Nächster Kandidat: TASK-010 – Token-meta bei verworfenen Review-/Exec
 - Rückfragen: `needs_clarification` → Task `currentStep: 'plan_clarification'`, Chat `plan_questions`, Renderer-State
   `plan_questions`; Antworten werden per `clarificationAnswer()` samt Fragen an `userPrompt` angehängt; `startLocked` sperrt.
 - Verworfene Premium-Ausgaben: Normalisierung in `normalizeWithMeta(call.meta, …)` kapseln, Aufrufer buchen
-  `error.details.meta` (Planung erledigt in TASK-007; Review/Execute offen in TASK-010).
+  `error.details.meta` (Plan TASK-007, Review/Execute TASK-010). Adapter hängen meta an „no structured output" und an
+  CLI-Fehler mit Usage (nur wenn das Result `usage` hat); api-catches buchen über `failedCallFields`
+  (`orchestration/model-call.ts`); Chat-Resume summiert den verworfenen Versuch per `mergeCallMeta`/`withErrorMeta` (TASK-011).
+- Fix-Runde nach Review läuft nur bei Blocker-Issue und löst ein Re-Review nur aus, wenn sie den Inhalt wirklich ändert
+  (Test-Fakes müssen in der 2. Ausführung anderen Inhalt schreiben).
 - Vor Live-Tests prüfen, ob der aktuelle Code läuft: `pnpm dev` bündelt das Backend nur beim Start (Lesson 14).
 - `PromptDialog` (`components/common.tsx`) kann `multiline` + `children`; Rückfragen holt `openQuestions()` (`lib/leitstand.ts`)
   aus den Chat-Metadaten. Renderer hat kein DOM-Testsetup – UI-Verhalten per Sichtprüfung belegen.
@@ -56,5 +60,4 @@ keiner. Nächster Kandidat: TASK-010 – Token-meta bei verworfenen Review-/Exec
 - ADR-003 Feine Zerlegung (1 Task ≈ 1 Datei), maxTasks 12
 
 ## Offene Tasks
-- TASK-010 Token-meta bei verworfenen Review-/Execute-Ergebnissen (`engine/execution.ts`, `reviewResult`)
-- TASK-001 … TASK-009 in `tasks/done/`
+- keine. TASK-001 … TASK-011 in `tasks/done/`
