@@ -21,3 +21,13 @@ täuschte eine Planung vor.
 ## Konsequenzen
 - Neuer Task-Schritt `plan_clarification` und ein Stage-Zustand im Leitstand.
 - Der Planner-Prompt verlangt ausdrücklich, nie ohne Fragen leer zu antworten.
+
+## Nachtrag 2026-10-20 (TASK-005, Abschluss-Review)
+- Antworten gehen nicht als Einmal-`feedback` an den Planner, sondern werden zusammen mit den Fragen dauerhaft an
+  `Task.userPrompt` angehängt (`ExecutionService.clarificationAnswer()`, Block „Clarification – the planner asked: …
+  The user answered: …"). Grund: Der Planner ist zustandslos – ohne die Fragen sind knappe Antworten wertlos, und ein
+  späteres „Neu planen" hätte die Antworten verloren. Gilt für den Button- und den Chat-Weg (`continueTask` auch mit
+  älterem Lauf).
+- Solange `currentStep === 'plan_clarification'` ist, verweigert `startLocked` den Start eines älteren Plans.
+- Rückfragen werden in der Stage-Ableitung vor alten Läufen/Subtasks ausgewertet (`workflow.ts`), ebenso im Sitzungsstatus
+  (`session-model.ts`: `active`).

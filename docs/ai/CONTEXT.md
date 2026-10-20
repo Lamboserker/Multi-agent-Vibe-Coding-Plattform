@@ -6,22 +6,24 @@ Premium-Orchestrator (Codex / Claude Code) plant und kleine lokale Modelle (Olla
 **Stand:** 2026-10-20
 
 ## Aktiver Task
-TASK-004 – Feinere Zerlegung und maxTasks 12 – `docs/ai/tasks/TASK-004-feine-zerlegung.md`
+keiner – Masterplan Orchestrierung erledigt. Nächster Kandidat: TASK-007 – Token-meta bei Rückfragen –
+`docs/ai/tasks/TASK-007-rueckfrage-token-meta.md`
 
 ## Nächste Schritte
-1. TASK-004 umsetzen (feine Zerlegung, 1 Task ≈ 1 Datei, maxTasks 12; ADR-003). TASK-005 (Rückfragen) ist unabhängig.
-2. TASK-006 Gesamtverifikation nach 1–5 (Live-Test nur mit Freigabe); offene Punkte aus der Übergabe von TASK-003 prüfen.
-3. TASK-001–003 committet als `61ba058` (nicht gepusht). Commits nur auf Nachfrage.
+1. Nutzer wählt den nächsten Task (Vorschlag: TASK-007, dann TASK-009, TASK-008) und startet ihn mit `/weiter TASK-00N`.
+2. TASK-001–003 committet als `61ba058` (nicht gepusht); TASK-004–006 uncommitted. Commits nur auf Nachfrage.
+3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
+   zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
 
-## Phasen (Masterplan `docs/ai/plans/2026-10-20-orchestrierung.md`)
+## Phasen (Masterplan `docs/ai/plans/2026-10-20-orchestrierung.md`, erledigt)
 | Phase | Task | Status |
 |---|---|---|
 | 1 | TASK-001 Planner kennt Agenten und Skills | done (2026-10-20, `61ba058`) |
 | 2 | TASK-002 Agenten-Zuweisung | done (2026-10-20, `61ba058`) |
 | 3 | TASK-003 Skills erreichen den Agenten | done (2026-10-20, `61ba058`) |
-| 4 | TASK-004 Feine Zerlegung, maxTasks 12 | aktiv |
-| 5 | TASK-005 Leerer Plan → Rückfragen | offen |
-| 6 | TASK-006 Gesamtverifikation | offen (nach 1–5) |
+| 4 | TASK-004 Feine Zerlegung, maxTasks 12 | done (2026-10-20, uncommitted) |
+| 5 | TASK-005 Leerer Plan → Rückfragen | done (2026-10-20, uncommitted) |
+| 6 | TASK-006 Gesamtverifikation | done (2026-10-20, uncommitted; Live-Plan: 5 Tasks, Doku-Agent + projekt-doku) |
 
 ## Bekannte Stolpersteine
 - Keine Live-Aufrufe von `claude`/`codex` (Planung, Ausführung, Diagnose) ohne Zustimmung des Nutzers.
@@ -34,6 +36,12 @@ TASK-004 – Feinere Zerlegung und maxTasks 12 – `docs/ai/tasks/TASK-004-feine
   Kategorie > Projekt > Score > Priorität – keine additiven Boni wieder einführen.
 - Gepinnte Skills: `Subtask.skills` → `EngineTask.skills` → `forAgent({ pinned })`; ohne Tools werden Skills inline geliefert,
   nie `load_skill` verlangen. Katalog und `forRole` filtern beide nach Rolle `*`/`coder`.
+- Planner-Prompt: neue Regeln immer gegen den ganzen Prompt und die ADRs lesen (Lesson 11); Tests in `prompts.test.ts`.
+- `catch-up.test.ts` (engine) und `plugins/reference-extensions.test.ts` (api) sind unter Volllast timeout-anfällig –
+  einzeln nachprüfen, bevor man Rot dem Diff zuschreibt.
+- Rückfragen: `needs_clarification` → Task `currentStep: 'plan_clarification'`, Chat `plan_questions`, Renderer-State
+  `plan_questions`; Antworten werden per `clarificationAnswer()` samt Fragen an `userPrompt` angehängt; `startLocked` sperrt.
+- Vor Live-Tests prüfen, ob der aktuelle Code läuft: `pnpm dev` bündelt das Backend nur beim Start (Lesson 14).
 - Dev-Daten liegen in `%APPDATA%\Multi-AI Coder Dev` (DB `multi-ai-coder.db`, User-Skills unter `skills/`).
 
 ## Wichtige Entscheidungen
@@ -42,4 +50,7 @@ TASK-004 – Feinere Zerlegung und maxTasks 12 – `docs/ai/tasks/TASK-004-feine
 - ADR-003 Feine Zerlegung (1 Task ≈ 1 Datei), maxTasks 12
 
 ## Offene Tasks
-- TASK-004 … TASK-006 (siehe Tabelle); TASK-001 … TASK-003 in `tasks/done/`
+- TASK-007 Token-meta bei Rückfrage-Aufrufen erhalten (engine-Adapter + `recordPlanCall`)
+- TASK-008 Mehrzeiliges Antwortfeld für Rückfragen (`PromptDialog`)
+- TASK-009 Test für den Chat-Antwortweg (`sessions.service.ts:264`)
+- TASK-001 … TASK-006 in `tasks/done/`

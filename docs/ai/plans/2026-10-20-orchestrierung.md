@@ -1,6 +1,8 @@
 # Masterplan: Orchestrierung, Skill-Nutzung und Agenten-Zuweisung
 
 Stand: 2026-10-20 · Tasks: TASK-001 … TASK-006 · Entscheidungen: ADR-001 … ADR-003
+**Status: erledigt** (2026-10-20). Alle 6 Phasen sind done, die Live-Planung ist verifiziert (TASK-006). Restpunkte als
+TASK-007–009.
 
 ## Ausgangslage
 

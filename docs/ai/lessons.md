@@ -22,3 +22,18 @@
 10. **Was angeboten wird, muss ankommen können.** Filter auf Angebots- und Ausführungsseite angleichen (Katalog ↔
     `forRole`-Rollenfilter), und Pfade ohne Tools (`canLoad: false`, `externalTools: false`) dürfen nichts verlangen,
     das nur per Tool erreichbar ist (`load_skill`) – dort inline liefern.
+11. **Prompt-Regeln als Ganzes lesen.** Nach jeder Prompt-Änderung den vollständigen Prompt auf Widersprüche prüfen (neue
+    Regel ↔ bestehende Einschränkungen wie „at most ONE existing file") und vorgegebene Wortlaute gegen gültige ADRs
+    gegenlesen – bei Konflikt gilt die ADR, Abweichung im Task-Log begründen.
+12. **Neue Zustände Ende-zu-Ende denken.** Ein neuer `currentStep`/Status braucht alle Abnehmer (grep auf einen
+    Geschwisterwert wie `plan_failed`: Renderer-Stage, Sitzungsstatus, Self-Test, Start-Guards) *und* den Rückweg: was der
+    zustandslose Planner beim nächsten Aufruf sieht (Fragen + Antworten zusammen, dauerhaft im Auftrag).
+13. **Doku-Text nie über `node -e "…"`/Shell-Strings schreiben.** Backticks und `\`` in Markdown zerbrechen das Quoting
+    (Bash-Kommandosubstitution, Node-Escape-Fehler). Für `docs/ai/` immer Edit/Write oder ein Heredoc mit `<<'EOF'`.
+14. **Vor einem Live-Test prüfen, welcher Code läuft.** `pnpm dev` bündelt das Backend nur beim Start
+    (`dist/backend/boot.cjs`). Startzeit des Electron-Prozesses mit `LastWriteTime` der geänderten Quellen vergleichen,
+    sonst testet man den alten Stand. Angewendete Migrationen stehen in `_mac_migrations`, nicht in `_prisma_migrations`.
+15. **Belegen, was die Daten unterscheiden können.** Ein korrektes Ergebnis (Subtask hat Doku-Agent) beweist nicht seine
+    Herkunft (Planner-Wahl vs. Kategorie-Heuristik), wenn mehrere Pfade dasselbe liefern und die Rohdaten nicht
+    gespeichert sind. Ein Akzeptanzkriterium, das nur teilweise belegt ist, bleibt offen oder wird als Restrisiko
+    getrennt, nicht mit Vermerk abgehakt.
