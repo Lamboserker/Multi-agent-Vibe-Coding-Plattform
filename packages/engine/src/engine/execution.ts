@@ -962,16 +962,19 @@ export class ExecutionRunner {
     } catch (error) {
       const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
       const message = error instanceof Error ? error.message : String(error)
+      // a completed call whose output was rejected still used the quota
+      const meta = error instanceof OrchestratorError ? error.details.meta : undefined
+      const usage = meta?.usage ?? { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' as const }
       await this.deps.store.recordModelCall({
-        runId: this.run.id, taskId: task.id, kind: 'orchestrator', provider: orchestrator.id, model: orchestrator.id, purpose: round ? 'repair' : 'execute',
-        status: 'error', errorClass: kind, durationMs: Date.now() - started, usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' },
+        runId: this.run.id, taskId: task.id, kind: 'orchestrator', provider: orchestrator.id, model: meta?.model ?? orchestrator.id, purpose: round ? 'repair' : 'execute',
+        status: 'error', errorClass: kind, sessionId: meta?.sessionId, durationMs: Date.now() - started, usage,
       })
       if (['not_authenticated', 'session_expired', 'quota_exhausted', 'not_installed', 'model_unavailable'].includes(kind)) {
         this.premiumBlockedReason = `${orchestrator.displayName}: ${kind.replace(/_/g, ' ')}`
         this.event('error', 'premium_blocked', `${this.premiumBlockedReason}. Premium execution disabled for this run. ${message.slice(0, 300)}`, { kind }, task.id)
       }
       logs.push(`Error (${kind}): ${message}`)
-      return { hardFailure: true, timedOut: kind === 'timeout', error: `${kind}: ${message}`, inputTokens: 0, outputTokens: 0, tokensMeasured: false, sessionId: undefined, summary: undefined }
+      return { hardFailure: true, timedOut: kind === 'timeout', error: `${kind}: ${message}`, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, tokensMeasured: usage.measured, sessionId: undefined, summary: undefined }
     }
   }
 
@@ -1117,7 +1120,9 @@ export class ExecutionRunner {
       return { kind: 'premium', reason: `Premium review because: ${riskReasons.join('; ')}.`, result, deterministicIssues, requiresHumanApproval: true }
     } catch (error) {
       const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
-      await this.deps.store.recordModelCall({ runId: this.run.id, kind: 'orchestrator', provider: this.deps.orchestrator.id, model: this.deps.orchestrator.id, purpose: 'review', status: 'error', errorClass: kind, durationMs: Date.now() - started, usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' } })
+      // a completed review whose output was rejected still used the quota
+      const meta = error instanceof OrchestratorError ? error.details.meta : undefined
+      await this.deps.store.recordModelCall({ runId: this.run.id, kind: 'orchestrator', provider: this.deps.orchestrator.id, model: meta?.model ?? this.deps.orchestrator.id, purpose: afterFix ? 'review_fix' : 'review', status: 'error', errorClass: kind, sessionId: meta?.sessionId, durationMs: Date.now() - started, usage: meta?.usage ?? { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' } })
       return { kind: 'human_required', reason: `Premium review failed (${kind}): ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`, deterministicIssues, requiresHumanApproval: true }
     }
   }

@@ -45,6 +45,33 @@ export function normalizeWithMeta<T>(meta: CallMeta, normalize: () => T): T {
   }
 }
 
+/** Sums two calls that served one request (a discarded first attempt and its retry). */
+export function mergeCallMeta(first: CallMeta | undefined, second: CallMeta): CallMeta {
+  if (!first) return second
+  const cost = first.usage.apiEquivalentUsd === undefined && second.usage.apiEquivalentUsd === undefined ? undefined : (first.usage.apiEquivalentUsd ?? 0) + (second.usage.apiEquivalentUsd ?? 0)
+  return {
+    ...second,
+    model: second.model ?? first.model,
+    durationMs: first.durationMs + second.durationMs,
+    usage: {
+      inputTokens: first.usage.inputTokens + second.usage.inputTokens,
+      outputTokens: first.usage.outputTokens + second.usage.outputTokens,
+      cachedInputTokens: first.usage.cachedInputTokens + second.usage.cachedInputTokens,
+      measured: first.usage.measured && second.usage.measured,
+      apiEquivalentUsd: cost,
+      billing: second.usage.billing,
+    },
+  }
+}
+
+/** Returns `error` carrying `meta` so a caller can book the tokens; `meta` counts as the earlier call, merged with the error's own meta (whose session/billing win). */
+export function withErrorMeta(error: unknown, meta: CallMeta | undefined): unknown {
+  if (!meta || !(error instanceof OrchestratorError)) return error
+  const withMeta = new OrchestratorError(error.message, error.kind, { ...error.details, meta: error.details.meta ? mergeCallMeta(meta, error.details.meta) : meta })
+  withMeta.stack = error.stack
+  return withMeta
+}
+
 export interface RuntimeDetection {
   installed: boolean
   binary?: string

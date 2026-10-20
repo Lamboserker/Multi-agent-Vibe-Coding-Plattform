@@ -12,6 +12,7 @@ const { JobQueueService } = await import('../runtime/job-queue.service.js')
 const { SettingsService } = await import('../runtime/settings.service.js')
 const { ExecutionService } = await import('../execution/execution.service.js')
 const { SessionsService, deriveSessionStatus } = await import('./sessions.service.js')
+const { OrchestratorError } = await import('@multi-ai-coder/engine')
 
 const prisma = new PrismaService()
 const events = new EventBusService()
@@ -32,7 +33,7 @@ const orchestrators = {
 }
 const repoContext = { digest: async () => ({ digest: { summary: '', relevantFiles: [], validationCommands: [] }, index: {}, checks: [] }) }
 
-function makeSessions(jobs = new JobQueueService(prisma, events)) {
+function makeSessions(jobs = new JobQueueService(prisma, events), orchestratorStub: unknown = orchestrators) {
   queues.push(jobs)
   // Planning is not under test here: requestPlan only marks the task and queues the job.
   const clarificationCalls: Array<{ taskId: string; answer: string }> = []
@@ -51,7 +52,7 @@ function makeSessions(jobs = new JobQueueService(prisma, events)) {
     },
     start: async () => ({ id: 'run' }),
   }
-  const service = new SessionsService(prisma, events, jobs, settings, orchestrators as never, repoContext as never, executions as never)
+  const service = new SessionsService(prisma, events, jobs, settings, orchestratorStub as never, repoContext as never, executions as never)
   service.onModuleInit()
   return { service, jobs, clarificationCalls, planRequests }
 }
@@ -212,6 +213,23 @@ describe('SessionsService', () => {
     expect((stored.recovery as Record<string, unknown>).pendingAsk).toBeUndefined()
     // A new UI instance (reload) sees the same history.
     expect((await makeSessions().service.get(session.id)).messages).toHaveLength(2)
+  })
+
+  it('books the measured usage of a rejected chat answer on the failed model call', async () => {
+    const failing = {
+      active: async () => ({
+        id: 'codex',
+        displayName: 'Codex',
+        chat: async () => {
+          throw new OrchestratorError('bad', 'invalid_output', { meta: { sessionId: 'err-sess-1', model: 'fake-err', durationMs: 5, usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 2, measured: true, billing: 'api_key' } } })
+        },
+      }),
+    }
+    const { service } = makeSessions(undefined, failing)
+    const session = await service.create(projectId)
+    await service.send(session.id, { content: 'Frage mit Fehler?', mode: 'ask', clientId: 'client-ask-err01' })
+    const call = await waitFor(async () => (await prisma.modelCall.findFirst({ where: { purpose: 'chat', status: 'error', sessionId: 'err-sess-1' } })) ?? undefined)
+    expect(call).toMatchObject({ model: 'fake-err', inputTokens: 10, outputTokens: 5, cachedInputTokens: 2, tokensMeasured: true, errorClass: 'invalid_output', billing: 'api_key' })
   })
 
   it('marks planning that was cut off by a restart as interrupted instead of running forever', async () => {

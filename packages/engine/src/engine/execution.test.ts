@@ -7,6 +7,7 @@ import { buildRepoIndex } from '../index/repo-index.js'
 import { applyChangeSet, revertChangeSet } from '../integration/integrator.js'
 import { OllamaClient } from '../ollama/client.js'
 import { startFakeOllama, type FakeChatReply, type FakeChatRequest, type FakeOllama } from '../testing/fake-ollama.js'
+import { OrchestratorError } from '../orchestrator/types.js'
 import { createTempRepo, tempDir } from '../test-utils.js'
 import { detectValidationChecks } from '../validation/checks.js'
 import {
@@ -620,6 +621,94 @@ describe('agent limits are enforced during real execution', () => {
     expect(reviews).toBeGreaterThanOrEqual(1)
     expect(store.events.some((event) => event.type === 'review_fix_started')).toBe(true)
     expect(store.events.some((event) => /is not a function/.test(event.message))).toBe(false)
+  }, 60_000)
+
+  const failingExecute = (error: Error) => ({ id: 'codex', displayName: 'Fake Premium', async executeComplexTask(): Promise<never> { throw error }, async cancelRun() {} })
+
+  it('premium agent: a rejected CLI output still books the measured usage from the error meta', async () => {
+    const { deps, repo, store } = await setup(() => finish, [])
+    const error = new OrchestratorError('Codex returned no structured output.', 'invalid_output', {
+      retryable: true,
+      meta: { model: 'gpt-x', sessionId: 's-1', durationMs: 5, usage: { inputTokens: 900, outputTokens: 40, cachedInputTokens: 100, measured: true, billing: 'subscription' } },
+    })
+    const runner = new ExecutionRunner(
+      { id: 'run-premium-meta', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'], agent: { id: 'p', name: 'Premium', escalation: 'none', maxRepairs: 0 } })],
+      { ...deps, orchestrator: failingExecute(error) as never },
+    )
+    await runner.execute()
+    const call = store.calls.find((entry) => entry.kind === 'orchestrator' && entry.purpose === 'execute')
+    expect(call).toMatchObject({ status: 'error', errorClass: 'invalid_output', model: 'gpt-x', sessionId: 's-1' })
+    expect(call!.usage).toMatchObject({ inputTokens: 900, outputTokens: 40, measured: true })
+  }, 60_000)
+
+  it('premium agent: a failure without meta books unmeasured zero usage', async () => {
+    const { deps, repo, store } = await setup(() => finish, [])
+    const runner = new ExecutionRunner(
+      { id: 'run-premium-nometa', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'], agent: { id: 'p', name: 'Premium', escalation: 'none', maxRepairs: 0 } })],
+      { ...deps, orchestrator: failingExecute(new Error('boom')) as never },
+    )
+    await runner.execute()
+    const call = store.calls.find((entry) => entry.kind === 'orchestrator' && entry.purpose === 'execute')
+    expect(call).toMatchObject({ status: 'error', errorClass: 'process_failed' })
+    expect(call!.usage).toMatchObject({ inputTokens: 0, outputTokens: 0, measured: false })
+  }, 60_000)
+
+  it('premium review: a rejected review output still books the measured usage from the error meta', async () => {
+    const { deps, repo, store } = await setup(() => finish, [])
+    const { orchestrator } = premium((cwd) => fs.writeFile(path.join(cwd, 'src/greet.js'), GREET))
+    const reviewing = {
+      ...orchestrator,
+      async reviewResult(): Promise<never> {
+        throw new OrchestratorError('Codex review was not an object.', 'invalid_output', {
+          retryable: true,
+          meta: { model: 'gpt-r', sessionId: 's-r', durationMs: 5, usage: { inputTokens: 700, outputTokens: 30, cachedInputTokens: 0, measured: true, billing: 'subscription' } },
+        })
+      },
+      async cancelRun() {},
+    }
+    const runner = new ExecutionRunner(
+      { id: 'run-review-meta', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'] })],
+      { ...deps, orchestrator: reviewing as never, settings: { ...deps.settings, premiumReviewPolicy: 'always' as const } },
+    )
+    await runner.execute()
+    const call = store.calls.find((entry) => entry.purpose === 'review')
+    expect(call).toMatchObject({ kind: 'orchestrator', status: 'error', errorClass: 'invalid_output', model: 'gpt-r', sessionId: 's-r' })
+    expect(call!.usage).toMatchObject({ inputTokens: 700, outputTokens: 30, measured: true })
+  }, 60_000)
+
+  it('premium review: a rejected review after a fix round is booked as review_fix with its measured usage', async () => {
+    const { deps, repo, store } = await setup(() => finish, [])
+    let executions = 0
+    // the fix round must change something, otherwise it is not re-reviewed
+    const { orchestrator } = premium((cwd) => fs.writeFile(path.join(cwd, 'src/greet.js'), ++executions === 1 ? GREET : `// reviewed\n${GREET}`))
+    let reviews = 0
+    const reviewing = {
+      ...orchestrator,
+      async reviewResult() {
+        reviews += 1
+        if (reviews === 1) {
+          const result = { verdict: 'request_changes', score: 40, summary: 'needs a fix', issues: [{ severity: 'blocker', file: 'src/greet.js', message: 'fix it' }], requiredFixes: ['fix greet'] }
+          return { result, meta: { durationMs: 1, usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, measured: true, billing: 'subscription' } } }
+        }
+        throw new OrchestratorError('Review is not an object.', 'invalid_output', {
+          meta: { model: 'gpt-f', sessionId: 's-f', durationMs: 5, usage: { inputTokens: 600, outputTokens: 20, cachedInputTokens: 0, measured: true, billing: 'subscription' } },
+        })
+      },
+      async cancelRun() {},
+    }
+    const runner = new ExecutionRunner(
+      { id: 'run-review-fix-meta', projectKey: 'demo', repoPath: repo, goal: 'Add greet' },
+      [task('task-001', { suggestedExecutor: 'premium', complexity: 4, newFiles: ['src/greet.js'] })],
+      { ...deps, orchestrator: reviewing as never, settings: { ...deps.settings, premiumReviewPolicy: 'always' as const, reviewFixRounds: 1 } },
+    )
+    await runner.execute()
+    expect(reviews).toBe(2)
+    const call = store.calls.find((entry) => entry.purpose === 'review_fix')
+    expect(call).toMatchObject({ kind: 'orchestrator', status: 'error', errorClass: 'invalid_output', model: 'gpt-f', sessionId: 's-f' })
+    expect(call!.usage).toMatchObject({ inputTokens: 600, outputTokens: 20, measured: true })
   }, 60_000)
 
   it('premium agent: without write permission a change by the CLI is rejected before integration', async () => {

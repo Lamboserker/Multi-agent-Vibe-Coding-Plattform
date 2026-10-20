@@ -6,8 +6,10 @@ import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from 
 import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
 import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
+  mergeCallMeta,
   normalizeWithMeta,
   OrchestratorError,
+  withErrorMeta,
   type AnalysisInput,
   type CallContext,
   type CallMeta,
@@ -226,7 +228,7 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
 
   async reviewResult(input: ReviewInput, ctx: CallContext) {
     const call = await this.callStructured(withSystem(reviewPrompt(input)), { schema: REVIEW_SCHEMA, sandbox: 'read-only', ephemeral: true }, ctx)
-    return { result: normalizeReview(call.structured), meta: call.meta }
+    return { result: normalizeWithMeta(call.meta, () => normalizeReview(call.structured)), meta: call.meta }
   }
 
   async chat(input: ChatInput, ctx: CallContext) {
@@ -237,7 +239,14 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
         call = await this.callStructured(chatFollowUpPrompt(input), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false, resumeSessionId: input.resumeSessionId }, ctx)
       } catch (error) {
         if (error instanceof OrchestratorError && ['cancelled', 'not_authenticated', 'session_expired', 'quota_exhausted', 'rate_limited'].includes(error.kind)) throw error
-        call = await this.callStructured(withSystem(chatPrompt(input)), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false }, ctx)
+        // a resume attempt that completed but was rejected still used tokens: book them with the retry
+        const discarded = error instanceof OrchestratorError ? error.details.meta : undefined
+        try {
+          call = await this.callStructured(withSystem(chatPrompt(input)), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false }, ctx)
+        } catch (retryError) {
+          throw withErrorMeta(retryError, discarded)
+        }
+        call = { ...call, meta: mergeCallMeta(discarded, call.meta) }
       }
     } else {
       call = await this.callStructured(withSystem(chatPrompt(input)), { schema: CHAT_SCHEMA, sandbox: 'read-only', ephemeral: false }, ctx)
@@ -384,15 +393,19 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
       })
 
       if (failure || !usage) {
-        throw classifyCliFailure(`${failure ?? ''}\n${errors.join('\n')}\n${processResult.stderr.slice(-3000)}`, 'codex')
+        // a turn that completed before the failure (turn.completed, then turn.failed) used tokens: book them
+        const failureMeta: CallMeta | undefined = usage ? { sessionId, model, usage, durationMs: processResult.durationMs } : undefined
+        throw withErrorMeta(classifyCliFailure(`${failure ?? ''}\n${errors.join('\n')}\n${processResult.stderr.slice(-3000)}`, 'codex'), failureMeta)
       }
+      const meta: CallMeta = { sessionId, model, usage, durationMs: processResult.durationMs }
       let structured: unknown
       try {
         structured = extractJson(lastMessage)
       } catch {
-        throw new OrchestratorError('Codex returned no structured output.', 'invalid_output', { retryable: true })
+        // the turn completed, so its tokens were used and must still be booked
+        throw new OrchestratorError('Codex returned no structured output.', 'invalid_output', { retryable: true, meta })
       }
-      return { structured, text: lastMessage, meta: { sessionId, model, usage, durationMs: processResult.durationMs } }
+      return { structured, text: lastMessage, meta }
     } finally {
       rmSync(schemaDir, { recursive: true, force: true })
     }

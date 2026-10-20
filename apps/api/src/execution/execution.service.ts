@@ -41,6 +41,7 @@ import { asJson, stringList } from '../common/json.js'
 import { KeyedMutex } from '../common/locks.js'
 import { LocalModelsService } from '../local-models/local-models.service.js'
 import { OrchestratorService } from '../orchestration/orchestrator.service.js'
+import { failedCallFields } from '../orchestration/model-call.js'
 import { EventBusService } from '../runtime/event-bus.service.js'
 import { JobQueueService } from '../runtime/job-queue.service.js'
 import { runtimeConfig } from '../runtime/runtime-config.js'
@@ -943,7 +944,7 @@ export class ExecutionService implements OnModuleInit {
           })
           return accepted(hunk, result.answer)
         } catch (error) {
-          await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: orchestrator.id, model: orchestrator.id, purpose: 'merge', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, executionId } })
+          await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: orchestrator.id, purpose: 'merge', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, executionId, ...failedCallFields(error, orchestrator.id) } })
           return undefined
         }
       },

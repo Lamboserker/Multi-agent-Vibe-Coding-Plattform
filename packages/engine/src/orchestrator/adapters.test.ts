@@ -22,7 +22,9 @@ let input = ''
 process.stdin.on('data', (c) => (input += c)).on('end', () => {
   if (mode === 'hang') { setTimeout(() => {}, 60000); return }
   if (mode === 'no_session' && args.includes('--resume')) { process.stderr.write('No conversation found with session ID'); process.exit(1) }
-  out({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-sonnet-4-6', tools: [] })
+  // the retry (no --resume) of the resume modes runs in a new CLI session
+  const sid = (mode === 'resume_invalid' || mode === 'always_invalid') && !args.includes('--resume') ? 'sess-2' : 'sess-1'
+  out({ type: 'system', subtype: 'init', session_id: sid, model: 'claude-sonnet-4-6', tools: [] })
   if (mode === 'quota') {
     out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1791547200, rateLimitType: 'five_hour' } })
     out({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1791547200', session_id: 'sess-1' })
@@ -32,11 +34,27 @@ process.stdin.on('data', (c) => (input += c)).on('end', () => {
     out({ type: 'result', subtype: 'success', is_error: true, result: 'OAuth token has expired. Please run /login', session_id: 'sess-1' })
     process.exit(1)
   }
+  if (mode === 'quota_usage') {
+    out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1791547200, rateLimitType: 'five_hour' } })
+    out({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1791547200', session_id: 'sess-1',
+      usage: { input_tokens: 1000, cache_read_input_tokens: 200, cache_creation_input_tokens: 0, output_tokens: 150 } })
+    process.exit(1)
+  }
+  if (mode === 'max_turns') {
+    out({ type: 'result', subtype: 'error_max_turns', is_error: true, duration_ms: 1234, session_id: 'sess-1', total_cost_usd: 0.0123,
+      usage: { input_tokens: 1000, cache_read_input_tokens: 200, cache_creation_input_tokens: 0, output_tokens: 150 } })
+    process.exit(1)
+  }
+  if (mode === 'no_structured' || (mode === 'resume_invalid' && args.includes('--resume')) || mode === 'always_invalid') {
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1234, result: 'plain text', session_id: sid, total_cost_usd: 0.0123,
+      usage: { input_tokens: 1000, cache_read_input_tokens: 200, cache_creation_input_tokens: 0, output_tokens: 150 } })
+    process.exit(0)
+  }
   const structured = JSON.parse(process.env.FAKE_STRUCTURED)
   out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/a.ts' } }] } })
   out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'StructuredOutput', input: structured }] } })
   out({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', resetsAt: 1791547200, rateLimitType: 'five_hour' } })
-  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1234, result: 'done', session_id: 'sess-1', total_cost_usd: 0.0123,
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1234, result: 'done', session_id: sid, total_cost_usd: 0.0123,
     usage: { input_tokens: 1000, cache_read_input_tokens: 200, cache_creation_input_tokens: 0, output_tokens: 150 }, structured_output: structured, input_len: input.length })
 })
 `
@@ -57,7 +75,10 @@ if (args[0] === 'debug' && args[1] === 'models') {
 }
 let input = ''
 process.stdin.on('data', (c) => (input += c)).on('end', () => {
-  out({ type: 'thread.started', thread_id: 'thread-1' })
+  const isResume = args[0] === 'exec' && args[1] === 'resume'
+  const plain = mode === 'always_invalid' || (mode === 'resume_invalid' && isResume)
+  // the retry (no exec resume) of the resume modes runs in a new thread
+  out({ type: 'thread.started', thread_id: (mode === 'resume_invalid' || mode === 'always_invalid') && !isResume ? 'thread-2' : 'thread-1' })
   out({ type: 'turn.started' })
   if (mode === 'model_unsupported' && !args.includes('-m')) {
     out({ type: 'error', message: "The 'gpt-x' model is not supported when using Codex with a ChatGPT account." })
@@ -66,8 +87,12 @@ process.stdin.on('data', (c) => (input += c)).on('end', () => {
   }
   out({ type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: 'rg foo', exit_code: 0 } })
   out({ type: 'item.completed', item: { id: 'i2', type: 'file_change', changes: [{ path: 'src/b.ts', kind: 'update' }] } })
-  out({ type: 'item.completed', item: { id: 'i3', type: 'agent_message', text: process.env.FAKE_STRUCTURED } })
+  out({ type: 'item.completed', item: { id: 'i3', type: 'agent_message', text: plain ? 'plain text' : process.env.FAKE_STRUCTURED } })
   out({ type: 'turn.completed', usage: { input_tokens: 13000, cached_input_tokens: 4000, output_tokens: 80, reasoning_output_tokens: 20 } })
+  if (mode === 'failed_after_turn' && args[0] === 'exec') {
+    out({ type: 'turn.failed', error: { message: 'stream disconnected' } })
+    process.exit(1)
+  }
 })
 `
 
@@ -154,6 +179,29 @@ describe('ClaudeCodeAdapter', () => {
     expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
   })
 
+  it('keeps the measured usage on an invalid_output error when execute returns no structured output', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'no_structured'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.executeComplexTask({ taskId: 'task-001', title: 'T', instructions: 'Do it', acceptanceCriteria: [], relevantFiles: [] }, { runId: 'r-x', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
+  })
+
+  it('keeps the measured usage on an invalid_output error when the review output is not an object', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = '[]'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.reviewResult({ goal: 'x', tasks: [], diff: '', validationSummary: '', riskFlags: [] }, { runId: 'r-rv', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.message).toBe('Review is not an object.')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
+  })
+
   it('executes complex tasks with edit tools and acceptEdits, without shell access', async () => {
     const fake = await makeFakeCli('claude', FAKE_CLAUDE)
     process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
@@ -178,6 +226,37 @@ describe('ClaudeCodeAdapter', () => {
     const error = await adapter.analyzeTask({ goal: 'x', context }, { runId: 'r3', cwd: fake.dir }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(OrchestratorError)
     expect((error as OrchestratorError).kind).toBe(kind)
+  })
+
+  it('keeps the measured usage on an error_max_turns result', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'max_turns'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createPlan({ goal: 'x', context, costMode: 'balanced', localModels: [], maxTasks: 8 }, { runId: 'r-mt', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true, apiEquivalentUsd: 0.0123 })
+  })
+
+  it('attaches no meta to an error result without usage', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'expired'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createPlan({ goal: 'x', context, costMode: 'balanced', localModels: [], maxTasks: 8 }, { runId: 'r-nm', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.details.meta).toBeUndefined()
+  })
+
+  it('keeps the measured usage on a quota_exhausted error', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'quota_usage'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createPlan({ goal: 'x', context, costMode: 'balanced', localModels: [], maxTasks: 8 }, { runId: 'r-qu', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('quota_exhausted')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
   })
 
   it('cancels a running call', async () => {
@@ -239,6 +318,40 @@ describe('CodexAdapter', () => {
     expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
   })
 
+  it('keeps the measured usage on an invalid_output error when execute returns no structured output', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = 'not json at all'
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.executeComplexTask({ taskId: 'task-001', title: 'T', instructions: 'Do it', acceptanceCriteria: [], relevantFiles: [] }, { runId: 'c-x', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
+  })
+
+  it('keeps the measured usage on an invalid_output error when the review output is not an object', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = '[]'
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.reviewResult({ goal: 'x', tasks: [], diff: '', validationSummary: '', riskFlags: [] }, { runId: 'c-rv', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.message).toBe('Review is not an object.')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
+  })
+
+  it('keeps the measured usage of a turn that completed and then failed', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'failed_after_turn'
+    process.env.FAKE_STRUCTURED = JSON.stringify(plan)
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createPlan({ goal: 'x', context, costMode: 'cheapest', localModels: [], maxTasks: 5 }, { runId: 'c-ft', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, outputTokens: 100, cachedInputTokens: 4000, measured: true })
+  })
+
   it('falls back once to a listed model when the configured one is not available for the account', async () => {
     const fake = await makeFakeCli('codex', FAKE_CODEX)
     process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
@@ -288,6 +401,52 @@ describe('chat session reuse', () => {
     const { result } = await adapter.chat({ question: 'Again?', context, resumeSessionId: 'gone' }, { runId: 'q3', cwd: fake.dir })
     expect(result.answer).toBe('full')
     expect((JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[] }).args).not.toContain('--resume')
+  })
+
+  it('claude: a rejected resume attempt is booked with the retry', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'resume_invalid'
+    process.env.FAKE_STRUCTURED = JSON.stringify({ answer: 'full' })
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.chat({ question: 'Again?', context, resumeSessionId: 'sess-1' }, { runId: 'q5', cwd: fake.dir })
+    expect(result.answer).toBe('full')
+    expect(meta.usage).toMatchObject({ inputTokens: 2400, outputTokens: 300, cachedInputTokens: 400, measured: true })
+    expect(meta.sessionId).toBe('sess-2')
+  })
+
+  it('claude: when the retry fails too, the error carries the summed meta', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'always_invalid'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.chat({ question: 'Again?', context, resumeSessionId: 'sess-1' }, { runId: 'q6', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 2400, outputTokens: 300, cachedInputTokens: 400, measured: true })
+  })
+
+  it('codex: a rejected resume attempt is booked with the retry', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'resume_invalid'
+    process.env.FAKE_STRUCTURED = JSON.stringify({ answer: 'full' })
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.chat({ question: 'Again?', context, resumeSessionId: 'thread-1' }, { runId: 'q7', cwd: fake.dir })
+    expect(result.answer).toBe('full')
+    expect(meta.usage).toMatchObject({ inputTokens: 26000, outputTokens: 200, cachedInputTokens: 8000, measured: true })
+    expect(meta.sessionId).toBe('thread-2')
+  })
+
+  it('codex: when the retry fails too, the error carries the summed meta', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'always_invalid'
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.chat({ question: 'Again?', context, resumeSessionId: 'thread-1' }, { runId: 'q8', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 26000, outputTokens: 200, cachedInputTokens: 8000, measured: true })
   })
 
   it('codex: a follow-up uses exec resume on the stored thread', async () => {

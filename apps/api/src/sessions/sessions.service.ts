@@ -7,6 +7,7 @@ import { asJson, jsonObject } from '../common/json.js'
 import { ExecutionService } from '../execution/execution.service.js'
 import { RepoContextService } from '../execution/repo-context.service.js'
 import { OrchestratorService } from '../orchestration/orchestrator.service.js'
+import { failedCallFields } from '../orchestration/model-call.js'
 import { EventBusService, type AppEvent } from '../runtime/event-bus.service.js'
 import { KeyedMutex } from '../common/locks.js'
 import { JobQueueService } from '../runtime/job-queue.service.js'
@@ -340,7 +341,7 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
         await this.prisma.chatSession.update({ where: { id: sessionId }, data: { provider: adapter.id, ...(meta.sessionId ? { externalSessionId: meta.sessionId } : {}) } })
         await this.systemMessage(session, question.taskId, 'assistant', result.answer, { kind: 'answer', orchestrator: adapter.id, questionId: messageId, resumedSession: Boolean(resumeSessionId && meta.sessionId === resumeSessionId) })
       } catch (error) {
-        await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, model: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started } })
+        await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, ...failedCallFields(error, adapter.id) } })
         await this.systemMessage(session, question.taskId, 'system', `Fehler bei der Antwort: ${error instanceof Error ? error.message : String(error)}`, { kind: 'answer_error', questionId: messageId })
       }
     } finally {

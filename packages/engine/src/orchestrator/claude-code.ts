@@ -6,8 +6,10 @@ import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from 
 import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
 import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
+  mergeCallMeta,
   normalizeWithMeta,
   OrchestratorError,
+  withErrorMeta,
   type AnalysisInput,
   type CallContext,
   type CallMeta,
@@ -227,7 +229,7 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
 
   async reviewResult(input: ReviewInput, ctx: CallContext) {
     const call = await this.callStructured(reviewPrompt(input) + repositoryRootNote(ctx.cwd), { schema: REVIEW_SCHEMA, tools: 'Read,Glob,Grep' }, ctx)
-    return { result: normalizeReview(call.structured), meta: call.meta }
+    return { result: normalizeWithMeta(call.meta, () => normalizeReview(call.structured)), meta: call.meta }
   }
 
   async chat(input: ChatInput, ctx: CallContext) {
@@ -238,7 +240,14 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
         call = await this.callStructured(chatFollowUpPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true, resumeSessionId: input.resumeSessionId }, ctx)
       } catch (error) {
         if (error instanceof OrchestratorError && ['cancelled', 'not_authenticated', 'session_expired', 'quota_exhausted', 'rate_limited'].includes(error.kind)) throw error
-        call = await this.callStructured(chatPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true }, ctx)
+        // a resume attempt that completed but was rejected still used tokens: book them with the retry
+        const discarded = error instanceof OrchestratorError ? error.details.meta : undefined
+        try {
+          call = await this.callStructured(chatPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true }, ctx)
+        } catch (retryError) {
+          throw withErrorMeta(retryError, discarded)
+        }
+        call = { ...call, meta: mergeCallMeta(discarded, call.meta) }
       }
     } else {
       call = await this.callStructured(chatPrompt(input), { schema: CHAT_SCHEMA, tools: 'Read,Glob,Grep', persistSession: true }, ctx)
@@ -360,15 +369,9 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
     if (!finalResult) {
       throw classifyCliFailure(`${processResult.stderr}\n${processResult.stdout.slice(-2000)}`, 'claude')
     }
-    if (finalResult.is_error === true || (typeof finalResult.subtype === 'string' && finalResult.subtype !== 'success')) {
-      const text = `${String(finalResult.subtype ?? '')} ${String(finalResult.result ?? '')} ${processResult.stderr}`
-      if (this.lastRateLimit?.status === 'rejected') {
-        throw new OrchestratorError(text.trim(), 'quota_exhausted', { retryable: false, resetsAt: this.lastRateLimit.resetsAt })
-      }
-      throw classifyCliFailure(text, 'claude')
-    }
-
-    const usageRaw = (finalResult.usage ?? {}) as Record<string, unknown>
+    // computed before the error check: error results (e.g. error_max_turns) usually report usage too
+    const hasUsage = typeof finalResult.usage === 'object' && finalResult.usage !== null
+    const usageRaw = (hasUsage ? finalResult.usage : {}) as Record<string, unknown>
     const cached = Number(usageRaw.cache_read_input_tokens ?? 0) + Number(usageRaw.cache_creation_input_tokens ?? 0)
     const usage: UsageReport = {
       inputTokens: Number(usageRaw.input_tokens ?? 0) + cached,
@@ -378,6 +381,16 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
       apiEquivalentUsd: typeof finalResult.total_cost_usd === 'number' ? finalResult.total_cost_usd : undefined,
       billing: this.options.authMode === 'api_key' ? 'api_key' : 'subscription',
     }
+    const meta: CallMeta = { sessionId, model, usage, durationMs: Number(finalResult.duration_ms ?? processResult.durationMs) }
+
+    if (finalResult.is_error === true || (typeof finalResult.subtype === 'string' && finalResult.subtype !== 'success')) {
+      const text = `${String(finalResult.subtype ?? '')} ${String(finalResult.result ?? '')} ${processResult.stderr}`
+      const failureMeta = hasUsage ? meta : undefined
+      if (this.lastRateLimit?.status === 'rejected') {
+        throw new OrchestratorError(text.trim(), 'quota_exhausted', { retryable: false, resetsAt: this.lastRateLimit.resetsAt, meta: failureMeta })
+      }
+      throw withErrorMeta(classifyCliFailure(text, 'claude'), failureMeta)
+    }
     this.emit(ctx, { type: 'usage', usage })
 
     const text = typeof finalResult.result === 'string' ? finalResult.result : texts.join('\n')
@@ -385,13 +398,10 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
       try {
         structured = extractJson(text)
       } catch {
-        throw new OrchestratorError('Claude Code returned no structured output.', 'invalid_output', { retryable: true })
+        // the turn completed, so its tokens were used and must still be booked
+        throw new OrchestratorError('Claude Code returned no structured output.', 'invalid_output', { retryable: true, meta })
       }
     }
-    return {
-      structured,
-      text,
-      meta: { sessionId, model, usage, durationMs: Number(finalResult.duration_ms ?? processResult.durationMs) },
-    }
+    return { structured, text, meta }
   }
 }

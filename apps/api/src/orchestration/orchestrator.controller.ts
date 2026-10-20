@@ -6,6 +6,7 @@ import { RepoContextService } from '../execution/repo-context.service.js'
 import { asJson } from '../common/json.js'
 import { Prisma } from '@prisma/client'
 import { OrchestratorService } from './orchestrator.service.js'
+import { failedCallFields } from './model-call.js'
 import { SessionsService } from '../sessions/sessions.service.js'
 
 const IDS = ['claude-code', 'codex'] as const
@@ -91,7 +92,7 @@ export class OrchestratorController {
       return { ok: true, answer: result.answer, usage: meta.usage }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, model: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started } })
+      await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, ...failedCallFields(error, adapter.id) } })
       return { ok: false, answer: `Fehler: ${message}` }
     }
   }
