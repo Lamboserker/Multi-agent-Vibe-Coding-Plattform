@@ -44,6 +44,8 @@ export interface EngineTask {
   tool?: FastPathTool
   /** Agent profile assigned to the task (agent manager): model, limits, escalation, role prompt. */
   agent?: AgentAssignment
+  /** Skills pinned by the planner or named in the task; always given to the executing agent. */
+  skills?: string[]
   status: EngineTaskStatus
   /** Commit on the integration branch once integrated. */
   commitSha?: string
@@ -820,8 +822,9 @@ export class ExecutionRunner {
     })
     const numCtx = Math.min(this.deps.settings.numCtx, profile?.contextWindow || this.deps.settings.numCtx, task.agent?.maxContextTokens ?? Infinity)
     const digest = await buildContextDigest(this.deps.index, `${task.title}\n${task.description}`, { explicitFiles: task.relevantFiles, budgetTokens: Math.min(2500, Math.floor(numCtx / 6)), excerptFiles: 0, maxFiles: 10 })
+    // Without external tools (extraTools are dropped below) skills must be inlined, not loaded via load_skill.
     const resources = this.deps.agentResources
-      ? await this.deps.agentResources({ task, model, worktreePath: worktree.path, supportsTools: profile?.toolCalling ?? false }).catch((error: unknown) => {
+      ? await this.deps.agentResources({ task, model, worktreePath: worktree.path, supportsTools: (profile?.toolCalling ?? false) && task.agent?.permissions?.externalTools !== false }).catch((error: unknown) => {
           this.event('warn', 'agent_resources_failed', `${task.key}: skills/tools unavailable (${error instanceof Error ? error.message : String(error)}).`, undefined, task.id)
           throw error // Required instructions/tools must not be silently dropped.
         })

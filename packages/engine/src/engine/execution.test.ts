@@ -125,6 +125,20 @@ describe('ExecutionRunner (real git, real validation, scripted model)', () => {
     expect(existsSync(path.join(repo, 'src/greet.js'))).toBe(false)
   }, 60_000)
 
+  it('asks for inline skills (supportsTools false) when the agent has no external tools, even for a tool-calling model', async () => {
+    const { repo, deps } = await setup(request => (toolResults(request) ? finish : write('src/greet.js', GREET)))
+    const seen: boolean[] = []
+    const agentResources = async (input: { supportsTools: boolean }) => { seen.push(input.supportsTools); return { tools: [] } }
+    const agent = { id: 'a', name: 'NoTools', escalation: 'none' as const, permissions: { externalTools: false } }
+    await new ExecutionRunner({ id: 'run-no-external-tools', projectKey: 'demo', repoPath: repo, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'], agent })], { ...deps, agentResources }).execute()
+    expect(seen).toEqual([false])
+    await fake?.close()
+    const { repo: repo2, deps: deps2 } = await setup(request => (toolResults(request) ? finish : write('src/greet.js', GREET)))
+    seen.length = 0
+    await new ExecutionRunner({ id: 'run-external-tools', projectKey: 'demo', repoPath: repo2, goal: 'Add greet' }, [task('task-001', { newFiles: ['src/greet.js'] })], { ...deps2, agentResources }).execute()
+    expect(seen).toEqual([true])
+  }, 60_000)
+
   it('never integrates an unfinished partial change even if existing tests would pass', async () => {
     const { repo, deps, store } = await setup(() => write('src/greet.js', GREET))
     deps.settings.maxLocalRepairs = 0

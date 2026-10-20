@@ -25,6 +25,11 @@ export function renderContext(context: RepoContextDigest, maxChars = 24_000): st
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n[context truncated]` : text
 }
 
+function clip(text: string, maxChars: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > maxChars ? `${flat.slice(0, maxChars - 1).trimEnd()}…` : flat
+}
+
 export function analysisPrompt(input: AnalysisInput): string {
   return `Analyse this coding request against the repository. Rate complexity and risk from 1 (trivial/none) to 5 (critical).
 
@@ -38,6 +43,22 @@ export function planningPrompt(input: PlanningInput): string {
   const models = input.localModels.length
     ? input.localModels.map((model) => `- ${model.role}: ${model.model}${model.toolCalling ? ' (tool calling)' : ' (structured file output only)'}${model.strengths.length ? ` — strengths: ${model.strengths.join(', ')}` : ''}`).join('\n')
     : '- none installed (every task will need premium execution or will be blocked)'
+  // bounded so a large agent/skill setup cannot crowd out the repository context
+  const agents = (input.agents ?? []).slice(0, 20)
+  const skills = (input.skills ?? []).slice(0, 40)
+  const agentCatalog = agents.length
+    ? `\n# Available agents\n${agents.map((agent) => `- ${agent.name}: ${clip(agent.description, 200)}${agent.categories.length ? ` — categories: ${agent.categories.slice(0, 12).join(', ')}` : ''}${agent.skills.length ? ` — skills: ${agent.skills.slice(0, 12).join(', ')}` : ''}`).join('\n')}\n`
+    : ''
+  const skillCatalog = skills.length
+    ? `\n# Available skills\n${skills.map((skill) => `- ${skill.name}${skill.requested ? ' (requested by the user)' : ''}: ${clip(skill.description, 200)}`).join('\n')}\n`
+    : ''
+  const catalogRules = [
+    agents.length ? '- "agent": the exact name of one agent from "Available agents" that fits the task best, or "" to let the system choose.' : '- "agent": always "".',
+    skills.length
+      ? `- "skills": exact names from "Available skills" the executing agent needs for this task (usually 0–2), else [].${skills.some((skill) => skill.requested) ? ' Every skill marked "(requested by the user)" must appear on at least one task.' : ''}
+- Skills are instructions for the executing agents. Never apply a skill yourself, never wait for one and never return an empty plan because of one – plan the work and attach the skill to the tasks that need it.`
+      : '- "skills": always [].',
+  ].join('\n')
   return `Decompose the request into an execution plan for a team of coding agents.
 
 # Request
@@ -45,7 +66,7 @@ ${input.goal}
 ${input.feedback ? `\n# Feedback from the user on the previous attempt\n${input.feedback}\n` : ''}
 # Available local models
 ${models}
-
+${agentCatalog}${skillCatalog}
 # Planning rules
 - Cost mode: ${input.costMode}. ${input.costMode === 'cheapest' ? 'Use premium execution only when a local model would very likely fail.' : input.costMode === 'quality' ? 'Use premium execution for work that cannot be made precise enough for a local model (unclear root cause, security, cross-cutting design decisions); decompose everything else into precise local tasks.' : 'Delegate routine work locally; reserve premium for genuinely hard or risky tasks.'}
 - At most ${input.maxTasks} tasks. One task = one coherent change a single agent can finish and verify.
@@ -72,6 +93,7 @@ ${models}
   "premium" for security-critical logic, complex multi-file refactors, unclear root causes, critical migrations.
 - "expectedInputTokens": estimate of the context the agent needs to read.
 - "capabilities": e.g. "typescript", "react", "nestjs", "prisma", "css", "testing".
+${catalogRules}
 - Plan from the repository context below. Read files only to resolve a concrete doubt (a few targeted reads at most);
   do not explore the repository broadly – the executing agents read the files themselves. Answer quickly.
 

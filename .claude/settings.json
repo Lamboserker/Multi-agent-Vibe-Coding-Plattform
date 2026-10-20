@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-context.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Lade Projektstand (docs/ai)"
+          }
+        ]
+      }
+    ]
+  }
+}

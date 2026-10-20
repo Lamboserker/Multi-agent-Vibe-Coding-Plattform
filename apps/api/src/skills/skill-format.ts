@@ -104,11 +104,28 @@ export function renderSkill(meta: SkillFrontMatter, body: string): string {
   return lines.join('\n')
 }
 
+const SKILL_MARKS = `"'\`„“”‚‘’/`
+
+/**
+ * True when the text names the skill explicitly: a hyphenated name as a whole word (also "projekt-doku-Skill"),
+ * a one-word name only when marked ("deploy", `deploy`, /deploy, Skill deploy, deploy-Skill) – a plain
+ * "changelog" in "fix the changelog link" is not a request for the skill.
+ */
+export function namesSkill(name: string, goal: string): boolean {
+  const text = goal.toLowerCase()
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const end = '(?![\\p{L}\\p{N}-])'
+  if (name.includes('-')) return new RegExp(`(?<![\\p{L}\\p{N}-])${escaped}(?:-skills?)?${end}`, 'u').test(text)
+  return new RegExp(`(?:[${SKILL_MARKS}]|skills?\\s+)${escaped}${end}|(?<![\\p{L}\\p{N}-])${escaped}(?:[${SKILL_MARKS}]|-skills?${end}|\\s+skills?${end})`, 'u').test(text)
+}
+
 /** How strongly a skill matches a goal: trigger words and name parts found in the text. */
 export function skillRelevance(meta: SkillFrontMatter, goal: string): number {
   const text = goal.toLowerCase()
   const words = new Set(text.split(/[^\p{L}\p{N}-]+/u).filter(Boolean))
   let score = 0
+  // the full name as a word (names contain "-", which the split keeps): the user asked for the skill
+  if (words.has(meta.name) || namesSkill(meta.name, goal)) score += 10
   for (const trigger of meta.triggers) if (trigger.includes(' ') ? text.includes(trigger) : words.has(trigger)) score += 2
   for (const part of meta.name.split('-')) if (part.length > 3 && words.has(part)) score += 1
   return score

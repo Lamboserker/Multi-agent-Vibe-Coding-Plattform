@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common'
-import { Prisma, type ExecutionRun, type Subtask } from '@prisma/client'
+import { Prisma, type AgentProfile, type ExecutionRun, type Subtask } from '@prisma/client'
 import {
   aggregateSuitability,
   applyChangeSet,
@@ -22,11 +22,13 @@ import {
   summarizeUsage,
   WorktreeManager,
   isSecurityCriticalPath,
+  type AgentOffer,
   type ApplyMode,
   type AttemptRecord,
   type EngineTask,
   type ExecutionPlan,
   type OrchestratorAdapter,
+  type SkillOffer,
   type SuitabilityStats,
   type UsageCall,
   classifyFastPath,
@@ -47,7 +49,7 @@ import { PrismaEngineStore } from './prisma-engine-store.js'
 import { RepoContextService } from './repo-context.service.js'
 import { PluginsService } from '../plugins/plugins.service.js'
 import { AgentResourcesService } from '../agents/agent-resources.service.js'
-import { AgentProfilesService } from '../agents/agent-profiles.service.js'
+import { AgentProfilesService, assignAgents } from '../agents/agent-profiles.service.js'
 import { ensureRepository } from '../workspace-fs/workspace-fs.service.js'
 
 const ACTIVE_STATUSES = ['pending', 'planning', 'running', 'paused', 'integrating'] as const
@@ -186,7 +188,18 @@ export class ExecutionService implements OnModuleInit {
     // independent preparation steps run concurrently (each can cost seconds on a cold start);
     // plugin/skill context is only awaited when the premium planner is actually called
     const pluginContextPromise = (this.plugins?.collectContext(task.userPrompt, projectRef).catch(() => []) ?? Promise.resolve([]))
-    const skillContextPromise = (this.agentResources?.promptContext('planner', task.projectId, task.userPrompt).catch(() => undefined) ?? Promise.resolve(undefined))
+    // catalogs the planner assigns from: enabled coder agents and active skills (user-named ones flagged)
+    const agentProfilesPromise: Promise<AgentProfile[]> = (this.agentProfiles?.list(task.projectId) ?? Promise.resolve([])).catch(() => [])
+    const agentCatalogPromise: Promise<AgentOffer[]> = agentProfilesPromise
+      .then((list) => list.filter((profile) => profile.enabled && profile.role === 'coder').map((profile) => ({ name: profile.name, description: profile.description, categories: profile.categories as string[], skills: profile.skills as string[] })))
+    // all active skills: the planner sees the first 40 (requested first), the plan's skills are checked against all
+    const activeSkillsPromise: Promise<SkillOffer[]> = (this.agentResources?.catalog(task.projectId, task.userPrompt, Infinity).catch(() => []) ?? Promise.resolve([]))
+    const skillCatalogPromise = activeSkillsPromise.then((catalog) => catalog.slice(0, 40))
+    // requested skills are for the executing agents: the planner only sees them in the catalog, never as
+    // instructions to follow (it would apply or wait for them instead of planning)
+    const skillContextPromise = skillCatalogPromise
+      .then((catalog) => this.agentResources?.promptContext('planner', task.projectId, task.userPrompt, catalog.filter((skill) => skill.requested).map((skill) => skill.name)))
+      .catch(() => undefined)
     const contextOptions = planningContextOptions(task.userPrompt)
     const [settings, { index, checks, digest }, profiles, orchestrator] = await Promise.all([
       this.settings.get(),
@@ -212,7 +225,7 @@ export class ExecutionService implements OnModuleInit {
         tasks: [{
           id: 'task-001', title: fast.mode === 'tool' ? fast.title : task.userPrompt.replace(/\s+/g, ' ').slice(0, 90), description: task.userPrompt, category: fast.mode === 'tool' ? 'fast-path' : 'general', complexity: 1, risk: 1,
           relevantFiles: files, newFiles: [], dependsOn: [], capabilities: [], expectedInputTokens: 2000, testStrategy: 'Project validation commands in the task worktree.',
-          acceptanceCriteria: ['The requested change is implemented.', 'Existing validation commands pass.'], suggestedExecutor: 'local', rationale: `Fast path: ${fast.reason}.`,
+          acceptanceCriteria: ['The requested change is implemented.', 'Existing validation commands pass.'], suggestedExecutor: 'local', rationale: `Fast path: ${fast.reason}.`, agent: '', skills: [],
         }],
         warnings: [],
       }
@@ -223,6 +236,7 @@ export class ExecutionService implements OnModuleInit {
       const pluginContext = await pluginContextPromise
       // skills assigned to the planner whose triggers match the goal (full text, bounded)
       const skillContext = (await skillContextPromise) ?? { text: '', inlined: [] as string[] }
+      const [agents, skills] = await Promise.all([agentCatalogPromise, skillCatalogPromise])
       const extra = [
         ...(skillContext.text ? [skillContext.text] : []),
         ...(pluginContext.length ? [`Context from plugins:\n${pluginContext.map((entry) => `### ${entry.plugin}/${entry.provider}\n${entry.text}`).join('\n\n')}`] : []),
@@ -240,6 +254,8 @@ export class ExecutionService implements OnModuleInit {
             localModels: profiles.map((profile) => ({ role: profile.roles.join('/'), model: profile.model, toolCalling: profile.toolCalling, strengths: [] })),
             maxTasks: settings.maxTasks,
             feedback,
+            agents,
+            skills,
           },
           {
             runId: `plan-${taskId}`,
@@ -278,22 +294,23 @@ export class ExecutionService implements OnModuleInit {
 
     // Replace previous (not yet executed) plan.
     this.events.publish('run', 'plan_progress', { taskId, kind: 'phase', phase: 'saving' })
-    // agent manager: each subtask gets the best matching agent profile (the user can change it);
-    // matched up front and concurrently so the subtasks are written in one transaction
-    const agentIds = await Promise.all(
-      plan.tasks.map((planned) =>
-        this.agentProfiles
-          ? this.agentProfiles.match(task.projectId, { category: planned.category, title: planned.title, goal: planned.description, files: [...planned.relevantFiles, ...planned.newFiles] }).then((profile) => profile?.id)
-          : Promise.resolve(undefined),
-      ),
-    )
+    // agent manager: each subtask gets an agent profile (the user can change it): the planner's choice, else the
+    // agent named in the request (one-task plans only), else the best keyword match
+    const agents = assignAgents(await agentProfilesPromise, plan.tasks, task.userPrompt)
+    // pinned skills per subtask: only active skills (the planner may invent names); a one-task plan also gets the
+    // skills named in the request, like the named agent
+    const activeSkills = await activeSkillsPromise
+    const known = new Set(activeSkills.map((skill) => skill.name))
+    const requestedSkills = plan.tasks.length === 1 ? activeSkills.filter((skill) => skill.requested).map((skill) => skill.name) : []
+    plan = { ...plan, tasks: plan.tasks.map((planned) => ({ ...planned, skills: [...new Set([...planned.skills.filter((name) => known.has(name)), ...requestedSkills])] })) }
     const created: Subtask[] = await this.prisma.$transaction([
       this.prisma.subtask.deleteMany({ where: { taskId } }),
       ...plan.tasks.map((planned, position) => {
       const securityCritical = [...planned.relevantFiles, ...planned.newFiles].some(isSecurityCriticalPath)
       return this.prisma.subtask.create({
           data: {
-            agentId: agentIds[position],
+            agentId: agents[position]?.id,
+            skills: asJson(planned.skills),
             taskId,
             key: planned.id,
             title: planned.title,
@@ -352,7 +369,7 @@ export class ExecutionService implements OnModuleInit {
         securitySensitive: plan.analysis.securitySensitive,
       },
     })
-    await this.chat(taskId, 'assistant', this.planMessage(plan, source, routing.assignments, warnings, needsApproval, autoStartSmall), { kind: 'task_plan', taskPlanId: taskPlan.id, source })
+    await this.chat(taskId, 'assistant', this.planMessage(plan, source, routing.assignments, warnings, needsApproval, autoStartSmall, agents.map((profile) => profile?.name)), { kind: 'task_plan', taskPlanId: taskPlan.id, source })
     this.events.publish('run', 'planned', { taskId, tasks: created.length, source, autoStarted: autoStartSmall })
 
     if (!needsApproval) await this.start(taskId)
@@ -380,11 +397,12 @@ export class ExecutionService implements OnModuleInit {
     })
   }
 
-  private planMessage(plan: ExecutionPlan, source: string, assignments: Array<{ key: string; executor: string; model?: string }>, warnings: string[], needsApproval: boolean, smallPlan = false) {
-    const lines = plan.tasks.map((task) => {
+  private planMessage(plan: ExecutionPlan, source: string, assignments: Array<{ key: string; executor: string; model?: string }>, warnings: string[], needsApproval: boolean, smallPlan: boolean, agentNames: Array<string | undefined>) {
+    const lines = plan.tasks.map((task, position) => {
+      const agent = agentNames[position]
       const assignment = assignments.find((entry) => entry.key === task.id)
       const target = assignment?.executor === 'premium' ? 'Premium' : assignment?.model ?? 'nicht zugewiesen'
-      return `- **${task.id}** ${task.title} — Komplexität ${task.complexity}/5, Risiko ${task.risk}/5 → ${target}${task.dependsOn.length ? ` (nach ${task.dependsOn.join(', ')})` : ''}`
+      return `- **${task.id}** ${task.title} — Komplexität ${task.complexity}/5, Risiko ${task.risk}/5 → ${target}${agent ? ` · ${agent}` : ''}${task.skills.length ? ` · Skills: ${task.skills.join(', ')}` : ''}${task.dependsOn.length ? ` (nach ${task.dependsOn.join(', ')})` : ''}`
     })
     return [
       source === 'fast-path' ? '**Fast Path (ohne Premium-Planung)**' : source === 'deterministic-fallback' ? '**Fallback-Plan (ohne Orchestrator)**' : `**Plan von ${source === 'claude-code' ? 'Claude Code' : 'Codex'}**`,
@@ -430,6 +448,7 @@ export class ExecutionService implements OnModuleInit {
       commitSha: subtask.commitSha ?? undefined,
       tool: (subtask.fastPath ?? undefined) as FastPathTool | undefined,
       agent: profile && this.agentProfiles ? this.agentProfiles.toAssignment(profile) : undefined,
+      skills: stringList(subtask.skills),
     } satisfies EngineTask
     })
   }
@@ -612,6 +631,7 @@ export class ExecutionService implements OnModuleInit {
                 goal: `${task.title}\n${task.description}`,
                 cwd: worktreePath,
                 supportsTools,
+                pinned: task.skills ?? [],
                 profile: profile ? { skills: profile.skills as string[], mcpServers: profile.mcpServers as string[], pluginTools: profile.pluginTools } : undefined,
               })
             }

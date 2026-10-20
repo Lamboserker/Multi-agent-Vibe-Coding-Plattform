@@ -171,6 +171,23 @@ export interface PlanningInput {
   localModels: LocalModelOffer[]
   maxTasks: number
   feedback?: string
+  /** Enabled coder agent profiles the planner may assign tasks to. */
+  agents?: AgentOffer[]
+  /** Active skills the planner may attach to tasks; `requested` = the user named it in the request. */
+  skills?: SkillOffer[]
+}
+
+export interface AgentOffer {
+  name: string
+  description: string
+  categories: string[]
+  skills: string[]
+}
+
+export interface SkillOffer {
+  name: string
+  description: string
+  requested: boolean
 }
 
 export interface PlannedTask {
@@ -189,6 +206,10 @@ export interface PlannedTask {
   acceptanceCriteria: string[]
   suggestedExecutor: 'local' | 'premium'
   rationale: string
+  /** Name of the agent profile that should execute the task; '' = choose automatically. */
+  agent: string
+  /** Names of the skills the executing agent needs for this task. */
+  skills: string[]
 }
 
 export interface ExecutionPlan {

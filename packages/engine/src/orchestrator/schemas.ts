@@ -57,6 +57,7 @@ export const PLAN_SCHEMA = {
         required: [
           'id', 'title', 'description', 'category', 'complexity', 'risk', 'relevantFiles', 'newFiles', 'dependsOn',
           'capabilities', 'expectedInputTokens', 'testStrategy', 'acceptanceCriteria', 'suggestedExecutor', 'rationale',
+          'agent', 'skills',
         ],
         properties: {
           id: { type: 'string' },
@@ -74,6 +75,8 @@ export const PLAN_SCHEMA = {
           acceptanceCriteria: stringArray,
           suggestedExecutor: { type: 'string', enum: ['local', 'premium'] },
           rationale: { type: 'string' },
+          agent: { type: 'string' },
+          skills: stringArray,
         },
       },
     },
@@ -201,6 +204,8 @@ export function normalizePlan(raw: unknown, maxTasks = 12): ExecutionPlan {
       acceptanceCriteria: strList(task.acceptanceCriteria, 12),
       suggestedExecutor: task.suggestedExecutor === 'premium' ? 'premium' : 'local',
       rationale: str(task.rationale).slice(0, 1000),
+      agent: str(task.agent).slice(0, 80),
+      skills: strList(task.skills, 8),
     })
   }
 

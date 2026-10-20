@@ -73,7 +73,7 @@ Aktivitätsleiste → Agenten → „Agenten verwalten“. Ein Agentenprofil leg
 
 | Feld | Wirkung in der Ausführung |
 |---|---|
-| Zuständig für | Kategorien/Stichwörter; beim Planen erhält jede Teilaufgabe automatisch das passendste Profil (Kategorie, Wörter in Titel/Beschreibung, Dateipfade; Projekt-Profile vor globalen, dann Priorität) |
+| Zuständig für | Kategorien/Stichwörter; beim Planen erhält jede Teilaufgabe das vom Planner gewählte Profil, sonst das im Auftrag namentlich genannte (nur bei einem Task), sonst das passendste (Kategorietreffer vor Projekt-Profilen vor globalen, dann Trefferstärke aus Wörtern in Titel/Beschreibung und Dateipfaden, dann Priorität) |
 | Gilt für | alle Projekte oder ein Projekt |
 | Modell | festes lokales Modell (sonst entscheidet der Router); ein für die Teilaufgabe gewähltes Modell hat Vorrang |
 | Skills | Teilmenge der Skills (leer = alle dem Coder zugewiesenen) |

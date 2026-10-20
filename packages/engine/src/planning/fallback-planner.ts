@@ -104,6 +104,8 @@ export function deterministicPlan(goal: string, index: RepoIndex, options: { max
     acceptanceCriteria: ['The requested change is implemented.', ...(named.length ? [`Only these files are created or changed: ${named.join(', ')}.`] : []), 'Existing validation commands pass.'],
     suggestedExecutor: complexity >= 4 || securityCritical ? 'premium' : 'local',
     rationale: 'Deterministic fallback plan (no orchestrator planning call).',
+    agent: '',
+    skills: [],
   }
   return {
     summary: `Deterministic single-task plan (${category}).`,
@@ -166,6 +168,8 @@ function decomposedPlan(goal: string, index: RepoIndex, category: string, maxTas
       acceptanceCriteria: ['The dependency/configuration required by the goal is present.', 'The project still builds.', 'No source/markup file was changed.'],
       suggestedExecutor: 'local',
       rationale: 'Fallback decomposition: infrastructure first so per-file tasks only convert code.',
+      agent: '',
+      skills: [],
     })
   }
 
@@ -198,6 +202,8 @@ function decomposedPlan(goal: string, index: RepoIndex, category: string, maxTas
       acceptanceCriteria: [`${file} fulfils the goal completely.`, 'Nothing was removed without a replacement.', 'Existing validation commands pass.', FILE_SCOPED_CRITERION],
       suggestedExecutor: 'local',
       rationale: 'Fallback decomposition: one precise single-file task per affected file.',
+      agent: '',
+      skills: [],
     })
   }
 

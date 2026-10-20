@@ -6,7 +6,7 @@ process.env.MAC_DATA_DIR = db.dir
 const { PrismaService } = await import('../common/prisma.service.js')
 const { applyMigrations } = await import('../runtime/migrator.js')
 const { EventBusService } = await import('../runtime/event-bus.service.js')
-const { AgentProfilesService, profileMatches } = await import('./agent-profiles.service.js')
+const { AgentProfilesService, AGENT_TEMPLATES, assignAgents, bestProfile, profileByName, profileMatches, profilesNamedIn } =await import('./agent-profiles.service.js')
 
 const prisma = new PrismaService()
 const service = new AgentProfilesService(prisma, new EventBusService())
@@ -25,10 +25,79 @@ afterAll(async () => {
 describe('profileMatches', () => {
   it('scores category, words in title/description and file paths', () => {
     const profile = { categories: ['test', 'vitest', 'components'] }
-    expect(profileMatches(profile, { category: 'test', title: '', goal: '', files: [] })).toBe(3)
+    expect(profileMatches(profile, { category: 'test', title: '', goal: '', files: [] })).toBe(10)
     expect(profileMatches(profile, { category: 'general', title: 'Add a vitest for Badge', goal: '', files: ['src/components/Badge.test.tsx'] })).toBeGreaterThanOrEqual(3)
     expect(profileMatches(profile, { category: 'general', title: 'Update README', goal: 'docs', files: ['README.md'] })).toBe(0)
     expect(profileMatches({ categories: [] }, { category: 'general', title: 'x', goal: '', files: [] })).toBe(0)
+  })
+})
+
+describe('agent assignment helpers', () => {
+  type Profile = Parameters<typeof bestProfile>[0][number]
+  const profile = (template: (typeof AGENT_TEMPLATES)[number], extra: Partial<Profile> = {}): Profile =>
+    ({ id: template.id, name: template.name, enabled: true, role: 'coder', projectId: null, priority: template.priority ?? 0, categories: template.categories ?? [], ...extra }) as Profile
+  const profiles = AGENT_TEMPLATES.map((template) => profile(template))
+  const task = { agent: '', category: 'react-ui', title: 'Button anlegen', description: 'x', relevantFiles: [] as string[], newFiles: [] as string[] }
+  const idOf = (entry: { id: string } | undefined) => entry?.id
+
+  it('treats a planner category as a hit via its alias', () => {
+    const frontend = profiles.find((entry) => entry.id === 'frontend')!
+    expect(profileMatches(frontend, { category: 'react-ui', title: '', goal: '', files: [] })).toBe(10)
+  })
+
+  it('does not let frontend words outweigh a documentation category', () => {
+    const picked = bestProfile(profiles, {
+      category: 'documentation',
+      title: 'Dashboard-Grundstruktur und Umsetzung dokumentieren',
+      goal: 'Beschreibt die React Komponente, das Layout, CSS und den Button des Dashboards.',
+      files: ['src/components/Dashboard.tsx', 'docs/dashboard.md'],
+    })
+    expect(picked?.name).toBe('Doku-Agent')
+  })
+
+  it('ranks a category hit above project agents and priority, project agents above global ones otherwise', () => {
+    const [frontend, , tests, docs] = AGENT_TEMPLATES
+    const docTask = { category: 'documentation', title: 'Layout dokumentieren', goal: '', files: [] }
+    // a project agent with a keyword hit only, or a much higher priority, does not beat a global category hit
+    expect(bestProfile([profile(frontend!, { projectId: 'p' }), profile(docs!)], docTask)?.id).toBe('docs')
+    expect(bestProfile([profile(frontend!, { priority: 100 }), profile(docs!, { priority: -100 })], docTask)?.id).toBe('docs')
+    // equal category hit: the project agent wins; keyword hits only: the project agent wins over a stronger global one
+    expect(bestProfile([profile(docs!), profile(docs!, { id: 'mine', projectId: 'p' })], docTask)?.id).toBe('mine')
+    const general = { category: 'general', title: 'Vitest Tests für den Button', goal: '', files: [] }
+    expect(bestProfile([profile(tests!), profile(frontend!, { projectId: 'p' })], general)?.id).toBe('frontend')
+  })
+
+  it('finds names with spaces and regex characters', () => {
+    const special = profile(AGENT_TEMPLATES[0]!, { id: 'special', name: 'C++ Agent (beta)' })
+    expect(profilesNamedIn([special], 'Bitte den c++ agent (beta) nutzen').map(idOf)).toEqual(['special'])
+    expect(profilesNamedIn([special], 'Bitte C Agent beta nutzen')).toEqual([])
+  })
+
+  it('prefers the planner choice (case-insensitive), ignores unknown names', () => {
+    expect(idOf(assignAgents(profiles, [{ ...task, agent: 'test-agent' }], '')[0])).toBe('tests')
+    expect(idOf(assignAgents(profiles, [{ ...task, agent: 'Ghost-Agent' }], '')[0])).toBe('frontend')
+  })
+
+  it('uses an agent named in the request only for a one-task plan naming exactly one agent', () => {
+    const prompt = 'Lass den Doku-Agent die README schreiben'
+    expect(idOf(assignAgents(profiles, [task], prompt)[0])).toBe('docs')
+    expect(assignAgents(profiles, [task, task], prompt).map(idOf)).toEqual(['frontend', 'frontend'])
+    expect(idOf(assignAgents(profiles, [task], 'Doku-Agent und Test-Agent sollen helfen')[0])).toBe('frontend')
+  })
+
+  it('prefers project profiles by name and ignores disabled ones', () => {
+    const docs = AGENT_TEMPLATES.find((entry) => entry.id === 'docs')!
+    const list = [profile(docs), profile(docs, { id: 'mine', projectId: 'p' }), profile(AGENT_TEMPLATES[0]!, { name: 'Off', enabled: false })]
+    expect(profileByName(list, ' doku-agent ')?.id).toBe('mine')
+    expect(profilesNamedIn(list, 'Doku-Agent bitte').map(idOf)).toEqual(['mine'])
+    expect(profileByName(list, 'Off')).toBeUndefined()
+    expect(profileByName(list, '')).toBeUndefined()
+  })
+
+  it('matches names as whole words including hyphens', () => {
+    expect(profilesNamedIn(profiles, 'Der Doku-Agent schreibt').map(idOf)).toEqual(['docs'])
+    expect(profilesNamedIn(profiles, 'Die Doku-Agenten schreiben')).toEqual([])
+    expect(profilesNamedIn(profiles, 'Eine Doku-Agent-Vorlage nutzen')).toEqual([])
   })
 })
 

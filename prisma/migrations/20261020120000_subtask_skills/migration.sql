@@ -1,0 +1,1 @@
+ALTER TABLE "Subtask" ADD COLUMN "skills" JSONB NOT NULL DEFAULT '[]';

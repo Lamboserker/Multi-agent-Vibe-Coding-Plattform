@@ -80,13 +80,24 @@ export const AGENT_TEMPLATES: Array<AgentProfileInput & { id: string }> = [
   },
 ]
 
+/** Planner categories (PLAN_SCHEMA) mapped to agent keywords; an alias hit counts as a category hit. */
+export const CATEGORY_ALIASES: Record<string, string[]> = {
+  'react-ui': ['frontend', 'ui'], styling: ['frontend', 'ui'], 'frontend-logic': ['frontend', 'ui'],
+  'api-endpoint': ['backend'], 'backend-service': ['backend'], 'database-schema': ['backend'], 'database-migration': ['backend'],
+  tests: ['test'], documentation: ['docs'], refactor: ['refactoring'],
+}
+
 const ESCALATION = ['premium', 'local', 'none']
+
+/** Score of a category (or alias) hit; keyword sums stay below it. */
+const CATEGORY_SCORE = 10
 
 /** Whether a profile handles a subtask: category or keyword found in title, description or file paths. */
 export function profileMatches(profile: Pick<AgentProfile, 'categories'>, subtask: { category: string; title: string; goal: string; files: string[] }) {
   const keywords = (profile.categories as string[]).map((entry) => entry.toLowerCase()).filter(Boolean)
   if (!keywords.length) return 0
-  if (keywords.includes(subtask.category.toLowerCase())) return 3
+  const category = subtask.category.toLowerCase()
+  if (keywords.includes(category) || (CATEGORY_ALIASES[category] ?? []).some((alias) => keywords.includes(alias))) return CATEGORY_SCORE
   const text = `${subtask.title}\n${subtask.goal}`.toLowerCase()
   const words = new Set(text.split(/[^\p{L}\p{N}.]+/u).filter(Boolean))
   const files = subtask.files.join('\n').toLowerCase()
@@ -96,7 +107,69 @@ export function profileMatches(profile: Pick<AgentProfile, 'categories'>, subtas
     else if (keyword.length > 3 && text.includes(keyword)) score += 1
     if (files.includes(keyword)) score += 1
   }
-  return score
+  // keyword hits never outrank a category hit
+  return Math.min(score, CATEGORY_SCORE - 1)
+}
+
+type ProfileList = Array<Pick<AgentProfile, 'id' | 'name' | 'enabled' | 'role' | 'projectId' | 'priority' | 'categories'>>
+
+const coders = <T extends ProfileList[number]>(profiles: T[]) => profiles.filter((profile) => profile.enabled && profile.role === 'coder')
+
+/**
+ * Best agent for a subtask, compared in order: category hit, project agent before global one, match score,
+ * priority. A category hit always wins, even over a project agent or a high priority with keyword hits only.
+ */
+export function bestProfile<T extends ProfileList[number]>(profiles: T[], subtask: { category: string; title: string; goal: string; files: string[] }): T | undefined {
+  let best: { profile: T; rank: number[] } | undefined
+  for (const profile of coders(profiles)) {
+    const score = profileMatches(profile, subtask)
+    if (score <= 0) continue
+    const rank = [score >= CATEGORY_SCORE ? 1 : 0, profile.projectId ? 1 : 0, score, profile.priority]
+    if (!best || outranks(rank, best.rank)) best = { profile, rank }
+  }
+  return best?.profile
+}
+
+/** Lexicographic comparison; equal ranks keep the earlier profile. */
+function outranks(rank: number[], other: number[]) {
+  const index = rank.findIndex((value, position) => value !== other[position])
+  return index >= 0 && rank[index]! > other[index]!
+}
+
+/** Agent with exactly this name (trimmed, case-insensitive); a project agent wins over a global one. */
+export function profileByName<T extends ProfileList[number]>(profiles: T[], name: string): T | undefined {
+  const wanted = name.trim().toLowerCase()
+  if (!wanted) return undefined
+  const named = coders(profiles).filter((profile) => profile.name.trim().toLowerCase() === wanted)
+  return named.find((profile) => profile.projectId) ?? named[0]
+}
+
+/** Agents whose name occurs in the text as a whole word (hyphens belong to the word); one per distinct name. */
+export function profilesNamedIn<T extends ProfileList[number]>(profiles: T[], text: string): T[] {
+  const found = new Map<string, T>()
+  for (const profile of coders(profiles)) {
+    const name = profile.name.trim()
+    if (!name) continue
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (!new RegExp(`(?<![\\p{L}\\p{N}-])${escaped}(?![\\p{L}\\p{N}-])`, 'iu').test(text)) continue
+    const key = name.toLowerCase()
+    const known = found.get(key)
+    if (!known || (profile.projectId && !known.projectId)) found.set(key, profile)
+  }
+  return [...found.values()]
+}
+
+/** Agent per planned task: planner's choice, then the single agent named in the request (one-task plans), then keyword match. */
+export function assignAgents<T extends ProfileList[number]>(
+  profiles: T[],
+  tasks: Array<{ agent: string; category: string; title: string; description: string; relevantFiles: string[]; newFiles: string[] }>,
+  userPrompt: string,
+): Array<T | undefined> {
+  const named = tasks.length === 1 ? profilesNamedIn(profiles, userPrompt) : []
+  return tasks.map((task) =>
+    profileByName(profiles, task.agent)
+    ?? (named.length === 1 ? named[0] : undefined)
+    ?? bestProfile(profiles, { category: task.category, title: task.title, goal: task.description, files: [...task.relevantFiles, ...task.newFiles] }))
 }
 
 @Injectable()
@@ -188,17 +261,9 @@ export class AgentProfilesService {
     return { ok: true }
   }
 
-  /** Best agent for a subtask: project agents before global ones, then match score, then priority. */
+  /** Best agent for a subtask (ranking in `bestProfile`). */
   async match(projectId: string, subtask: { category: string; title: string; goal: string; files: string[] }) {
-    const profiles = (await this.list(projectId)).filter((profile) => profile.enabled && profile.role === 'coder')
-    let best: { profile: AgentProfile; score: number } | undefined
-    for (const profile of profiles) {
-      const score = profileMatches(profile, subtask)
-      if (score <= 0) continue
-      const rank = score * 100 + profile.priority + (profile.projectId ? 1000 : 0)
-      if (!best || rank > best.score) best = { profile, score: rank }
-    }
-    return best?.profile
+    return bestProfile(await this.list(projectId), subtask)
   }
 
   toAssignment(profile: AgentProfile): AgentAssignment {

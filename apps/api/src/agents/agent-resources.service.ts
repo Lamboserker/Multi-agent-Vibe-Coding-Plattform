@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common'
-import type { AgentTool } from '@multi-ai-coder/engine'
+import type { AgentTool, SkillOffer } from '@multi-ai-coder/engine'
 import { McpService } from '../mcp/mcp.service.js'
 import { PluginsService } from '../plugins/plugins.service.js'
 import { SkillsService, type AgentRole } from '../skills/skills.service.js'
-import { skillRelevance } from '../skills/skill-format.js'
+import { namesSkill, skillRelevance } from '../skills/skill-format.js'
 
 /** File tools every local agent has (see runLocalAgent). */
 const BUILTIN_AGENT_TOOLS = ['read_file', 'list_files', 'search_code', 'write_file', 'edit_file', 'finish']
@@ -31,16 +31,18 @@ export class AgentResourcesService {
   ) {}
 
   /** For a tool-calling or structured local agent working on one task. */
-  async forAgent(role: AgentRole, input: { projectId?: string; goal: string; cwd: string; supportsTools: boolean; profile?: { skills: string[]; mcpServers: string[]; pluginTools: boolean } }): Promise<AgentResources> {
+  async forAgent(role: AgentRole, input: { projectId?: string; goal: string; cwd: string; supportsTools: boolean; pinned?: string[]; profile?: { skills: string[]; mcpServers: string[]; pluginTools: boolean } }): Promise<AgentResources> {
     const sources: string[] = []
     const only = input.profile?.skills.length ? input.profile.skills : undefined
     // 6500: a core skill plus one framework recipe (e.g. ui-design + ui-bootstrap) fit without load_skill
-    const skillContext = await this.skills.promptContext(role, input.projectId, input.goal, { budgetChars: input.supportsTools ? 6500 : 8000, canLoad: input.supportsTools, only })
+    const skillContext = await this.skills.promptContext(role, input.projectId, input.goal, { budgetChars: input.supportsTools ? 6500 : 8000, canLoad: input.supportsTools, only, pinned: input.pinned })
     const requiredTools = skillContext.requiresSkillLoad ? ['load_skill'] : []
-    if (skillContext.inlined.length || skillContext.indexed.length) sources.push(`Skills: ${[...skillContext.inlined, ...skillContext.indexed].slice(0, 6).join(', ')}`)
+    // what the agent was shown (profile skills plus pinned ones): load_skill must find exactly these
+    const presented = [...skillContext.inlined, ...skillContext.indexed]
+    if (presented.length) sources.push(`Skills: ${presented.slice(0, 6).join(', ')}`)
     if (!input.supportsTools) return { tools: [], instructions: skillContext.text || undefined, sources, requiredTools }
     const [skillTools, mcpTools, pluginTools] = await Promise.all([
-      skillContext.indexed.length || skillContext.inlined.length ? this.skills.agentTools(role, input.projectId, input.cwd, only) : Promise.resolve([]),
+      presented.length ? this.skills.agentTools(role, input.projectId, input.cwd, presented) : Promise.resolve([]),
       this.mcp.agentTools(role, input.goal, input.profile?.mcpServers ?? ['*']).catch((error: unknown) => {
         this.logger.warn(`MCP tools unavailable: ${error instanceof Error ? error.message : String(error)}`)
         return [] as AgentTool[]
@@ -95,7 +97,17 @@ export class AgentResourcesService {
   }
 
   /** Text for a premium prompt (planning, chat): skills only; the CLI orchestrators bring their own tools. */
-  async promptContext(role: AgentRole, projectId: string | undefined, goal: string) {
-    return this.skills.promptContext(role, projectId, goal, { budgetChars: 8000, canLoad: false })
+  async promptContext(role: AgentRole, projectId: string | undefined, goal: string, exclude?: string[]) {
+    return this.skills.promptContext(role, projectId, goal, { budgetChars: 8000, canLoad: false, exclude })
+  }
+
+  /** Active skills offered to the planner, which attaches them to tasks; named skills are flagged as requested. */
+  async catalog(projectId: string | undefined, goal: string, limit = 40): Promise<SkillOffer[]> {
+    // Only skills that reach a coder agent (like forRole: '*' or 'coder'; empty means none); the planner assigns tasks to coders.
+    const skills = (await this.skills.list(projectId)).filter((skill) => !skill.error && skill.enabled && (skill.agents.includes('*') || skill.agents.includes('coder')))
+    return skills
+      .map((skill) => ({ name: skill.name, description: skill.description, requested: namesSkill(skill.name, goal) }))
+      .sort((a, b) => Number(b.requested) - Number(a.requested))
+      .slice(0, limit)
   }
 }

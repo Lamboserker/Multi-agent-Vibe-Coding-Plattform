@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MIGRATIONS_DIR, useTempDatabase } from '../test-db.js'
-import { parseSkill, renderSkill, skillRelevance } from './skill-format.js'
+import { namesSkill, parseSkill, renderSkill, skillRelevance } from './skill-format.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const db = useTempDatabase('mac-skills-')
@@ -60,6 +60,36 @@ describe('SKILL.md format', () => {
     expect(skillRelevance(meta, 'Fix the tests for login')).toBe(1)
     expect(skillRelevance(meta, 'Refactor the router')).toBe(0)
   })
+
+  it('ranks a skill named in the request as requested', () => {
+    const meta = { name: 'projekt-doku', description: '', triggers: [] as string[] }
+    expect(skillRelevance(meta, 'Nutze den Skill "projekt-doku" für die Doku')).toBeGreaterThanOrEqual(10)
+    expect(skillRelevance(meta, 'Schreib die Doku zum Projekt')).toBeLessThan(10)
+    expect(skillRelevance(meta, 'mit dem projekt-doku-Skill')).toBeGreaterThanOrEqual(10)
+  })
+
+  it('namesSkill recognises explicit mentions only', () => {
+    const named: Array<[string, string]> = [
+      ['projekt-doku', 'Nutze den Skill "projekt-doku"'],
+      ['projekt-doku', 'mit dem projekt-doku-Skill dokumentieren'],
+      ['projekt-doku', 'siehe projekt-doku.'],
+      ['projekt-doku', 'Projekt-Doku anwenden'],
+      ['deploy', 'Nutze den Skill deploy'],
+      ['deploy', 'run `deploy` now'],
+      ['deploy', '/deploy bitte'],
+      ['deploy', 'mit dem deploy-Skill'],
+      ['changelog', 'nutze "changelog"'],
+    ]
+    for (const [name, goal] of named) expect(namesSkill(name, goal), `${name} in "${goal}"`).toBe(true)
+    const notNamed: Array<[string, string]> = [
+      ['changelog', 'Fix the changelog link'],
+      ['projekt-doku', 'Schreib die Doku zum Projekt'],
+      ['ui-design', 'ui-design-system anlegen'],
+      ['deploy', 'redeploy the app'],
+      ['test', 'add tests'],
+    ]
+    for (const [name, goal] of notNamed) expect(namesSkill(name, goal), `${name} in "${goal}"`).toBe(false)
+  })
 })
 
 describe('SkillsService', () => {
@@ -109,6 +139,15 @@ describe('SkillsService', () => {
     await expect(tools.find((tool) => tool.name === 'read_skill_file')!.execute({ skill: 'deploy', path: '../../.git/config' })).rejects.toThrow()
     // scripts are not offered before approval
     expect(tools.some((tool) => tool.name === 'run_skill_script')).toBe(false)
+  })
+
+  it('leaves excluded skills out of the context entirely (neither inlined nor indexed)', async () => {
+    const goal = 'Add a vitest test for the login endpoint'
+    const context = await service.promptContext('coder', projectId, goal, { canLoad: true, exclude: ['writing-tests'] })
+    expect(context.inlined).not.toContain('writing-tests')
+    expect(context.indexed).not.toContain('writing-tests')
+    expect(context.text).not.toContain('writing-tests')
+    expect(context.text).not.toContain('### Skill: writing-tests')
   })
 
   it('respects enable state and role assignment', async () => {
@@ -184,11 +223,83 @@ describe('SkillsService', () => {
     expect(await resources.testSkill(skill.key, projectId)).toMatchObject({ ok: false, selection: 'offered', score: 0, missingResources: ['gone.md'], missingTools: ['web_browser'], unknownActions: ['missing.mjs'] })
   })
 
+  it('offers the skill catalog to the planner, named skills first, without disabled or broken ones', async () => {
+    const resources = new AgentResourcesService(service, {} as never, {} as never)
+    const catalog = await resources.catalog(projectId, 'Nutze den Skill "deploy" für das Rollout')
+    expect(catalog[0]).toMatchObject({ name: 'deploy', requested: true })
+    expect(catalog.filter((offer) => offer.requested).map((offer) => offer.name)).toEqual(['deploy'])
+    expect((await resources.catalog(projectId, 'Fix the changelog link')).find((offer) => offer.name === 'changelog')!.requested).toBe(false)
+    expect(catalog.map((offer) => offer.name)).not.toContain('broken')
+    await service.updateState('builtin:code-review', { enabled: false })
+    expect((await resources.catalog(projectId, 'x')).map((offer) => offer.name)).not.toContain('code-review')
+    await service.updateState('builtin:code-review', { enabled: true })
+    // a skill restricted to the chat role never reaches a coder, so it must not be offered for pinning
+    await service.updateState('builtin:code-review', { agents: ['chat'] })
+    expect((await resources.catalog(projectId, 'x')).map((offer) => offer.name)).not.toContain('code-review')
+    await service.updateState('builtin:code-review', { agents: ['*'] })
+    expect((await resources.catalog(projectId, 'x')).map((offer) => offer.name)).toContain('code-review')
+    expect((await resources.catalog(projectId, 'x', 2))).toHaveLength(2)
+  })
+
   it('imports a skill folder into the user skills', async () => {
     const source = mkdtempSync(path.join(os.tmpdir(), 'mac-skill-import-'))
     writeFileSync(path.join(source, 'SKILL.md'), '---\nname: imported-skill\ndescription: Imported.\n---\nBody\n')
     expect((await service.importFolder(source)).key).toBe('user:imported-skill')
     await expect(service.importFolder(source)).rejects.toThrow(/exists/)
+  })
+})
+
+describe('pinned skills (planner choice or named in the task)', () => {
+  const docGoal = 'Dokumentiere die neue Login-Seite'
+  beforeAll(async () => {
+    await service.create({ scope: 'user', meta: { name: 'projekt-doku', description: 'Project documentation for AI handoffs.', triggers: [] }, body: '# Projekt-Doku\nUpdate docs/ai/CONTEXT.md after every task.' })
+    await service.create({ scope: 'user', meta: { name: 'huge-guide', description: 'A very long guide.', triggers: [] }, body: `# Huge guide\n${'Follow the long rules. '.repeat(400)}` })
+  })
+
+  it('reach a doc agent outside its profile skills, pinned first and inline', async () => {
+    const context = await service.promptContext('coder', projectId, docGoal, { canLoad: true, budgetChars: 6500, only: ['changelog'], pinned: ['projekt-doku'] })
+    expect(context.inlined[0]).toBe('projekt-doku')
+    expect(context.text).toContain('Update docs/ai/CONTEXT.md')
+    expect([...context.inlined, ...context.indexed]).toEqual(expect.arrayContaining(['projekt-doku', 'changelog']))
+    // only still restricts everything that is not pinned
+    expect([...context.inlined, ...context.indexed]).not.toContain('writing-tests')
+    expect(context.requiresSkillLoad).toBe(false)
+  })
+
+  it('go to the index with load_skill required when they exceed the budget', async () => {
+    const context = await service.promptContext('coder', projectId, docGoal, { canLoad: true, budgetChars: 6500, only: ['changelog'], pinned: ['huge-guide'] })
+    expect(context.inlined).not.toContain('huge-guide')
+    expect(context.indexed).toContain('huge-guide')
+    expect(context.requiresSkillLoad).toBe(true)
+  })
+
+  it('stay inline beyond the budget when the agent cannot load skills (structured or premium)', async () => {
+    const context = await service.promptContext('coder', projectId, docGoal, { canLoad: false, budgetChars: 8000, only: ['changelog'], pinned: ['huge-guide'] })
+    expect(context.inlined[0]).toBe('huge-guide')
+    expect(context.text).toContain('Follow the long rules.')
+    expect(context.indexed).toEqual([])
+    expect(context.requiresSkillLoad).toBe(false)
+  })
+
+  it('treat a skill named in the task as pinned without an explicit pin', async () => {
+    const context = await service.promptContext('coder', projectId, 'Nutze den projekt-doku Skill für die Login-Seite', { canLoad: true, budgetChars: 6500, only: ['changelog'] })
+    expect(context.inlined[0]).toBe('projekt-doku')
+  })
+
+  it('leave the profile filter exclusive without pins', async () => {
+    const context = await service.promptContext('coder', projectId, docGoal, { canLoad: true, budgetChars: 6500, only: ['changelog'] })
+    expect([...context.inlined, ...context.indexed]).toEqual(['changelog'])
+  })
+
+  it('are loadable by the agent: load_skill offers exactly the presented skills', async () => {
+    const resources = new AgentResourcesService(service, { agentTools: async () => [] } as never, { agentTools: async () => [] } as never)
+    const result = await resources.forAgent('coder', { projectId, goal: docGoal, cwd: repo, supportsTools: true, pinned: ['huge-guide', 'projekt-doku'], profile: { skills: ['changelog'], mcpServers: [], pluginTools: false } })
+    expect(result.requiredTools).toEqual(['load_skill'])
+    expect(result.instructions).toContain('Update docs/ai/CONTEXT.md')
+    const load = result.tools.find((tool) => tool.name === 'load_skill')!
+    expect(await load.execute({ name: 'huge-guide' })).toContain('Follow the long rules.')
+    expect(await load.execute({ name: 'changelog' })).toBeTruthy()
+    await expect(load.execute({ name: 'writing-tests' })).rejects.toThrow(/Unknown skill/)
   })
 })
 

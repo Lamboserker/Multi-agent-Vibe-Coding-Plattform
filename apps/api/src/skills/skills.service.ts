@@ -9,7 +9,7 @@ import { PrismaService } from '../common/prisma.service.js'
 import { asJson } from '../common/json.js'
 import { EventBusService } from '../runtime/event-bus.service.js'
 import { runtimeConfig } from '../runtime/runtime-config.js'
-import { parseSkill, renderSkill, SKILL_NAME, SkillFormatError, skillRelevance, type SkillFrontMatter } from './skill-format.js'
+import { namesSkill, parseSkill, renderSkill, SKILL_NAME, SkillFormatError, skillRelevance, type SkillFrontMatter } from './skill-format.js'
 
 export type SkillSource = 'builtin' | 'user' | 'project'
 /** Roles an agent can have; skills, MCP servers and plugin tools are assigned to roles. */
@@ -332,11 +332,19 @@ export class SkillsService {
   // Progressive context for agents
   // ---------------------------------------------------------------------------
 
-  /** Enabled skills for a role, the ones relevant for the goal first. */
-  async forRole(role: AgentRole, projectId: string | undefined, goal: string, only?: string[]) {
-    const skills = (await this.list(projectId)).filter((skill) => !skill.error && skill.enabled && (skill.agents.includes('*') || skill.agents.includes(role)) && (!only?.length || only.includes(skill.name)))
+  /**
+   * Enabled skills for a role, the ones relevant for the goal first. `only` restricts the automatic selection;
+   * pinned skills (planner choice or named in the goal) bypass it and rank first.
+   */
+  async forRole(role: AgentRole, projectId: string | undefined, goal: string, only?: string[], pinned?: string[]) {
+    const isPinned = (name: string) => Boolean(pinned?.includes(name) || (goal.trim() && namesSkill(name, goal)))
+    const skills = (await this.list(projectId)).filter((skill) => !skill.error && skill.enabled && (skill.agents.includes('*') || skill.agents.includes(role)) && (!only?.length || only.includes(skill.name) || isPinned(skill.name)))
     const scored = await Promise.all(
-      skills.map(async (skill) => ({ skill, score: skillRelevance({ name: skill.name, description: skill.description, triggers: skill.triggers }, goal) })),
+      skills.map(async (skill) => {
+        const score = skillRelevance({ name: skill.name, description: skill.description, triggers: skill.triggers }, goal)
+        const pinnedSkill = isPinned(skill.name)
+        return { skill, pinned: pinnedSkill, score: pinnedSkill ? Math.max(score, 100) : score }
+      }),
     )
     return scored.sort((a, b) => b.score - a.score)
   }
@@ -345,14 +353,15 @@ export class SkillsService {
    * Text for a prompt: full instructions of the skills that match the goal (within the budget) and a
    * one-line index of the others (the agent can load them with load_skill, if it has tools).
    */
-  async promptContext(role: AgentRole, projectId: string | undefined, goal: string, options: { budgetChars?: number; canLoad: boolean; only?: string[] }) {
-    const ranked = await this.forRole(role, projectId, goal, options.only)
+  async promptContext(role: AgentRole, projectId: string | undefined, goal: string, options: { budgetChars?: number; canLoad: boolean; only?: string[]; pinned?: string[]; exclude?: string[] }) {
+    const ranked = (await this.forRole(role, projectId, goal, options.only, options.pinned)).filter(({ skill }) => !options.exclude?.includes(skill.name))
     if (!ranked.length) return { text: '', inlined: [] as string[], indexed: [] as string[], requiresSkillLoad: false }
     let budget = options.budgetChars ?? 6000
     const inlined: string[] = []
     const sections: string[] = []
-    for (const { skill, score } of ranked) {
-      if (score <= 0 || skill.bodyChars > budget) continue
+    for (const { skill, score, pinned } of ranked) {
+      // without load_skill a pinned skill can only reach the agent inline: it ignores the budget
+      if (score <= 0 || (skill.bodyChars > budget && (options.canLoad || !pinned))) continue
       const { body } = parseSkill(await fs.readFile(path.join(skill.dir, 'SKILL.md'), 'utf8'))
       sections.push(`### Skill: ${skill.name}\n${body}${skillRequirements(skill)}`)
       inlined.push(skill.name)
@@ -362,7 +371,7 @@ export class SkillsService {
     const lines: string[] = []
     if (sections.length) lines.push('## Relevant skills (follow these instructions)', ...sections)
     if (others.length && options.canLoad) lines.push('## Other available skills (call load_skill with the name when one applies)', ...others.slice(0, 40).map((skill) => `- ${skill.name}: ${skill.description}`))
-    const requiresSkillLoad = ranked.some(({ skill, score }) => score > 0 && !inlined.includes(skill.name))
+    const requiresSkillLoad = options.canLoad && ranked.some(({ skill, score }) => score > 0 && !inlined.includes(skill.name))
     return { text: lines.join('\n\n'), inlined, indexed: options.canLoad ? others.map((skill) => skill.name) : [], requiresSkillLoad }
   }
 

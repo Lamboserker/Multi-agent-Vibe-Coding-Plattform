@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePlan, extractJson, normalizeReview } from '../orchestrator/schemas.js'
+import { normalizePlan, extractJson, normalizeReview, PLAN_SCHEMA } from '../orchestrator/schemas.js'
 import { analyzeDag, findCycle, transitiveDependents } from './dag.js'
 import type { RepoIndex } from '../index/repo-index.js'
 import { categorize, deterministicPlan, FILE_SCOPED_CRITERION, mentionedPaths } from './fallback-planner.js'
@@ -71,6 +71,24 @@ describe('plan normalization', () => {
     expect(plan.warnings.some((warning) => warning.includes('unknown dependency'))).toBe(true)
   })
 
+  it('keeps every task property required and strict, including agent and skills', () => {
+    const items = PLAN_SCHEMA.properties.tasks.items as { properties: Record<string, unknown>; required: string[]; additionalProperties: boolean }
+    expect(new Set(Object.keys(items.properties))).toEqual(new Set(items.required))
+    expect(items.additionalProperties).toBe(false)
+    expect(items.required).toEqual(expect.arrayContaining(['agent', 'skills']))
+  })
+
+  it('normalizes agent and skills of a task, defaulting to empty', () => {
+    const base = { title: 'T', description: 'd', category: 'general', complexity: 2, risk: 1, relevantFiles: [], newFiles: [], dependsOn: [], capabilities: [], expectedInputTokens: 0, testStrategy: '', acceptanceCriteria: [], suggestedExecutor: 'local', rationale: '' }
+    const skills = ['a', '', '  x ', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
+    const plan = normalizePlan({ summary: 's', tasks: [{ ...base, id: 'a', agent: '  frontend-agent  ', skills }, { ...base, id: 'b' }] })
+    expect(plan.tasks[0]!.agent).toBe('frontend-agent')
+    expect(plan.tasks[0]!.skills).toHaveLength(8)
+    expect(plan.tasks[0]!.skills).toEqual(['a', 'x', 'c', 'd', 'e', 'f', 'g', 'h'])
+    expect(plan.tasks[1]!.agent).toBe('')
+    expect(plan.tasks[1]!.skills).toEqual([])
+  })
+
   it('rejects plans without tasks', () => {
     expect(() => normalizePlan({ summary: '', tasks: [] })).toThrow(/no usable tasks/)
   })
@@ -110,6 +128,8 @@ describe('fallback plan scope', () => {
     const task = deterministicPlan(goal, index).tasks[0]!
     expect(task.complexity).toBeGreaterThanOrEqual(4)
     expect(task.suggestedExecutor).toBe('premium')
+    expect(task.agent).toBe('')
+    expect(task.skills).toEqual([])
   })
 
   it('splits a project-wide conversion into setup + one precise local task per file', () => {

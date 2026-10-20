@@ -290,6 +290,8 @@ model Subtask {
   manualModel         String?
   /// Agent profile (agent manager) assigned automatically at planning or chosen by the user.
   agentId             String?
+  /// Skills pinned at planning (planner choice, named in the prompt); always given to the executing agent.
+  skills              Json          @default("[]")
   /// Fast-path tool (deterministic, no model call) tried before the agents.
   fastPath            Json?
   worktreePath        String?
