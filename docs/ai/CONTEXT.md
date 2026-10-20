@@ -6,12 +6,12 @@ Premium-Orchestrator (Codex / Claude Code) plant und kleine lokale Modelle (Olla
 **Stand:** 2026-10-20
 
 ## Aktiver Task
-keiner – Masterplan Orchestrierung erledigt. Nächster Kandidat: TASK-007 – Token-meta bei Rückfragen –
-`docs/ai/tasks/TASK-007-rueckfrage-token-meta.md`
+keiner. Nächster Kandidat: TASK-009 – Test für den Chat-Antwortweg – `docs/ai/tasks/TASK-009-test-chat-antwortweg.md`
 
 ## Nächste Schritte
-1. Nutzer wählt den nächsten Task (Vorschlag: TASK-007, dann TASK-009, TASK-008) und startet ihn mit `/weiter TASK-00N`.
-2. Alles committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`. Commits nur auf Nachfrage.
+1. Nutzer wählt den nächsten Task (Vorschlag: TASK-009, dann TASK-008, TASK-010) und startet ihn mit `/weiter TASK-0NN`.
+2. Alles committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
+   + Doku. Commits nur auf Nachfrage.
 3. Optionale Idee ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern, um die Herkunft einer Zuweisung
    zu belegen (siehe `tasks/done/TASK-006-*.md`, Übergabe).
 
@@ -41,6 +41,8 @@ keiner – Masterplan Orchestrierung erledigt. Nächster Kandidat: TASK-007 – 
   einzeln nachprüfen, bevor man Rot dem Diff zuschreibt.
 - Rückfragen: `needs_clarification` → Task `currentStep: 'plan_clarification'`, Chat `plan_questions`, Renderer-State
   `plan_questions`; Antworten werden per `clarificationAnswer()` samt Fragen an `userPrompt` angehängt; `startLocked` sperrt.
+- Verworfene Premium-Ausgaben: Normalisierung in `normalizeWithMeta(call.meta, …)` kapseln, Aufrufer buchen
+  `error.details.meta` (Planung erledigt in TASK-007; Review/Execute offen in TASK-010).
 - Vor Live-Tests prüfen, ob der aktuelle Code läuft: `pnpm dev` bündelt das Backend nur beim Start (Lesson 14).
 - Dev-Daten liegen in `%APPDATA%\Multi-AI Coder Dev` (DB `multi-ai-coder.db`, User-Skills unter `skills/`).
 
@@ -50,7 +52,7 @@ keiner – Masterplan Orchestrierung erledigt. Nächster Kandidat: TASK-007 – 
 - ADR-003 Feine Zerlegung (1 Task ≈ 1 Datei), maxTasks 12
 
 ## Offene Tasks
-- TASK-007 Token-meta bei Rückfrage-Aufrufen erhalten (engine-Adapter + `recordPlanCall`)
 - TASK-008 Mehrzeiliges Antwortfeld für Rückfragen (`PromptDialog`)
 - TASK-009 Test für den Chat-Antwortweg (`sessions.service.ts:264`)
-- TASK-001 … TASK-006 in `tasks/done/`
+- TASK-010 Token-meta bei verworfenen Review-/Execute-Ergebnissen (`engine/execution.ts`, `reviewResult`)
+- TASK-001 … TASK-007 in `tasks/done/`
