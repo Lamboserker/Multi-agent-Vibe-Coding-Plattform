@@ -11,14 +11,14 @@ TASK-004 – Feinere Zerlegung und maxTasks 12 – `docs/ai/tasks/TASK-004-feine
 ## Nächste Schritte
 1. TASK-004 umsetzen (feine Zerlegung, 1 Task ≈ 1 Datei, maxTasks 12; ADR-003). TASK-005 (Rückfragen) ist unabhängig.
 2. TASK-006 Gesamtverifikation nach 1–5 (Live-Test nur mit Freigabe); offene Punkte aus der Übergabe von TASK-003 prüfen.
-3. TASK-001–003 sind uncommittet (inkl. Migration `20261020120000_subtask_skills`); Commit nur auf Nachfrage.
+3. TASK-001–003 committet als `61ba058` (nicht gepusht). Commits nur auf Nachfrage.
 
 ## Phasen (Masterplan `docs/ai/plans/2026-10-20-orchestrierung.md`)
 | Phase | Task | Status |
 |---|---|---|
-| 1 | TASK-001 Planner kennt Agenten und Skills | done (2026-10-20, nicht committet) |
-| 2 | TASK-002 Agenten-Zuweisung | done (2026-10-20, nicht committet) |
-| 3 | TASK-003 Skills erreichen den Agenten | done (2026-10-20, nicht committet) |
+| 1 | TASK-001 Planner kennt Agenten und Skills | done (2026-10-20, `61ba058`) |
+| 2 | TASK-002 Agenten-Zuweisung | done (2026-10-20, `61ba058`) |
+| 3 | TASK-003 Skills erreichen den Agenten | done (2026-10-20, `61ba058`) |
 | 4 | TASK-004 Feine Zerlegung, maxTasks 12 | aktiv |
 | 5 | TASK-005 Leerer Plan → Rückfragen | offen |
 | 6 | TASK-006 Gesamtverifikation | offen (nach 1–5) |

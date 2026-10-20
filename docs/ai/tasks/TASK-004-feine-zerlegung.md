@@ -44,9 +44,8 @@ Stand 2026-10-20: noch nicht begonnen (Status `offen`). Voraussetzung TASK-001 i
 Zeilenbezüge geprüft am 2026-10-20: `prompts.ts:9` enthält noch „Minimize time to a validated change …", `# Planning rules`
 steht jetzt bei `prompts.ts:70` (durch TASK-001 verschoben; die Lokal-Task-Regeln liegen entsprechend weiter unten),
 `settings.service.ts:87` `maxTasks: 8`.
-Arbeitskopie: TASK-001–003 uncommittet (Dateiliste: Übergaben in `tasks/done/TASK-003-*.md` plus
-`prisma/schema.prisma`, `prisma/migrations/20261020120000_subtask_skills/`, `packages/engine/src/engine/execution{,.test}.ts`).
-Baseline: engine 231 grün, api 142 grün / 8 skipped, `pnpm typecheck` sauber. Andere Änderungen in `git status` → melden.
+Arbeitskopie: TASK-001–003 committet als `61ba058` (nicht gepusht); `git status` sollte sauber sein, sonst melden.
+Baseline: engine 231 grün, api 142 grün / 8 skipped, `pnpm typecheck` sauber.
 **Nächster Schritt:** Plan-Schritt 1 (`prompts.ts:9` ersetzen, Regeln in `# Planning rules`), Prompt-Tests in
 `packages/engine/src/orchestrator/prompts.test.ts` anpassen; nach Engine-Änderungen `pnpm --filter @multi-ai-coder/engine build`.
 Offene Fragen: keine.
