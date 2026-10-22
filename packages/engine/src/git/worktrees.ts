@@ -250,9 +250,12 @@ export class WorktreeManager {
     for (const relative of candidates) {
       const source = path.join(repoPath, relative)
       const target = path.join(worktreePath, relative)
-      if (existsSync(target)) continue
       if (!existsSync(path.dirname(target))) continue
+      if (existsSync(target) && !(await this.isCacheOnlyFolder(target))) continue
       try {
+        // e.g. `vite build` ran before the main checkout had dependencies and left node_modules/.vite behind;
+        // `git clean -e node_modules` keeps that folder, so without replacing it the link would never come
+        if (existsSync(target)) await fs.rm(target, { recursive: true, force: true })
         await fs.symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir')
         linked.push(relative)
       } catch {
@@ -260,6 +263,14 @@ export class WorktreeManager {
       }
     }
     return linked
+  }
+
+  /** A real (not linked) dependency folder in the worktree that holds only tool caches such as `.vite`. */
+  private async isCacheOnlyFolder(target: string): Promise<boolean> {
+    const stat = await fs.lstat(target).catch(() => undefined)
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) return false
+    const entries = await fs.readdir(target).catch(() => undefined)
+    return entries !== undefined && entries.every((name) => name.startsWith('.') && name !== '.bin' && name !== '.pnpm')
   }
 
   /** Removes dependency links first so that no recursive deletion can follow them into the real node_modules. */

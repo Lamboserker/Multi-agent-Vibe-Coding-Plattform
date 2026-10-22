@@ -45,6 +45,28 @@ describe('runFastPathTool', () => {
     expect(await fs.readFile(path.join(repo, 'src', 'use.ts'), 'utf8')).not.toContain('readFileSync')
   })
 
+  it('writes nested files and reports only the ones whose content changed', async () => {
+    const repo = await createTempRepo(FILES)
+    const tool = { kind: 'write-files' as const, files: ['design/tokens.css', 'design/DESIGN.md'], contents: [':root { --accent: #fff; }\n', '# Design\n'] }
+    const first = await runFastPathTool(repo, tool)
+    expect(first).toMatchObject({ ok: true, changed: ['design/tokens.css', 'design/DESIGN.md'] })
+    expect(await fs.readFile(path.join(repo, 'design', 'tokens.css'), 'utf8')).toBe(':root { --accent: #fff; }\n')
+    expect(await runFastPathTool(repo, tool)).toMatchObject({ ok: true, changed: [] })
+    const third = await runFastPathTool(repo, { ...tool, contents: [tool.contents[0]!, '# Design v2\n'] })
+    expect(third.changed).toEqual(['design/DESIGN.md'])
+  })
+
+  it('rejects unsafe write-files paths without writing anything', async () => {
+    const repo = await createTempRepo(FILES)
+    for (const bad of ['../x', path.resolve(repo, 'abs.txt'), 'C:/x.txt', '.git/config']) {
+      const result = await runFastPathTool(repo, { kind: 'write-files', files: ['design/ok.css', bad], contents: ['a', 'b'] })
+      expect(result.ok).toBe(false)
+      expect(result.changed).toEqual([])
+    }
+    await expect(fs.stat(path.join(repo, 'design'))).rejects.toThrow()
+    await expect(fs.stat(path.join(repo, '..', 'x'))).rejects.toThrow()
+  })
+
   it('reports a missing formatter instead of guessing (the task then falls back to an agent)', async () => {
     const repo = await createTempRepo(FILES)
     expect(await runFastPathTool(repo, { kind: 'format', files: ['src/use.ts'] })).toMatchObject({ ok: false, changed: [] })

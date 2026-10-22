@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react'
 import { ChevronsUpDown, Code, Cpu, FolderGit2, Gauge, GitBranch, GitPullRequestArrow, ListChecks, MessagesSquare, Moon, Orbit, PiggyBank, Plus, Radar, Search, Sparkles, Sun, Thermometer, TriangleAlert, X, Zap, type LucideIcon } from 'lucide-react'
 import * as actions from '../../lib/actions'
 import { useRuntimeStatus } from '../../lib/hooks'
+import { orchestratorTitle } from '../../lib/duo'
 import { tokenShare, stageInfo, type Tone } from '../../lib/leitstand'
-import { loadTone, pct, resourceMetrics, useResourceMonitor } from '../../lib/resources'
+import { liveLabel, loadTone, modelStatus, pct, resourceMetrics, unloadAllModels, unloadModel, useResourceMonitor } from '../../lib/resources'
 import { shallowEqual, useStore } from '../../lib/store/core'
 import { useAppState, useSessionState } from '../../lib/store'
 import { dialogStore, problemsStore, type Screen } from '../../lib/stores'
 import type { ApprovalMode, SessionSummary } from '../../lib/types'
 import { workflowState } from '../../lib/workflow'
-import { Spinner } from '../common'
+import { AsyncButton, Spinner } from '../common'
 import { ProjectsPanel } from '../panels/ProjectsPanel'
 import { Bar, Dot, Seg, Spark } from '../ui'
 
@@ -26,7 +27,7 @@ const fmtTokens = (value: number) => (value >= 1_000_000 ? `${(value / 1_000_000
 // ---------------------------------------------------------------------------
 
 export function Header() {
-  const { project, theme, orchestrator } = useAppState((state) => ({ project: state.project, theme: state.ui.theme, orchestrator: state.settings?.orchestrator }), shallowEqual)
+  const { project, theme, settings } = useAppState((state) => ({ project: state.project, theme: state.ui.theme, settings: state.settings }), shallowEqual)
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [hwOpen, setHwOpen] = useState(false)
   return (
@@ -67,7 +68,7 @@ export function Header() {
         <HardwareChip open={hwOpen} onToggle={() => setHwOpen((open) => !open)} />
         {hwOpen ? <HardwarePopover onClose={() => setHwOpen(false)} /> : null}
       </div>
-      <TokenMeter orchestrator={orchestrator === 'codex' ? 'Codex' : orchestrator === 'claude-code' ? 'Claude Code' : 'kein Orchestrator'} />
+      <TokenMeter settings={settings} />
       <button className="hdr-icon" title={theme === 'dark' ? 'Helles Design' : 'Dunkles Design'} aria-label="Design wechseln" onClick={() => actions.setTheme(theme === 'dark' ? 'light' : 'dark')}>
         {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
       </button>
@@ -161,9 +162,11 @@ function HardwareChip({ open, onToggle }: { open: boolean; onToggle: () => void 
   )
 }
 
-function TokenMeter({ orchestrator }: { orchestrator: string }) {
+function TokenMeter({ settings }: { settings?: Parameters<typeof orchestratorTitle>[0] }) {
   const execution = useSessionState((state) => state.execution)
   const { localPct, total } = tokenShare(execution)
+  // duo: "Claude Code + Codex" (the current run's orchestrators win over the settings)
+  const orchestrator = orchestratorTitle(settings, execution)
   return (
     <div className="token-meter" title="Token-Anteil des aktuellen Laufs: lokal vs. Premium-Orchestrator (gemessen)">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 120 }}>
@@ -189,8 +192,16 @@ function TokenMeter({ orchestrator }: { orchestrator: string }) {
 // ---------------------------------------------------------------------------
 
 export function HardwarePopover({ onClose }: { onClose: () => void }) {
-  const snapshot = useResourceMonitor(1500)
+  const snapshot = useResourceMonitor(1000)
   const selfTests = useAppState((state) => state.settings?.modelSelfTests)
+  // a clock of its own: "veraltet" must appear even when no new snapshot arrives
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const live = liveLabel(snapshot, Math.max(now, snapshot?.sampledAt ?? 0))
+  const appModels = snapshot?.models.filter((model) => model.instance === 'app') ?? []
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -209,8 +220,8 @@ export function HardwarePopover({ onClose }: { onClose: () => void }) {
             </span>
           </div>
           <span className="row faint" style={{ gap: 6, fontSize: 11 }}>
-            <Dot tone={snapshot ? 'ok' : 'faint'} pulse={Boolean(snapshot)} />
-            live · 1,5 s
+            <Dot tone={live.live ? 'ok' : snapshot ? 'tool' : 'faint'} pulse={live.live} />
+            {live.text}
           </span>
         </div>
         {!snapshot ? (
@@ -257,17 +268,28 @@ export function HardwarePopover({ onClose }: { onClose: () => void }) {
                 <span className="faint" style={{ fontSize: 11.5 }}>
                   {snapshot.slots.busyLocal} von {snapshot.slots.local} lokalen Slot{snapshot.slots.local === 1 ? '' : 's'} belegt
                 </span>
+                {appModels.length ? (
+                  <AsyncButton className="link-btn" title="Alle Modelle der App-Instanz aus dem Speicher entfernen" onClick={() => unloadAllModels(snapshot)}>
+                    Alle entladen
+                  </AsyncButton>
+                ) : null}
               </div>
               {!snapshot.ollama.reachable ? <div className="muted" style={{ fontSize: 12.5 }}>Ollama ist nicht erreichbar.</div> : !snapshot.models.length ? <div className="muted" style={{ fontSize: 12.5 }}>Kein Modell geladen. Ollama lädt Modelle beim nächsten Agentenstart.</div> : null}
               {snapshot.models.map((model) => {
                 const gpu = Math.round(model.gpuShare * 100)
                 const tps = selfTests?.[model.name]?.tokensPerSecond
+                const status = modelStatus(model)
                 return (
-                  <div key={model.name} className="hw-model">
+                  <div key={`${model.baseUrl}|${model.name}`} className="hw-model" title={model.instance === 'external' ? `Geladen in ${model.baseUrl} – nicht von Multi-AI Coder verwaltet` : undefined}>
                     <div className="row" style={{ gap: 8 }}>
                       <span className="mono truncate" style={{ fontSize: 12, flex: 1 }}>{model.name}</span>
-                      {model.agents.length ? <span className="chip mono" style={{ background: 'var(--local-soft)', color: 'var(--local)' }}>{model.agents.join(', ')}</span> : <span className="faint" style={{ fontSize: 11 }}>bereit</span>}
-                      {tps ? <span className="mono muted" style={{ fontSize: 11 }} title="aus dem Selbsttest, bei voller GPU-Nutzung">~{Math.round(tps * (0.4 + 0.6 * model.gpuShare))} Tok./s</span> : null}
+                      {status.tone === 'local' ? <span className="chip mono" style={{ background: 'var(--local-soft)', color: 'var(--local)' }}>{status.text}</span> : <span className={status.tone} style={{ fontSize: 11 }}>{status.text}</span>}
+                      {tps && model.instance === 'app' ? <span className="mono muted" style={{ fontSize: 11 }} title="aus dem Selbsttest, bei voller GPU-Nutzung">~{Math.round(tps * (0.4 + 0.6 * model.gpuShare))} Tok./s</span> : null}
+                      {model.instance === 'app' ? (
+                        <AsyncButton className="link-btn" title={model.agents.length ? 'Entladen bricht laufende Agenten nicht ab, Ollama lädt das Modell beim nächsten Aufruf neu' : 'Modell aus dem Speicher entfernen'} onClick={() => unloadModel(model.name)}>
+                          Entladen
+                        </AsyncButton>
+                      ) : null}
                     </div>
                     <div className="split-bar">
                       <div style={{ width: `${gpu}%`, background: 'var(--local)' }} />
@@ -408,7 +430,7 @@ export function Footer() {
       <button
         className="foot-btn activity-indicator"
         data-testid="workflow-entry"
-        title={['Arbeitsablauf öffnen (Strg+Umschalt+L)', ...activity.executions.map((entry) => `▶ ${entry.title} (${entry.status})`), ...activity.plans.map((entry) => `◔ Plan: ${entry.title}`)].join('\n')}
+        title={['Arbeitsablauf öffnen (Strg+Umschalt+L)', ...activity.executions.map((entry) => `▶ ${entry.title} (${entry.status})`), ...activity.plans.map((entry) => `◔ Planung/Design: ${entry.title}`)].join('\n')}
         onClick={() => void actions.openWorkflow(task ? undefined : first?.sessionId ?? undefined)}
       >
         {background ? <Dot tone="accent" pulse /> : null}{' '}

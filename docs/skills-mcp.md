@@ -2,15 +2,20 @@
 
 Stand: Phase 0.3 (E).
 
+Erweiterung 2026-10-22: Der **Integrationskatalog** in beiden Managern bietet 30 MCP-Vorlagen,
+40 zusätzliche, zunächst deaktivierte Skills und acht Workflow-Pakete. Einrichtung, Freigaben,
+Persistenz und Bildweitergabe sind in [Integrationskatalog](integrations.md) beschrieben.
+
 ## Agentenrollen
 
 Skills, MCP-Server und Plugin-Werkzeuge werden **Rollen** zugewiesen (`*` = alle):
 
 | Rolle | Wer | Was sie erhält |
 |---|---|---|
-| `planner` | Premium-Orchestrator beim Planen | passende Skills vollständig im Planungskontext (max. 8000 Zeichen) |
+| `planner` | Premium-Orchestrator beim Planen | passende Skills vollständig im Planungskontext (max. 12000 Zeichen) |
 | `coder` | lokale Agenten bei der Ausführung einer Teilaufgabe | Skills progressiv, MCP- und Plugin-Werkzeuge |
 | `chat` | Orchestrator bei „Frage“-Nachrichten | passende Skills vollständig im Kontext |
+| `designer` | Premium-Designer der Design-Phase | bekommt passende Design-Skills inline (max. 9000 Zeichen) |
 
 Die Engine kennt dafür einen generischen Haken `EngineDeps.agentResources(task)` → `{ tools, instructions }`;
 der lokale Agent bietet diese Werkzeuge neben den Datei-Werkzeugen an (`LocalAgentInput.extraTools`,
@@ -58,7 +63,8 @@ Umsetzung mit dem offiziellen SDK `@modelcontextprotocol/sdk` 1.30.1 (Client).
 * **Transporte**: stdio (lokaler Prozess, stderr ins Protokoll) und HTTP (Streamable HTTP, Fallback auf SSE).
 * **Authentifizierung**: geheime Umgebungsvariablen (stdio) und geheime Header, z. B.
   `Authorization: Bearer …` (HTTP). Werte liegen verschlüsselt im Tresor des Hauptprozesses (`mcp:<id>`); in der
-  Datenbank stehen nur ihre Namen. OAuth-Anmeldeflüsse werden noch nicht unterstützt.
+  Datenbank stehen nur ihre Namen. HTTP-Server können sich über den integrierten OAuth-Fluss anmelden;
+  dessen Tokens und Client-Zugangsdaten liegen ebenfalls im Tresor.
 * **Lazy**: Verbindung erst beim Testen oder beim ersten Werkzeugaufruf; die Werkzeugliste wird
   zwischengespeichert, sodass Agenten Definitionen ohne Verbindungsaufbau erhalten. Nach 10 min ohne Nutzung
   wird getrennt.
@@ -101,7 +107,6 @@ Plugin-Werkzeuge ohne Seiteneffekte aktiver Plugins werden Coder-Agenten ebenfal
 
 ## Offene Punkte
 
-* Premium-Orchestratoren (Claude Code / Codex) erhalten Skills als Kontext, aber noch keine MCP-Server der App
-  (`--strict-mcp-config` ohne Konfiguration). Eine generierte MCP-Konfiguration für die CLIs ist vorbereitet,
-  aber nicht umgesetzt.
-* OAuth für entfernte MCP-Server fehlt.
+* Premium-Orchestratoren nutzen zugewiesene MCP-Werkzeuge über das sitzungsbezogene SDK-Gateway.
+  Dieses gibt jetzt auch Bilder weiter; lokale Textmodelle behalten den Textpfad.
+* Anbieterabhängige OAuth-/Konto-Freigaben und kostenpflichtige Generierungen benötigen separate Live-Abnahmen.

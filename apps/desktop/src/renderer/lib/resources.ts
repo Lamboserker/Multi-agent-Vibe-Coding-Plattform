@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
-import { api, errorMessage } from './api'
+import { api, enc, errorMessage } from './api'
 import { createStore, useStore } from './store/core'
-import type { ResourceSnapshot } from './types'
+import type { ResourceModel, ResourceSnapshot } from './types'
 
 /*
- * Live resource monitor. The runtime samples only when asked, so polling runs only while at least
- * one view needs it and the window is visible; the fastest requested interval wins.
+ * Live resource monitor. Polling runs only while at least one view needs it and the window is
+ * visible (the fastest requested interval wins); while it polls, the runtime samples every second.
  */
 
 export const resourceStore = createStore<{ snapshot?: ResourceSnapshot; error?: string; loading: boolean }>({ loading: false })
@@ -55,6 +55,50 @@ export function useResourceMonitor(intervalMs = 3000, active = true) {
   return useStore(resourceStore, (state) => state.snapshot)
 }
 
+/** Takes a snapshot now (after an action), waiting for a poll that is already in flight. */
+export async function refreshResources() {
+  for (let attempt = 0; inflight && attempt < 50; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100))
+  await poll()
+}
+
+/** Unloads one model of the app's Ollama instance and refreshes the monitor. */
+export async function unloadModel(name: string) {
+  try {
+    await api.post(`/local-models/${enc(name)}/unload`)
+  } finally {
+    await refreshResources()
+  }
+}
+
+/** Unloads every model of the app's Ollama instance (models of other instances are left alone). */
+export async function unloadAllModels(snapshot: ResourceSnapshot) {
+  const names = [...new Set(snapshot.models.filter((model) => model.instance === 'app').map((model) => model.name))]
+  try {
+    await Promise.all(names.map((name) => api.post(`/local-models/${enc(name)}/unload`)))
+  } finally {
+    await refreshResources()
+  }
+}
+
+/** Samples older than this count as stale (runtime busy or unreachable). */
+export const STALE_AFTER_MS = 5000
+
+/** "live · 1,0 s" from the sampling cadence of the runtime, "veraltet" when the last sample is too old. */
+export function liveLabel(snapshot: Pick<ResourceSnapshot, 'sampledAt' | 'intervalMs'> | undefined, now = Date.now()): { text: string; live: boolean } {
+  if (!snapshot || !Number.isFinite(snapshot.sampledAt)) return { text: 'wird gemessen …', live: false }
+  if (now - snapshot.sampledAt > STALE_AFTER_MS) return { text: 'veraltet', live: false }
+  return { text: `live · ${(snapshot.intervalMs / 1000).toFixed(1).replace('.', ',')} s`, live: true }
+}
+
+const countdown = (seconds: number) => (seconds >= 60 ? `${Math.round(seconds / 60)} min` : `${seconds} s`)
+
+/** Honest status of a loaded model: working, idle until Ollama unloads it, or held by another instance. */
+export function modelStatus(model: Pick<ResourceModel, 'state' | 'agents' | 'unloadsInSec'>): { text: string; tone: 'local' | 'muted' | 'faint' } {
+  if (model.state === 'external') return { text: 'andere Ollama-Instanz', tone: 'faint' }
+  if (model.state === 'generating') return { text: `generiert · ${model.agents.join(', ')}`, tone: 'local' }
+  return { text: model.unloadsInSec === null ? 'im Leerlauf' : `im Leerlauf · entlädt in ${countdown(model.unloadsInSec)}`, tone: 'muted' }
+}
+
 export const pct = (value: number | undefined, total: number | undefined) => (value === undefined || !total ? undefined : Math.max(0, Math.min(100, Math.round((value / total) * 100))))
 
 /** Colour of a load value: amber from 85 %, red from 95 %. */
@@ -67,10 +111,12 @@ export interface ResourceMetric {
   value: string
   sub: string
   tone: string
-  bars: number[]
+  /** 0–100 per history point; null = no value measured at that point (drawn as a gap, not as 0). */
+  bars: Array<number | null>
 }
 
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1).replace('.', ',')}`
+const gbValue = (value: number) => value.toFixed(1).replace('.', ',')
 
 /** The four metrics of the monitor with their recent history (bars as 0–100). */
 export function resourceMetrics(snapshot: ResourceSnapshot): ResourceMetric[] {
@@ -79,17 +125,19 @@ export function resourceMetrics(snapshot: ResourceSnapshot): ResourceMetric[] {
   const gpuPct = gpu?.utilizationPct
   const vramPct = pct(gpu?.vramUsedMb, vramTotal)
   const ramPct = pct(ram.usedBytes, ram.totalBytes)!
-  const offload = snapshot.models.some((model) => model.gpuShare < 0.98)
+  const appModels = snapshot.models.filter((model) => model.instance !== 'external')
+  const offload = appModels.some((model) => model.gpuShare < 0.98)
+  const split = snapshot.vram && snapshot.vram.otherGb !== null ? `davon App-Modelle ${gbValue(snapshot.vram.appModelsGb)} GB · Sonstige ${gbValue(snapshot.vram.otherGb)} GB` : undefined
   return [
-    { id: 'gpu', label: 'GPU', pct: gpuPct, value: gpuPct === undefined ? 'nicht messbar' : 'Last', sub: gpu?.name.replace(/^NVIDIA (GeForce )?/, '') ?? 'keine GPU erkannt', tone: loadTone(gpuPct), bars: history.map((point) => point.gpuPct ?? 0) },
+    { id: 'gpu', label: 'GPU', pct: gpuPct, value: gpuPct === undefined ? 'nicht messbar' : 'Last', sub: gpu?.name.replace(/^NVIDIA (GeForce )?/, '') ?? 'keine GPU erkannt', tone: loadTone(gpuPct), bars: history.map((point) => point.gpuPct ?? null) },
     {
       id: 'vram',
       label: 'VRAM',
       pct: vramPct,
       value: gpu?.vramUsedMb !== undefined && vramTotal ? `${gb(gpu.vramUsedMb * 1024 ** 2)} / ${gb(vramTotal * 1024 ** 2)} GB` : 'unbekannt',
-      sub: gpu?.source === 'ollama' ? 'nur Modelle (laut Ollama)' : `${snapshot.models.length} Modell${snapshot.models.length === 1 ? '' : 'e'}`,
+      sub: split ?? (gpu?.source === 'ollama' ? 'nur Modelle (laut Ollama)' : `${snapshot.models.length} Modell${snapshot.models.length === 1 ? '' : 'e'}`),
       tone: loadTone(vramPct),
-      bars: history.map((point) => pct(point.vramUsedMb, vramTotal) ?? 0),
+      bars: history.map((point) => pct(point.vramUsedMb, vramTotal) ?? null),
     },
     { id: 'cpu', label: 'CPU', pct: Math.round(cpu.pct), value: `${cpu.logicalCores} Threads`, sub: offload ? 'inkl. Offload' : 'System', tone: loadTone(cpu.pct, 'var(--muted)'), bars: history.map((point) => point.cpuPct) },
     { id: 'ram', label: 'RAM', pct: ramPct, value: `${gb(ram.usedBytes)} / ${gb(ram.totalBytes)} GB`, sub: 'System', tone: loadTone(ramPct, 'var(--muted)'), bars: history.map((point) => pct(point.ramUsedBytes, ram.totalBytes) ?? 0) },

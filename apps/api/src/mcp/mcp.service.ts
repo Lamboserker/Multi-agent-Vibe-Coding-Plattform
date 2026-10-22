@@ -11,7 +11,7 @@ import { EventBusService } from '../runtime/event-bus.service.js'
 import { shellAvailable, shellRequest } from '../runtime/shell-bridge.js'
 import { AGENT_ROLES, type AgentRole } from '../skills/skills.service.js'
 import { McpOAuthProvider } from './mcp-oauth.js'
-import { READ_RESULT_DESCRIPTION, READ_RESULT_SCHEMA, ResultPages } from './mcp-results.js'
+import { MAX_MCP_RESULT_BYTES, richMcpContent, READ_RESULT_DESCRIPTION, READ_RESULT_SCHEMA, ResultPages } from './mcp-results.js'
 
 export type ToolPolicy = 'allow' | 'confirm' | 'off'
 
@@ -446,6 +446,10 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
+  async cancelOAuthLogin(id: string) {
+    await this.oauthProviders.get(id)?.cancel()
+  }
+
   async logoutOAuth(id: string) {
     const record = await this.record(id)
     await this.disconnect(id)
@@ -615,7 +619,7 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
    * Calls a tool. Manual calls (from the MCP manager, after the user confirmed) are allowed for
    * "allow" and "confirm" tools; agents may only call "allow" tools.
    */
-  async callTool(id: string, name: string, args: Record<string, unknown>, options: { source: 'manual' | 'agent'; signal?: AbortSignal; limit?: number } = { source: 'manual' }) {
+  async callTool(id: string, name: string, args: Record<string, unknown>, options: { source: 'manual' | 'agent'; signal?: AbortSignal; limit?: number; includeContent?: boolean } = { source: 'manual' }) {
     const record = await this.record(id)
     const tool = ((record.tools as McpToolInfo[] | null) ?? []).find((candidate) => candidate.name === name)
     if (!tool) throw new BadRequestException(`Tool "${name}" is unknown (refresh the tool list).`)
@@ -627,13 +631,13 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
     const started = Date.now()
     try {
       const result = await connection.client.callTool({ name, arguments: args }, undefined, { timeout: record.timeoutMs, signal: options.signal, resetTimeoutOnProgress: true })
-      if (Buffer.byteLength(resultText(result as never, Number.MAX_SAFE_INTEGER)) > 16_000_000) throw new Error('Tool result exceeds the 16 MB byte limit; a complete result cannot be retained.')
+      if (Buffer.byteLength(JSON.stringify(result)) > MAX_MCP_RESULT_BYTES) throw new Error('Tool result exceeds the 16 MB byte limit; a complete result cannot be retained.')
       const text = resultText(result as never, options.limit ?? (options.source === 'agent' ? AGENT_RESULT_CHARS : MANUAL_RESULT_CHARS))
       // manual calls: the UI shows a bounded preview and can save the complete text
       const fullText = options.source === 'manual' && text.endsWith('characters truncated]') ? resultText(result as never, Number.MAX_SAFE_INTEGER) : undefined
       this.log(id, result.isError ? 'warn' : 'info', `${options.source} call ${name} (${Date.now() - started} ms)${result.isError ? ' → error' : ''}`)
       this.events.publish('system', 'mcp_tool_called', { id, tool: name, source: options.source, ms: Date.now() - started, isError: Boolean(result.isError) })
-      return { isError: Boolean(result.isError), text, durationMs: Date.now() - started, content: options.source === 'manual' ? result.content : undefined, ...(fullText ? { fullText } : {}) }
+      return { isError: Boolean(result.isError), text, durationMs: Date.now() - started, content: options.source === 'manual' || options.includeContent ? result.content : undefined, structuredContent: options.includeContent ? result.structuredContent : undefined, ...(fullText ? { fullText } : {}) }
     } catch (error) {
       this.log(id, 'error', `${options.source} call ${name} failed after ${Date.now() - started} ms: ${error instanceof Error ? error.message : String(error)}`)
       throw new BadRequestException(`MCP ${record.name}/${name}: ${error instanceof Error ? error.message : String(error)}`)
@@ -659,6 +663,7 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
 
   async agentTools(role: AgentRole, goal: string, onlyServers: string[] = ['*'], resultLimit = AGENT_RESULT_CHARS): Promise<AgentTool[]> {
     if (!onlyServers.length) return []
+    const catalogNames = new Map((await this.prisma.integrationInstallation.findMany()).map((entry) => [entry.serverId, `catalog-${entry.presetId}`]))
     const servers = (await this.prisma.mcpServer.findMany({ where: { enabled: true } })).filter((server) => {
       const agents = server.agents as string[]
       return (agents.includes('*') || agents.includes(role)) && (onlyServers.includes('*') || onlyServers.includes(server.id))
@@ -685,10 +690,17 @@ export class McpService implements OnModuleInit, OnApplicationShutdown {
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_AGENT_TOOLS)
       .map(({ server, tool }) => ({
-        name: agentToolName(server.name, tool.name),
+        name: agentToolName(catalogNames.get(server.id) ?? server.name, tool.name),
         description: `[MCP ${server.name}] ${(tool.description || tool.title || tool.name).slice(0, 400)}`,
         readOnly: tool.annotations?.readOnlyHint === true,
         parameters: (compactSchema(tool.inputSchema) as Record<string, unknown>) ?? { type: 'object' },
+        executeContent: async (args, signal) => {
+          const current = await this.record(server.id)
+          const assignments = current.agents as string[]
+          if (!current.enabled || (!assignments.includes('*') && !assignments.includes(role))) throw new BadRequestException('MCP server is no longer assigned to this agent.')
+          const result = await this.callTool(server.id, tool.name, args, { source: 'agent', signal, limit: Number.MAX_SAFE_INTEGER, includeContent: true })
+          return { isError: result.isError, content: richMcpContent(result) }
+        },
         execute: async (args, signal) => {
           const current = await this.record(server.id)
           const assignments = current.agents as string[]

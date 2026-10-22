@@ -1,7 +1,7 @@
 import type { RuntimeStatus, TerminalInfo } from '../../shared/bridge'
 import { createStore } from './store/core'
 import type { PlanningProgressByTask } from './planning-progress'
-import type { Activity, ChatMessage, ExecutionRun, Project, RunEvent, SessionDetail, SessionSummary, Task, VersionedSettings } from './types'
+import type { Activity, ChatMessage, DesignMode, ExecutionRun, OrchestratorChoice, Project, RunEvent, SessionDetail, SessionSummary, Task, VersionedSettings } from './types'
 
 /*
  * State classes (see docs/state-architecture.md):
@@ -50,6 +50,10 @@ export interface ComposerDraft {
   text: string
   mode: 'task' | 'ask'
   autoRun: boolean
+  /** Design phase for a task message; unset = the runtime default (auto) and the task's own choice stay. */
+  designMode?: DesignMode
+  /** Orchestrator choice of the session (Claude, Codex or both); unset = the settings decide. Kept after sending. */
+  orchestrator?: OrchestratorChoice
 }
 
 /** Per-project work state, persisted as "workspace:<projectId>". */
@@ -108,6 +112,8 @@ export interface PendingMessage {
   sessionId?: string
   content: string
   mode: 'task' | 'ask'
+  designMode?: DesignMode
+  orchestrator?: OrchestratorChoice
   status: 'sending' | 'failed'
   error?: string
   createdAt: string

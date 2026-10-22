@@ -4,10 +4,10 @@ import { bool, oneOf, str } from '../common/validate.js'
 import { PrismaService } from '../common/prisma.service.js'
 import { RepoContextService } from '../execution/repo-context.service.js'
 import { asJson } from '../common/json.js'
-import { Prisma } from '@prisma/client'
 import { OrchestratorService } from './orchestrator.service.js'
-import { failedCallFields } from './model-call.js'
-import { SessionsService } from '../sessions/sessions.service.js'
+import { failedCallRows, modelCallRows } from './model-call.js'
+import { answerMetadata, SessionsService } from '../sessions/sessions.service.js'
+import { ORCHESTRATOR_OVERRIDES } from './orchestrator-choice.js'
 
 const IDS = ['claude-code', 'codex'] as const
 
@@ -66,8 +66,9 @@ export class OrchestratorController {
     const projectId = str(body, 'projectId', { max: 64 })
     const question = str(body, 'question', { max: 20_000 })
     const taskId = str(body, 'taskId', { optional: true, max: 64 }) || undefined
-    const adapter = await this.orchestrators.active()
-    if (!adapter) return { ok: false, answer: 'Kein Orchestrator verbunden. Bitte Claude Code oder Codex im Einrichtungsassistenten verbinden.' }
+    const override = (body as { orchestrator?: unknown } | undefined)?.orchestrator == null ? undefined : oneOf(body, 'orchestrator', ORCHESTRATOR_OVERRIDES)
+    const { adapter, notice } = await this.orchestrators.activeWithNotice(override)
+    if (!adapter) return { ok: false, answer: notice ?? 'Kein Orchestrator verbunden. Bitte Claude Code oder Codex im Einrichtungsassistenten verbinden.' }
     const project = await this.prisma.project.findUniqueOrThrow({ where: { id: projectId } })
     const { digest } = await this.repoContext.digest(project.id, project.repoPath, question, 4000)
     const history = taskId
@@ -77,22 +78,20 @@ export class OrchestratorController {
           .map((message) => ({ role: message.role as 'user' | 'assistant', content: message.content.slice(0, 2000) }))
       : []
     const sessionId = await this.sessions.sessionForMessage(projectId, taskId)
-    await this.prisma.chatMessage.create({ data: { projectId, taskId, sessionId, role: 'user', content: question, metadata: asJson({ kind: 'question' }) } })
+    await this.prisma.chatMessage.create({ data: { projectId, taskId, sessionId, role: 'user', content: question, metadata: asJson({ kind: 'question', ...(override ? { askOrchestrator: override } : {}) }) } })
     const started = Date.now()
     try {
       const { result, meta } = await adapter.chat({ question, context: digest, history }, { runId: `chat-${projectId}-${Date.now()}`, cwd: project.repoPath, timeoutMs: 5 * 60_000, effort: 'low' })
-      await this.prisma.modelCall.create({
-        data: {
-          kind: 'orchestrator', provider: adapter.id, model: meta.model ?? adapter.id, purpose: 'chat', status: 'ok', sessionId: meta.sessionId, durationMs: meta.durationMs,
-          inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, cachedInputTokens: meta.usage.cachedInputTokens, tokensMeasured: meta.usage.measured,
-          apiEquivalentUsd: meta.usage.apiEquivalentUsd === undefined ? undefined : new Prisma.Decimal(meta.usage.apiEquivalentUsd), billing: meta.usage.billing,
-        },
-      })
-      await this.prisma.chatMessage.create({ data: { projectId, taskId, sessionId, role: 'assistant', content: result.answer, metadata: asJson({ kind: 'answer', orchestrator: adapter.id }) } })
-      return { ok: true, answer: result.answer, usage: meta.usage }
+      for (const data of modelCallRows(adapter.id, meta, { kind: 'orchestrator', purpose: 'chat', status: 'ok', durationMs: meta.durationMs })) {
+        await this.prisma.modelCall.create({ data })
+      }
+      await this.prisma.chatMessage.create({ data: { projectId, taskId, sessionId, role: 'assistant', content: result.answer, metadata: asJson(answerMetadata(adapter, result, meta)) } })
+      return { ok: true, answer: result.answer, usage: meta.usage, ...(result.duo ? { duo: result.duo } : {}), ...(notice ? { notice } : {}) }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, ...failedCallFields(error, adapter.id) } })
+      for (const data of failedCallRows(adapter.id, error, { kind: 'orchestrator', purpose: 'chat', durationMs: Date.now() - started })) {
+        await this.prisma.modelCall.create({ data })
+      }
       return { ok: false, answer: `Fehler: ${message}` }
     }
   }

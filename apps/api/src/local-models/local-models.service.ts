@@ -73,6 +73,15 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
     return new OllamaClient((await this.settings.get()).ollamaBaseUrl)
   }
 
+  /** Clients of the further local Ollama instances (read-only use: the resource monitor). */
+  async extraClients(): Promise<OllamaClient[]> {
+    const settings = await this.settings.get()
+    const trim = (url: string) => url.replace(/\/+$/, '')
+    const base = trim(settings.ollamaBaseUrl)
+    const urls = [...new Set((settings.extraOllamaUrls ?? []).map(trim))].filter((url) => url !== base)
+    return urls.map((url) => new OllamaClient(url))
+  }
+
   private hardwareRefresh?: Promise<HardwareProfile>
 
   /**
@@ -329,7 +338,7 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
 
   async load(model: string) {
     const settings = await this.settings.get()
-    await (await this.client()).load(model, '15m', settings.numCtx)
+    await (await this.client()).load(model, `${settings.keepAliveMinutes}m`, settings.numCtx)
     this.invalidateInstalled()
     this.events.publish('models', 'loaded', { model }, model)
     return { ok: true }
@@ -437,6 +446,15 @@ export class LocalModelsService implements OnModuleInit, OnApplicationShutdown {
     const next = this.warmupQueue.then(() => this.prepareWarmup(models, reason))
     this.warmupQueue = next.catch(() => undefined)
     return next
+  }
+
+  /** Resolves once the background warm-up loads of these models have finished (or failed); at most `maxMs`. */
+  async loadsSettled(models: string[], maxMs = 120_000): Promise<void> {
+    const loads = models.map((model) => this.warming.get(model)).filter((load): load is Promise<void> => Boolean(load))
+    if (!loads.length) return
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([Promise.allSettled(loads), new Promise<void>((resolve) => { timer = setTimeout(resolve, maxMs) })])
+    clearTimeout(timer)
   }
 
   private async prepareWarmup(models: Array<string | null | undefined>, reason: string): Promise<string[]> {

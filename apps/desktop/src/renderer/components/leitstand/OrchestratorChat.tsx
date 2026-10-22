@@ -1,17 +1,22 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, CheckSquare, GitPullRequestArrow, Hammer, MessageCircleQuestion, RotateCcw, Sparkles, Square, X } from 'lucide-react'
+import { ArrowUp, CheckSquare, GitPullRequestArrow, Hammer, MessageCircleQuestion, Palette, RotateCcw, Sparkles, Square, Users, X } from 'lucide-react'
 import * as actions from '../../lib/actions'
-import { milestones, TONE, type AgentCard, type StageInfo } from '../../lib/leitstand'
+import { api } from '../../lib/api'
+import { composerOrchestrator, duoAnswer, duoCard, orchestratorTitle } from '../../lib/duo'
+import { useVisibleLoader } from '../../lib/hooks'
+import { DESIGN_TYPE_LABEL, milestones, TONE, type AgentCard, type StageInfo } from '../../lib/leitstand'
 import { parseUnifiedDiff } from '../../lib/diff'
 import { shallowEqual } from '../../lib/store/core'
 import { useAppState, useSessionState } from '../../lib/store'
-import type { PendingMessage } from '../../lib/stores'
-import type { ChatMessage, CostMode, ExecutionRun, ReviewSummary, RunEvent, Subtask, Task } from '../../lib/types'
+import type { ComposerDraft, PendingMessage } from '../../lib/stores'
+import type { ChatMessage, CostMode, DesignMode, ExecutionRun, OrchestratorChoice, OrchestratorOverview, ReviewSummary, RunEvent, Subtask, Task } from '../../lib/types'
+import { DESIGN_MODES, designModeOf } from '../../lib/workflow'
 import { AsyncButton, Markdown, Spinner } from '../common'
 import { PlanningProgress } from '../workflow/PlanningProgress'
+import { designAction } from '../../lib/workflow-actions'
 import { Chip, Seg } from '../ui'
 
-const EMPTY_DRAFT = { text: '', mode: 'task' as const, autoRun: false }
+const EMPTY_DRAFT: ComposerDraft = { text: '', mode: 'task', autoRun: false }
 const time = (value: string) => new Date(value).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
 
 type Entry =
@@ -20,7 +25,9 @@ type Entry =
 
 export function OrchestratorChat({ task, execution, events, subtasks, cards, stage }: { task?: Task; execution?: ExecutionRun; events: RunEvent[]; subtasks: Subtask[]; cards: AgentCard[]; stage: StageInfo }) {
   const project = useAppState((state) => state.project)
-  const { costMode, orchestrator } = useAppState((state) => ({ costMode: state.settings?.costMode, orchestrator: state.settings?.orchestrator }), shallowEqual)
+  const { costMode, orchestrator, orchestratorMode, duoLead } = useAppState((state) => ({ costMode: state.settings?.costMode, orchestrator: state.settings?.orchestrator, orchestratorMode: state.settings?.orchestratorMode, duoLead: state.settings?.duoLead }), shallowEqual)
+  // which CLIs are connected (cached status in the runtime; the composer offers only those)
+  const { data: overview } = useVisibleLoader(() => api.get<OrchestratorOverview>('/orchestrator'), [orchestrator, orchestratorMode], 60_000)
   const sessionId = useAppState((state) => state.workspace.activeSessionId)
   const storedDraft = useAppState((state) => state.workspace.composer[actions.composerKey(state.workspace.activeSessionId)]) ?? EMPTY_DRAFT
   const { active, pending, older } = useSessionState((state) => ({ active: state.active, pending: state.pending, older: state.older }), shallowEqual)
@@ -79,6 +86,9 @@ export function OrchestratorChat({ task, execution, events, subtasks, cards, sta
     return list.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
   }, [messages, events, subtasks])
 
+  // the draft message the user decides on right now (older drafts are history)
+  const reviewDraftId = useMemo(() => (stage.state === 'design_review' && task ? [...messages].reverse().find((message) => message.taskId === task.id && message.metadata?.kind === 'design_draft')?.id : undefined), [messages, stage.state, task])
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [entries.length, sessionPending.length, pendingAsk, stage.state])
@@ -89,11 +99,12 @@ export function OrchestratorChat({ task, execution, events, subtasks, cards, sta
     if (syncTimer.current !== undefined) window.clearTimeout(syncTimer.current)
     ownDraft.current = ''
     setText('')
-    void actions.sendMessage(content, storedDraft.mode, storedDraft.autoRun)
+    void actions.sendMessage(content, storedDraft.mode, storedDraft.autoRun, designModeOf(storedDraft.mode, storedDraft.designMode), choice.send)
   }
 
-  const orchestratorName = orchestrator === 'codex' ? 'OpenAI Codex' : orchestrator === 'claude-code' ? 'Claude Code' : 'nicht verbunden'
-  const placeholder = storedDraft.mode === 'ask' ? 'Frage zum Projekt … (Strg+Enter)' : stage.state === 'draft' || stage.state === 'done' ? 'Was soll umgesetzt werden? (Strg+Enter)' : 'Ergänzung zur Aufgabe … (Strg+Enter)'
+  const choice = composerOrchestrator(overview, { orchestrator: orchestrator ?? null, orchestratorMode: orchestratorMode ?? 'single' }, storedDraft.orchestrator)
+  const orchestratorName = orchestrator || orchestratorMode === 'duo' ? orchestratorTitle({ orchestrator: orchestrator ?? null, orchestratorMode: orchestratorMode ?? 'single', duoLead: duoLead ?? 'claude-code' }, execution) : 'nicht verbunden'
+  const placeholder = storedDraft.mode === 'ask' ? 'Frage zum Projekt … (Strg+Enter)' : stage.state === 'design_review' ? '„passt“ gibt das Design frei – oder beschreibe Änderungen … (Strg+Enter)' : stage.state === 'draft' || stage.state === 'done' ? 'Was soll umgesetzt werden? (Strg+Enter)' : 'Ergänzung zur Aufgabe … (Strg+Enter)'
 
   return (
     <aside className="ls-chat chat-panel" data-testid="chat-panel">
@@ -127,11 +138,11 @@ export function OrchestratorChat({ task, execution, events, subtasks, cards, sta
               <span>{entry.text}</span>
             </div>
           ) : (
-            <Message key={entry.message.id} message={entry.message} task={task} execution={execution} cards={cards} approval={stage.state === 'approval'} />
+            <Message key={entry.message.id} message={entry.message} task={task} execution={execution} cards={cards} approval={stage.state === 'approval'} designReview={entry.message.id === reviewDraftId} />
           ),
         )}
         {sessionPending.map((message) => <PendingBubble key={message.clientId} message={message} />)}
-        {stage.state === 'planning' && task ? (
+        {(stage.state === 'planning' || stage.state === 'designing') && task ? (
           <div style={{ paddingLeft: 34 }}>
             <PlanningProgress task={task} />
           </div>
@@ -160,6 +171,22 @@ export function OrchestratorChat({ task, execution, events, subtasks, cards, sta
               }
             }}
           />
+          {choice.options.length && choice.value ? (
+            <div className="row" style={{ gap: 8 }} data-testid="orchestrator-choice">
+              <span className="faint row" style={{ gap: 5, fontSize: 11.5 }} title="Wer diesen Auftrag bearbeitet; „Beide“ lässt Claude Code und Codex parallel arbeiten und abgleichen">
+                <Users size={12} /> Orchestrator
+              </span>
+              <Seg size="sm" label="Orchestrator" value={choice.value} onChange={(value: OrchestratorChoice) => actions.setComposerDraft(sessionId, { orchestrator: value })} options={choice.options} />
+            </div>
+          ) : null}
+          {storedDraft.mode === 'task' ? (
+            <div className="row" style={{ gap: 8 }} data-testid="design-mode">
+              <span className="faint row" style={{ gap: 5, fontSize: 11.5 }} title="Entwurf von Tokens, Komponenten und einer Vorschau, den du vor der Planung freigibst">
+                <Palette size={12} /> Design-Phase
+              </span>
+              <Seg size="sm" label="Design-Phase" value={storedDraft.designMode ?? 'auto'} onChange={(designMode: DesignMode) => actions.setComposerDraft(sessionId, { designMode })} options={DESIGN_MODES} />
+            </div>
+          ) : null}
           <div className="row" style={{ gap: 8 }}>
             <Seg size="sm" label="Art der Nachricht" value={storedDraft.mode} onChange={(mode) => actions.setComposerDraft(sessionId, { mode })} options={[{ id: 'task', label: 'Aufgabe', icon: Hammer }, { id: 'ask', label: 'Frage', icon: MessageCircleQuestion }]} />
             {storedDraft.mode === 'task' ? (
@@ -181,12 +208,14 @@ export function OrchestratorChat({ task, execution, events, subtasks, cards, sta
   )
 }
 
-const Message = memo(function Message({ message, task, execution, cards, approval }: { message: ChatMessage; task?: Task; execution?: ExecutionRun; cards: AgentCard[]; approval: boolean }) {
+const Message = memo(function Message({ message, task, execution, cards, approval, designReview }: { message: ChatMessage; task?: Task; execution?: ExecutionRun; cards: AgentCard[]; approval: boolean; designReview?: boolean }) {
   if (message.role === 'user') return <div className="chat-user" data-role="user">{message.content}</div>
   const kind = message.metadata?.kind
   if (message.role === 'system' || (message.role === 'agent' && kind === 'execution_started')) return <div className="chat-note" data-role={message.role}>{message.content}</div>
   const isPlan = kind === 'task_plan' && task?.plans?.some((plan) => plan.id === message.metadata.taskPlanId) && task.plans[0]?.id === message.metadata.taskPlanId
   const isSummary = kind === 'run_summary' && execution && message.metadata.executionId === execution.id
+  const card = kind === 'duo_reconciled' ? duoCard(message.metadata) : undefined
+  const answers = kind === 'answer' ? duoAnswer(message) : undefined
   return (
     <div className="chat-orch" data-role={message.role}>
       <div className="kind-icon" style={{ width: 24, height: 24, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent)', flex: 'none' }}>
@@ -194,7 +223,7 @@ const Message = memo(function Message({ message, task, execution, cards, approva
       </div>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div className="faint" style={{ fontSize: 11.5 }}>{message.role === 'agent' ? 'Agenten' : 'Orchestrator'} · {time(message.createdAt)}</div>
-        <Markdown text={message.content} />
+        {card ? <DuoReconciledCard card={card} /> : answers ? <DuoAnswers answer={answers} /> : <Markdown text={message.content} />}
         {isPlan && cards.length ? (
           <div className="plan-card">
             {cards.map((card) => (
@@ -207,10 +236,57 @@ const Message = memo(function Message({ message, task, execution, cards, approva
           </div>
         ) : null}
         {isSummary && approval ? <ApprovalCard execution={execution} /> : null}
+        {kind === 'design_draft' && designReview ? <DesignDraftCard message={message} /> : null}
       </div>
     </div>
   )
 })
+
+/** Duo mode: what both orchestrators proposed for a phase and how it was reconciled. */
+function DuoReconciledCard({ card }: { card: NonNullable<ReturnType<typeof duoCard>> }) {
+  return (
+    <div className="duo-card" data-testid="duo-reconciled">
+      <div className="row" style={{ gap: 8 }}>
+        <Users size={15} style={{ color: 'var(--accent)' }} />
+        <strong>Duo-Abgleich · {card.phase}</strong>
+        <span className="spacer" />
+        <Chip tone={card.fallback ? 'tool' : 'accent'}>{card.fallback ? 'Fallback' : card.result}</Chip>
+      </div>
+      <div className="duo-columns">
+        {card.columns.map((column) => (
+          <div key={column.provider} className="duo-column">
+            <span className="duo-column-head">{column.name}</span>
+            <span className={column.summary ? undefined : 'faint'}>{column.summary ?? 'kein Vorschlag'}</span>
+          </div>
+        ))}
+      </div>
+      {card.notes.length ? (
+        <div className="stack" style={{ gap: 4 }}>
+          <span className="duo-column-head">Abgleich</span>
+          <ul className="duo-notes">{card.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>
+        </div>
+      ) : null}
+      {card.fallback ? <span className="muted" style={{ fontSize: 12 }}>⚠ {card.fallback}</span> : <span className="faint" style={{ fontSize: 11.5 }}>Ergebnis: {card.result}</span>}
+    </div>
+  )
+}
+
+/** Duo chat answer: both answers labelled side by side (stacked when narrow). */
+function DuoAnswers({ answer }: { answer: NonNullable<ReturnType<typeof duoAnswer>> }) {
+  return (
+    <div className="stack" style={{ gap: 8 }} data-testid="duo-answer">
+      <div className="duo-columns">
+        {answer.answers.map((entry) => (
+          <div key={entry.provider} className="duo-column">
+            <span className="duo-column-head">{entry.name}</span>
+            <Markdown text={entry.text} />
+          </div>
+        ))}
+      </div>
+      {answer.fallback ? <span className="muted" style={{ fontSize: 12 }}>⚠ {answer.fallback}</span> : null}
+    </div>
+  )
+}
 
 function ApprovalCard({ execution }: { execution: ExecutionRun }) {
   const files = parseUnifiedDiff(execution.finalDiff)
@@ -230,6 +306,29 @@ function ApprovalCard({ execution }: { execution: ExecutionRun }) {
       <button className="btn primary" style={{ justifyContent: 'center' }} onClick={() => actions.setScreen('review')}>
         Prüfen und freigeben
       </button>
+    </div>
+  )
+}
+
+/** The draft the user decides on right now: a shortcut to the approval next to the review in the Leitstand. */
+function DesignDraftCard({ message }: { message: ChatMessage }) {
+  const version = Number(message.metadata.version) || undefined
+  const type = String(message.metadata.designType ?? '')
+  const taskId = message.taskId
+  return (
+    <div className="approval-card" data-testid="design-draft-card">
+      <div className="row" style={{ gap: 8 }}>
+        <Palette size={16} style={{ color: 'var(--accent)' }} />
+        <strong>Design-Entwurf{version ? ` ${version}` : ''}</strong>
+        <span className="spacer" />
+        {type ? <Chip tone="accent">{DESIGN_TYPE_LABEL[type] ?? type}</Chip> : null}
+      </div>
+      <span className="muted" style={{ fontSize: 12 }}>Vorschau, Tokens und Komponenten stehen im Leitstand.</span>
+      {taskId ? (
+        <AsyncButton className="btn primary big" onClick={() => designAction(taskId, 'approve')}>
+          Design freigeben
+        </AsyncButton>
+      ) : null}
     </div>
   )
 }

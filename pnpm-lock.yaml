@@ -101,6 +101,9 @@ importers:
       '@multi-ai-coder/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@multi-ai-coder/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4

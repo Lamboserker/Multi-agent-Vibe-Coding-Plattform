@@ -37,3 +37,15 @@
     Herkunft (Planner-Wahl vs. Kategorie-Heuristik), wenn mehrere Pfade dasselbe liefern und die Rohdaten nicht
     gespeichert sind. Ein Akzeptanzkriterium, das nur teilweise belegt ist, bleibt offen oder wird als Restrisiko
     getrennt, nicht mit Vermerk abgehakt.
+16. **Fake-CLIs müssen ablehnen, was die echte CLI ablehnt.** Ein Fake, der jedes Argument schluckt, beweist nur die
+    Ausgabeverarbeitung. Bei neuen Flags/Unterbefehlen `<cli> <sub> --help` lesen (kein Modellaufruf) und den Fake
+    unbekannte Flags mit Exit 2 abweisen lassen. Stille Fallbacks (Chat-Resume) verdecken solche Fehler zusätzlich.
+17. **Heuristiken, die bezahlte Aufrufe auslösen, gegen Mischfälle testen.** Gate und Chat-Freigabe waren mit
+    „sauberen" Beispielen grün, fielen aber bei „Tests für den Shop-Checkout" bzw. „Ja, bitte" durch – jeder Fehlgriff
+    kostet Kontingent. Negativtabelle mit Sätzen bauen, die Signalwörter beider Seiten mischen, und bei Unklarheit
+    kostenlos nachfragen statt den bezahlten Pfad zu wählen. Regex-Sanitizer zusätzlich gegen harmlosen Text testen
+    (Fix gegen `on*=` zerstörte `online = true`).
+18. **Lockerungen von Qualitätsgates gegen „neuer Fehler versteckt sich im alten" testen.** Ein Vergleich mit der
+    Baseline (Signatur, Zeilen-Tail, Anzahl) muss mit dem Fall geprüft werden, dass der Task einen weiteren Fehler
+    derselben Art hinzufügt, zum Beispiel in einer alphabetisch früheren Datei oder einer Datei mit Ziffer im Namen.
+    TASK-023 schloss eine Lücke und öffnete dabei eine neue; erst das Repro-Skript im Review fand sie (TASK-027).

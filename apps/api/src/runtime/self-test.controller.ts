@@ -20,6 +20,24 @@ const SAMPLE_FILES: Record<string, string> = {
 export const SELF_TEST_PROMPT =
   'Add an exported function `slugify(text)` to src/text.js. It lowercases the text, trims it, replaces every run of characters that are not a-z or 0-9 with a single "-", and removes leading/trailing "-". Add test/slugify.test.js using node:test and node:assert/strict with at least three cases (e.g. "Hello World" → "hello-world", "  Multi--AI  Coder! " → "multi-ai-coder", "" → "").'
 
+/** Task steps without an execution at which the function test stops (failed, or waiting for the user). */
+const STOPPED_STEPS: Record<string, string> = {
+  plan_failed: 'Planung fehlgeschlagen',
+  plan_clarification: 'Der Orchestrator hat Rückfragen statt eines Plans geliefert',
+  design_failed: 'Design-Entwurf fehlgeschlagen',
+  awaiting_design_approval: 'Der Design-Entwurf wartet auf Freigabe statt eines Plans',
+}
+
+/** Whether the function test has ended (pure, unit-tested). */
+export function selfTestFinished(currentStep: string, executionStatus?: string): boolean {
+  return executionStatus ? ['awaiting_approval', 'failed', 'cancelled', 'applied', 'completed', 'interrupted'].includes(executionStatus) : Object.hasOwn(STOPPED_STEPS, currentStep)
+}
+
+/** Error shown for a function test that stopped before an execution existed. */
+export function selfTestStepError(currentStep: string): string | null {
+  return Object.hasOwn(STOPPED_STEPS, currentStep) ? STOPPED_STEPS[currentStep]! : null
+}
+
 /**
  * Setup step 7: runs one real, small coding task end to end in a throwaway sample repository
  * (orchestrator planning, local model, patch, worktree, tests, diff). Nothing in the user's
@@ -45,7 +63,8 @@ export class SelfTestController {
     await git(dir, ['add', '-A'], { internal: true })
     await git(dir, ['commit', '-q', '-m', 'Function test baseline'], { internal: true })
     const project = await this.projects.create({ name: 'Multi-AI Coder Funktionstest', repoPath: dir })
-    const task = await this.tasks.create({ projectId: project.id, userPrompt: SELF_TEST_PROMPT })
+    // no design phase: the function test checks planning and local execution, not a premium design call
+    const task = await this.tasks.create({ projectId: project.id, userPrompt: SELF_TEST_PROMPT, designMode: 'skip' })
     await this.executions.requestPlan(task.id, undefined, true)
     return { projectId: project.id, taskId: task.id, repoPath: dir }
   }
@@ -63,7 +82,7 @@ export class SelfTestController {
     const anySuccess = execution?.agentRuns.some((run) => run.outcome === 'success')
     const validation = (execution?.finalValidation ?? {}) as { ok?: boolean; testsPassed?: number; results?: Array<{ kind: string; status: string }> }
     const testsRan = Boolean(validation.results?.some((result) => result.kind === 'test' && result.status === 'passed'))
-    const finished = execution ? ['awaiting_approval', 'failed', 'cancelled', 'applied', 'completed', 'interrupted'].includes(execution.status) : ['plan_failed', 'plan_clarification'].includes(task.currentStep)
+    const finished = selfTestFinished(task.currentStep, execution?.status)
     const checks = [
       { id: 'orchestrator', label: 'Orchestrator plant die Aufgabe', ok: Boolean(plan && plan.source !== 'deterministic-fallback'), detail: plan ? `Plan-Quelle: ${plan.source}` : 'noch kein Plan' },
       { id: 'local_model', label: 'Lokales Modell erzeugt Code', ok: Boolean(localSuccess), detail: execution ? `${execution.agentRuns.length} Versuch(e); lokal erfolgreich: ${localSuccess ? 'ja' : 'nein'}` : '–' },
@@ -80,7 +99,7 @@ export class SelfTestController {
       ok: checks.every((check) => check.ok),
       checks,
       diff: execution?.finalDiff ?? null,
-      error: execution?.errorMessage ?? (task.currentStep === 'plan_failed' ? 'Planung fehlgeschlagen' : task.currentStep === 'plan_clarification' ? 'Der Orchestrator hat Rückfragen statt eines Plans geliefert' : null),
+      error: execution?.errorMessage ?? selfTestStepError(task.currentStep),
       files: task.subtasks.flatMap((subtask) => [...stringList(subtask.allowedFiles), ...stringList(subtask.newFiles)]),
     }
   }

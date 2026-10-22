@@ -17,7 +17,7 @@ Goal: a calm, precise, product-grade interface (Linear / Vercel / Stripe level),
 5. CSS comments only as `/* … */`. Inline styles in JSX: `'var(--accent)'`, never `'--accent'`.
 6. Cards and panels align content left, not centered.
 
-**Tokens:**
+**Tokens:** if `design/tokens.css` exists in the project, import it and use its tokens instead of defining new ones; otherwise:
 ```css
 :root{--bg:#f7f7f8;--surface:#fff;--surface-2:#f1f1f3;--border:#e4e4e7;--text:#18181b;--muted:#71717a;
 --accent:#4f46e5;--accent-hover:#4338ca;--accent-soft:#eef2ff;--ok:#16a34a;--warn:#d97706;--err:#dc2626;

@@ -3,16 +3,36 @@
 
 **Projekt:** Multi-AI Coder – Desktop-Coding-IDE (Electron + lokale NestJS-API + `packages/engine`), in der ein
 Premium-Orchestrator (Codex / Claude Code) plant und kleine lokale Modelle (Ollama) die Tasks ausführen.
-**Stand:** 2026-10-20
+**Stand:** 2026-10-22
 
 ## Aktiver Task
-keiner. Kein offener Task-Kandidat – nächste Aufgabe vom Nutzer.
+TASK-028 (Integrationskatalog) implementiert, nicht committet; Übergabe in `tasks/done/TASK-028-integrations-katalog.md`.
+30 MCP-Vorlagen, 40 neue Skills, acht Pakete; API 274, Desktop 107, gezielte Engine 60, GUI/Native/Staging geprüft.
+Anbieter-Konten und Blender-Szene nicht live abgenommen; gesamte Engine-Suite blieb hängen (Details im Task).
+
+TASK-027 (Gesamtverifikation Duo, Hardware und Lokal). Plan: `docs/ai/plans/2026-10-21-duo-hardware-lokal.md`,
+ADR-004 (proposed).
+- Erledigt: TASK-023 (Baseline-Lücke, Log-Reihenfolge), TASK-024 (Raster, Router, Premium-Hinweis `repairHint`),
+  TASK-025 (`DuoOrchestrator`) und TASK-026 (Duo in API und UI). Review-Blocker behoben; engine 434, api 260,
+  desktop 107.
+- TASK-022 (Hardware) ist umgesetzt; die Sichtprüfung fehlt noch.
+- Es fehlen: Neustart von `pnpm dev`, Sichtprüfung, Duo-Live-Test (nur mit Zustimmung) (Nutzerfrage zum Premium-Hinweis erledigt)
+  Alles **nicht committet**.
+
+TASK-020 (Gesamtverifikation Design-Phase), Masterplan `docs/ai/plans/2026-10-21-design-phase.md`, wartet weiter
+auf den Nutzer.
+- TASK-013 … TASK-019 sind erledigt; Review-Blocker behoben; volle Verifikation grün (engine 357, api 220, desktop 91).
+- Es fehlen: Neustart von `pnpm dev` mit Migrationscheck, Sichtprüfung mit Seed-Entwurf, Live-Test (nur mit
+  Zustimmung) und eine Nutzerfrage. Details im Abschnitt Übergabe von TASK-020.
 
 ## Nächste Schritte
-1. Alles committet und gepusht: TASK-001–003 `61ba058`, TASK-004–006 `24f6e37` + Doku `9b3321c`, TASK-007 `b9a2854`
-   + Doku, TASK-009 `34c0831` + Doku `6e0f556`, TASK-008 `eb3bd57` + Doku `cfc62d7`, TASK-010/011 gemeinsam `17d523a`
-   + Doku. Commits nur auf Nachfrage.
-2. Optionale Ideen ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern (`tasks/done/TASK-006-*.md`);
+1. Design-Phase (TASK-012 … TASK-020) ist **nicht committet**. Commits nur auf Nachfrage. Bis TASK-011 ist alles
+   committet und gepusht (letzter Commit `3ed14cf`).
+2. TASK-012 (Codex-Resume `--sandbox`, Pool-node_modules-Link) erledigt, **nicht committet**; Live-Beleg nach Neustart
+   von `pnpm dev` per „Erneut ausführen" steht aus (nur mit Zustimmung).
+3. TASK-021 (Baseline-Vergleich der Projektchecks, Planer nennt keine Modelle) erledigt, **nicht committet**; Live-Beleg
+   per „Erneut ausführen“ nach Neustart von `pnpm dev` steht aus (nur mit Zustimmung).
+4. Optionale Ideen ohne Task: Planner-`agent` in `TaskPlan.dag.tasks[].agent` speichern (`tasks/done/TASK-006-*.md`);
    Merge-Erfolgszeile im conflictResolver ohne `sessionId` (`tasks/done/TASK-011-*.md`) – jeweils Abschnitt Übergabe.
 
 ## Phasen (Masterplan `docs/ai/plans/2026-10-20-orchestrierung.md`, erledigt)
@@ -52,12 +72,27 @@ keiner. Kein offener Task-Kandidat – nächste Aufgabe vom Nutzer.
 - Vor Live-Tests prüfen, ob der aktuelle Code läuft: `pnpm dev` bündelt das Backend nur beim Start (Lesson 14).
 - `PromptDialog` (`components/common.tsx`) kann `multiline` + `children`; Rückfragen holt `openQuestions()` (`lib/leitstand.ts`)
   aus den Chat-Metadaten. Renderer hat kein DOM-Testsetup – UI-Verhalten per Sichtprüfung belegen.
+- `codex exec resume` kennt weder `--sandbox` noch `-C` → Sandbox per `-c sandbox_mode=…`; Fake-Codex lehnt die Flags ab.
 - Dev-Daten liegen in `%APPDATA%\Multi-AI Coder Dev` (DB `multi-ai-coder.db`, User-Skills unter `skills/`).
+- Design-Phase:
+  - Steps `designing`, `awaiting_design_approval` und `design_failed` müssen überall mit behandelt werden (Lesson 12).
+  - Das Gate ist `shouldDesign` (engine `ui/design-gate.ts`); Chat-Freigabe über `designAnswer()` (`session-model.ts`).
+  - design-001 ist ein `write-files`-Fast-Path ohne Agent-Fallback.
+  - Heuristiken mit bezahlten Folgen immer gegen Mischfälle testen (Lesson 17).
+- Duo:
+  - `DuoOrchestrator` hat `id = lead.id`; Buchung nur über `meta.parts`/`bookableCalls`, in der API über
+    `modelCallRows`/`failedCallRows`.
+  - Die Wahl pro Task steht in `ChatMessage.metadata.orchestrator` (Fragen: `askOrchestrator`).
+  - Bei expliziter Einzelwahl gibt es keinen Fallback auf die andere CLI.
+- Baseline: `againstBaseline` mit Teilmengen-Regel über `failureLines` plus `errorCount`. Lockerungen gegen
+  versteckte neue Fehler testen (Lesson 18).
+- Hardware: Snapshot mit `state`/`instance`/`unloadsInSec`; `unloadAfterRun` entlädt im `finally` von `runJob`.
 
 ## Wichtige Entscheidungen
 - ADR-001 Planner weist Agent + Skills pro Task zu
 - ADR-002 Leerer Plan mit Rückfragen → Rückfragen zeigen, kein Fallback
 - ADR-003 Feine Zerlegung (1 Task ≈ 1 Datei), maxTasks 12
+- ADR-004 Duo-Orchestrierung: parallel + Abgleich (proposed, ersetzt ADR-002 teilweise)
 
 ## Offene Tasks
-- keine. TASK-001 … TASK-011 in `tasks/done/`
+- TASK-020, TASK-022, TASK-027 (warten auf Nutzer). Übrige erledigte Tasks liegen in `tasks/done/`.

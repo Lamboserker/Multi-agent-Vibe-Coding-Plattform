@@ -82,6 +82,33 @@ describe('routeTask', () => {
     expect(decision.reasons.join(' ')).toMatch(/fails often/)
   })
 
+  it('only lets a premium suggestion raise the tier in balanced mode for complexity >= 4 or risk >= 3', () => {
+    const suggested = { ...baseTask, suggestedExecutor: 'premium' as const }
+    const low = routeTask({ ...suggested, complexity: 2, risk: 2 }, models, policy)
+    expect(low.model).toBe('small:1b')
+    expect(low.reasons.join(' ')).toMatch(/balanced mode keeps/)
+    expect(routeTask({ ...suggested, complexity: 3, risk: 1 }, models, policy).model).toBe('mid:7b')
+    expect(routeTask({ ...suggested, complexity: 2, risk: 3 }, models, policy).model).toBe('big:20b')
+    expect(routeTask({ ...suggested, complexity: 4, risk: 1 }, models, policy).executor).toBe('premium')
+    // Quality mode still honours every suggestion.
+    expect(routeTask({ ...suggested, complexity: 2, risk: 1 }, models, { ...policy, costMode: 'quality' }).executor).toBe('premium')
+  })
+
+  it('allows a stats downgrade at risk 3 with high confidence, never for security-critical work', () => {
+    const proven = aggregateSuitability(attempts('small:1b', 'react-ui', 20, 0))
+    expect(routeTask({ ...baseTask, complexity: 3, risk: 3 }, models, policy, proven).model).toBe('small:1b')
+    // Only medium confidence → no downgrade at risk 3.
+    const medium = aggregateSuitability(attempts('small:1b', 'react-ui', 6, 2))
+    expect(medium[0]!.confidence).not.toBe('high')
+    expect(routeTask({ ...baseTask, complexity: 3, risk: 3 }, models, policy, medium).model).toBe('mid:7b')
+    // Risk 4 stays out of reach.
+    expect(routeTask({ ...baseTask, complexity: 3, risk: 4 }, models, policy, proven).executor).toBe('premium')
+    // Security-critical files kept local by cheapest mode never move down.
+    const secure = aggregateSuitability(attempts('small:1b', 'backend-service', 20, 0))
+    const decision = routeTask({ ...baseTask, category: 'backend-service', complexity: 3, risk: 3, securityCritical: true }, models, { ...policy, costMode: 'cheapest' }, secure)
+    expect(decision.model).toBe('big:20b')
+  })
+
   it('upgrades when the expected context does not fit', () => {
     expect(routeTask({ ...baseTask, expectedInputTokens: 60_000 }, models, policy).model).toBe('big:20b')
   })

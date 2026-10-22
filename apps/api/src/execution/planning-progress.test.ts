@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OrchestratorError } from '@multi-ai-coder/engine'
 import { ExecutionService } from './execution.service.js'
+import { withNotices } from '../test-db.js'
 
 function fixture() {
   const prisma = { task: { update: vi.fn().mockResolvedValue({}), findUniqueOrThrow: vi.fn().mockResolvedValue({ projectId: 'p', project: { name: 'repo', repoPath: 'C:/repo' }, userPrompt: 'change a component' }) } }
   const settings = { get: vi.fn().mockResolvedValue({ modelRoles: {} }) }
-  const orchestrators = { active: vi.fn().mockResolvedValue(undefined) }
+  const orchestrators = withNotices({ active: vi.fn().mockResolvedValue(undefined) })
   const localModels = { warmup: vi.fn().mockResolvedValue(undefined), engineProfiles: vi.fn().mockResolvedValue([]) }
   const repoContext = { digest: vi.fn() }
   const jobs = {
@@ -64,6 +65,12 @@ describe('planning timing', () => {
       prisma.task.findUniqueOrThrow.mockResolvedValue({ currentStep: 'plan_clarification', subtasks: [{ id: 's' }] })
       await expect(service.start('task')).rejects.toThrow('Rückfragen')
     })
+
+    it.each(['designing', 'awaiting_design_approval', 'design_failed'])('refuses to start an older plan during the design phase (%s)', async (currentStep) => {
+      const { service, prisma } = fixture()
+      prisma.task.findUniqueOrThrow.mockResolvedValue({ currentStep, subtasks: [{ id: 's' }] })
+      await expect(service.start('task')).rejects.toThrow('Design-Entwurf')
+    })
   })
 
   it('announces preparation while the repository digest is still pending', async () => {
@@ -85,7 +92,7 @@ describe('planning timing', () => {
     const orchestrator = { id: 'codex', displayName: 'Codex', createPlan }
     Object.assign(service as object, {
       settings: { get: vi.fn().mockResolvedValue({ modelRoles: {}, fastPath: false, costMode: 'balanced', maxTasks: 8 }) },
-      orchestrators: { active: vi.fn().mockResolvedValue(orchestrator), invalidate: vi.fn() },
+      orchestrators: withNotices({ active: vi.fn().mockResolvedValue(orchestrator), invalidate: vi.fn() }),
       agentProfiles: {
         list: vi.fn().mockResolvedValue([
           { name: 'coder-a', description: 'Active coder', role: 'coder', enabled: true, categories: ['ui'], skills: ['projekt-doku'] },
@@ -121,7 +128,7 @@ describe('planning timing', () => {
       const chat = vi.fn().mockResolvedValue(undefined)
       Object.assign(service as object, {
         settings: { get: vi.fn().mockResolvedValue({ modelRoles: {}, fastPath: false, costMode: 'balanced', maxTasks: 8, planApproval: true, autoStartSmallPlans: false }) },
-        orchestrators: { active: vi.fn().mockResolvedValue({ id: 'codex', displayName: 'Codex', createPlan }), invalidate: vi.fn() },
+        orchestrators: withNotices({ active: vi.fn().mockResolvedValue({ id: 'codex', displayName: 'Codex', createPlan }), invalidate: vi.fn() }),
         agentResources: {
           catalog: vi.fn().mockResolvedValue([{ name: 'projekt-doku', description: 'Docs.', requested: true }, { name: 'other', description: 'Other.', requested: false }]),
           promptContext: vi.fn().mockResolvedValue({ text: '', inlined: [] }),
@@ -160,7 +167,7 @@ describe('planning timing', () => {
       const taskPlan = { create: vi.fn().mockResolvedValue({ id: 'plan' }) }
       Object.assign(service as object, {
         settings: { get: vi.fn().mockResolvedValue({ modelRoles: {}, fastPath: false, costMode: 'balanced', maxTasks: 8, planApproval: true, autoStartSmallPlans: false }) },
-        orchestrators: { active: vi.fn().mockResolvedValue({ id: 'codex', displayName: 'Codex', createPlan }), invalidate: vi.fn() },
+        orchestrators: withNotices({ active: vi.fn().mockResolvedValue({ id: 'codex', displayName: 'Codex', createPlan }), invalidate: vi.fn() }),
         previewRouting: vi.fn().mockResolvedValue({ assignments: [] }),
         chat,
       })

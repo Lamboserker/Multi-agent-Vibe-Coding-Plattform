@@ -922,6 +922,48 @@ button:disabled {
   flex-direction: column;
   gap: 10px;
 }
+/* duo mode: both orchestrators side by side (stacked when the chat is narrow) */
+.duo-card {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.duo-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.duo-column {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.duo-column-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.duo-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.seg button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .ls-composer {
   padding: 10px 12px 12px;
   border-top: 1px solid var(--line);
@@ -1323,6 +1365,119 @@ button:disabled {
   border-radius: 16px;
   padding: 16px;
 }
+/* design review (design phase before planning) */
+.design-review {
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.tiles .design-review {
+  padding: 0;
+}
+.design-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--elev);
+  border: 1px solid var(--line2);
+  border-radius: 16px;
+  padding: 16px;
+}
+.design-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .design-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.design-preview {
+  background: var(--elev);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.design-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.design-stage {
+  background: var(--panel);
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+}
+.design-stage.empty {
+  padding: 48px 24px;
+  text-align: center;
+  font-size: 12.5px;
+}
+.design-frame {
+  height: 600px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  transition: width 0.2s;
+}
+.design-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--elev);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  max-height: 680px;
+  overflow: auto;
+}
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.swatch-chip {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 8px;
+  border: 1px solid var(--line2);
+  overflow: hidden;
+  display: flex;
+}
+.swatch-chip > span {
+  flex: 1;
+}
+.design-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  min-width: 0;
+}
+
 .agent-tile {
   background: var(--elev);
   border: 1px solid var(--line);

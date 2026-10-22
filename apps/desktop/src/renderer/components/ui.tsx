@@ -4,11 +4,11 @@ import { TONE, type Tone } from '../lib/leitstand'
 
 /* Small building blocks of the design: segmented controls, chips, bars, tone dots, eyebrows. */
 
-export function Seg<T extends string>({ value, options, onChange, size = 'md', label }: { value: T; options: Array<{ id: T; label: ReactNode; icon?: LucideIcon; title?: string }>; onChange: (value: T) => void; size?: 'sm' | 'md'; label?: string }) {
+export function Seg<T extends string>({ value, options, onChange, size = 'md', label }: { value: T; options: Array<{ id: T; label: ReactNode; icon?: LucideIcon; title?: string; disabled?: boolean }>; onChange: (value: T) => void; size?: 'sm' | 'md'; label?: string }) {
   return (
     <div className={`seg ${size}`} role="radiogroup" aria-label={label}>
       {options.map((option) => (
-        <button key={option.id} role="radio" aria-checked={value === option.id} className={value === option.id ? 'on' : ''} title={option.title} onClick={() => onChange(option.id)}>
+        <button key={option.id} role="radio" aria-checked={value === option.id} className={value === option.id ? 'on' : ''} title={option.title} disabled={option.disabled} onClick={() => onChange(option.id)}>
           {option.icon ? <option.icon size={12} /> : null}
           {option.label}
         </button>
@@ -87,12 +87,13 @@ export function ScreenHeader({ title, subtitle, children }: { title: ReactNode; 
   )
 }
 
-export function Spark({ values, tone, max = 100 }: { values: number[]; tone: string; max?: number }) {
+/** Bar sparkline; a null value is a point without measurement and stays an empty gap. */
+export function Spark({ values, tone, max = 100 }: { values: Array<number | null>; tone: string; max?: number }) {
   const bars = values.length ? values : [0]
   return (
     <div className="spark" aria-hidden>
       {bars.map((value, index) => (
-        <div key={index} style={{ height: `${Math.max(4, Math.round((value / max) * 100))}%`, background: tone, opacity: 0.35 + 0.65 * (index / Math.max(1, bars.length - 1)) }} />
+        <div key={index} style={value === null ? { height: 0, background: 'transparent' } : { height: `${Math.max(4, Math.round((value / max) * 100))}%`, background: tone, opacity: 0.35 + 0.65 * (index / Math.max(1, bars.length - 1)) }} />
       ))}
     </div>
   )

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common'
 import { Prisma, type AgentProfile, type ExecutionRun, type Subtask } from '@prisma/client'
 import {
+  againstBaseline,
   aggregateSuitability,
   applyChangeSet,
   catchUpIntegration,
@@ -31,9 +32,14 @@ import {
   type SkillOffer,
   type SuitabilityStats,
   type UsageCall,
+  type ValidationReport,
   classifyFastPath,
   planningContextOptions,
+  shouldDesign,
+  type DesignMode,
   type FastPathTool,
+  type CallMeta,
+  isDuo,
 } from '@multi-ai-coder/engine'
 import { PrismaService } from '../common/prisma.service.js'
 import { acceptMerge, cleanMergeAnswer, mergePrompt } from './conflict-merge.js'
@@ -41,7 +47,8 @@ import { asJson, stringList } from '../common/json.js'
 import { KeyedMutex } from '../common/locks.js'
 import { LocalModelsService } from '../local-models/local-models.service.js'
 import { OrchestratorService } from '../orchestration/orchestrator.service.js'
-import { failedCallFields } from '../orchestration/model-call.js'
+import { failedCallRows, modelCallRows } from '../orchestration/model-call.js'
+import { duoReconciledMessage, orchestratorLabel, orchestratorLabelName, overrideFromLabel, taskOverride } from '../orchestration/orchestrator-choice.js'
 import { EventBusService } from '../runtime/event-bus.service.js'
 import { JobQueueService } from '../runtime/job-queue.service.js'
 import { runtimeConfig } from '../runtime/runtime-config.js'
@@ -52,8 +59,12 @@ import { PluginsService } from '../plugins/plugins.service.js'
 import { AgentResourcesService } from '../agents/agent-resources.service.js'
 import { AgentProfilesService, assignAgents } from '../agents/agent-profiles.service.js'
 import { ensureRepository } from '../workspace-fs/workspace-fs.service.js'
+import { DESIGN_MODES, DESIGN_UNAVAILABLE_TEXT, DesignService } from '../design/design.service.js'
+import { DESIGN_TASK_ID, designFilesTool, designPlanTask, requestDesignSkill, withDesignGuidance, withDesignTask } from '../design/design-files.js'
 
 const ACTIVE_STATUSES = ['pending', 'planning', 'running', 'paused', 'integrating'] as const
+/** Task steps of the design phase before planning. */
+const DESIGN_STEPS = ['designing', 'awaiting_design_approval', 'design_failed']
 
 /** Chat text for a planner that returned open questions instead of tasks. */
 function questionsMessage(questions: string[]) {
@@ -80,6 +91,21 @@ export function isSmallSafePlan(
   return assignments.length === plan.tasks.length && assignments.every((entry) => (entry.executor === 'local' || source === 'fast-path') && !entry.requiresApproval)
 }
 
+/** Premium calls and tokens per provider (the duo books every call with its own provider). */
+export function premiumByProvider(calls: Array<Pick<UsageCall, 'kind' | 'provider' | 'status' | 'inputTokens' | 'outputTokens' | 'cachedInputTokens'>>) {
+  const out: Record<string, { calls: number; failedCalls: number; inputTokens: number; outputTokens: number; cachedInputTokens: number }> = {}
+  for (const call of calls) {
+    if (call.kind !== 'orchestrator') continue
+    const entry = (out[call.provider] ??= { calls: 0, failedCalls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 })
+    entry.calls += 1
+    if (call.status !== 'ok') entry.failedCalls += 1
+    entry.inputTokens += call.inputTokens
+    entry.outputTokens += call.outputTokens
+    entry.cachedInputTokens += call.cachedInputTokens
+  }
+  return out
+}
+
 @Injectable()
 export class ExecutionService implements OnModuleInit {
   private readonly logger = new Logger('Execution')
@@ -101,11 +127,15 @@ export class ExecutionService implements OnModuleInit {
     @Optional() private readonly plugins?: PluginsService,
     @Optional() private readonly agentResources?: AgentResourcesService,
     @Optional() private readonly agentProfiles?: AgentProfilesService,
+    @Optional() private readonly design?: DesignService,
   ) {}
 
   onModuleInit() {
     this.jobs.register('execution.run', (payload, ctx) => this.runJob(String(payload.executionId), ctx.signal), { concurrency: 2, onRecover: 'interrupt' })
     this.jobs.register('execution.plan', (payload) => this.planJob(String(payload.taskId), payload.feedback ? String(payload.feedback) : undefined, payload.autoStart === true, typeof payload.requestedAt === 'string' ? payload.requestedAt : undefined), { concurrency: 2, onRecover: 'interrupt' })
+    // the design phase continues with planning (approve/skip go through the controller); the gate is skipped,
+    // otherwise a designer that is available again would get the task back into the running design job
+    this.design?.setPlanner((taskId, autoStart) => this.requestPlan(taskId, undefined, autoStart, { skipDesign: true }))
   }
 
   worktrees() {
@@ -152,31 +182,53 @@ export class ExecutionService implements OnModuleInit {
     return undefined
   }
 
-  async requestPlan(taskId: string, feedback?: string, autoStart = false) {
+  async requestPlan(taskId: string, feedback?: string, autoStart = false, options: { skipDesign?: boolean } = {}): Promise<{ jobId: string; design?: true }> {
     const requestedAt = new Date().toISOString()
-    const current = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, select: { currentStep: true, userPrompt: true } })
+    const current = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, select: { currentStep: true, userPrompt: true, designMode: true, plans: { select: { id: true }, take: 1 } } })
+    // UI tasks get a design draft first: only before their first plan or within the design phase (re-planning a
+    // planned task or answering the planner's questions never starts a design call)
+    if (!options.skipDesign && this.design && current.currentStep !== 'plan_clarification' && (!current.plans.length || DESIGN_STEPS.includes(current.currentStep))) {
+      const design = await this.designGate(taskId, current, feedback, autoStart)
+      if (design) return design
+    }
     // Answers to the planner's questions become part of the request: later re-plans keep them, no duplicate feedback.
     const block = current.currentStep === 'plan_clarification' && feedback?.trim() ? await this.clarificationAnswer(taskId, feedback.trim()) : undefined
     await this.prisma.task.update({ where: { id: taskId }, data: { currentStep: 'planning', status: 'running', ...(block ? { userPrompt: `${current.userPrompt}\n\n${block}` } : {}) } })
     const job = await this.jobs.enqueue('execution.plan', { taskId, feedback: block ? undefined : feedback, autoStart, requestedAt }, { dedupeKey: `plan:${taskId}` })
     this.events.publish('run', 'plan_requested', { taskId, jobId: job.id, requestedAt: (job.payload as Record<string, unknown>).requestedAt ?? job.createdAt.toISOString() })
-    // Planning by the orchestrator takes seconds; the default local executor loads meanwhile.
-    void this.settings
-      .get()
-      .then((settings) => {
-        // With several role models the route is not known yet: guessing can fill VRAM with the
-        // wrong model and force the actual executor to evict/reload it immediately afterwards.
-        const models = [...new Set(Object.values(settings.modelRoles).filter((model): model is string => Boolean(model)))]
-        return models.length === 1 ? this.localModels.warmup(models, 'planning') : []
-      })
-      .catch(() => undefined)
-    // ... and the worktrees for the integration and the first task are checked out (pool slots)
+    // No model warm-up here: the plan may not need a local model at all (or the user rejects it), and a
+    // speculatively loaded model would sit in VRAM for keepAliveMinutes. Models load after the plan.
+    // The worktrees for the integration and the first task are checked out (pool slots)
     // (best effort: never allowed to fail the request, not even synchronously)
     void Promise.resolve()
       .then(() => this.prisma.task.findUnique({ where: { id: taskId }, select: { project: { select: { id: true, repoPath: true } } } }))
       .then((task) => (task ? this.worktrees().prewarm(task.project.repoPath, task.project.id, 2) : 0))
       .catch(() => undefined)
     return { jobId: job.id }
+  }
+
+  /**
+   * Design phase gate: a UI request (or designMode "force") without an approved draft starts the design
+   * job instead of planning. Without a usable designer the request is planned as before (with a note).
+   */
+  private async designGate(taskId: string, task: { userPrompt: string; designMode?: string | null }, feedback: string | undefined, autoStart: boolean) {
+    if (!this.design) return undefined
+    const mode: DesignMode = DESIGN_MODES.includes(task.designMode as DesignMode) ? (task.designMode as DesignMode) : 'auto'
+    if (!shouldDesign(task.userPrompt, mode)) return undefined
+    if (await this.design.approved(taskId)) return undefined
+    if (!(await this.design.designer(await taskOverride(this.prisma, taskId)))) {
+      await this.noteOnce(taskId, 'design_unavailable', DESIGN_UNAVAILABLE_TEXT)
+      return undefined
+    }
+    const started = await this.design.start(taskId, { autoStart, feedback })
+    return { jobId: started.jobId, design: true as const }
+  }
+
+  /** A system note that is posted only once per task (repeated re-plans do not repeat it). */
+  private async noteOnce(taskId: string, kind: string, content: string) {
+    const recent = await this.prisma.chatMessage.findMany({ where: { taskId, role: 'system' }, orderBy: { createdAt: 'desc' }, take: 50, select: { metadata: true } })
+    if (recent.some((message) => (message.metadata as { kind?: string } | null)?.kind === kind)) return
+    await this.chat(taskId, 'system', content, { kind })
   }
 
   private async planJob(taskId: string, feedback?: string, autoStart = false, requestedAt?: string) {
@@ -206,6 +258,9 @@ export class ExecutionService implements OnModuleInit {
     this.events.publish('run', 'planning_started', { taskId, requestedAt })
     const task = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, include: { project: true } })
     const projectRef = { id: task.projectId, name: task.project.name, repoPath: task.project.repoPath }
+    // an approved design draft is the base of the plan: design-001 writes its files, every task builds on it
+    // ("Ohne Design planen" after an approval: designMode skip wins over the draft)
+    const design = task.designMode === 'skip' ? undefined : await this.design?.approved(taskId).catch(() => undefined)
     // independent preparation steps run concurrently (each can cost seconds on a cold start);
     // plugin/skill context is only awaited when the premium planner is actually called
     const pluginContextPromise = (this.plugins?.collectContext(task.userPrompt, projectRef).catch(() => []) ?? Promise.resolve([]))
@@ -214,7 +269,9 @@ export class ExecutionService implements OnModuleInit {
     const agentCatalogPromise: Promise<AgentOffer[]> = agentProfilesPromise
       .then((list) => list.filter((profile) => profile.enabled && profile.role === 'coder').map((profile) => ({ name: profile.name, description: profile.description, categories: profile.categories as string[], skills: profile.skills as string[] })))
     // all active skills: the planner sees the first 40 (requested first), the plan's skills are checked against all
+    // with a design, the matching type recipe (design-<type>) is requested, so the planner attaches it to the UI tasks
     const activeSkillsPromise: Promise<SkillOffer[]> = (this.agentResources?.catalog(task.projectId, task.userPrompt, Infinity).catch(() => []) ?? Promise.resolve([]))
+      .then((catalog) => (design ? requestDesignSkill(catalog, design.brief.designType) : catalog))
     const skillCatalogPromise = activeSkillsPromise.then((catalog) => catalog.slice(0, 40))
     // requested skills are for the executing agents: the planner only sees them in the catalog, never as
     // instructions to follow (it would apply or wait for them instead of planning)
@@ -222,20 +279,25 @@ export class ExecutionService implements OnModuleInit {
       .then((catalog) => this.agentResources?.promptContext('planner', task.projectId, task.userPrompt, catalog.filter((skill) => skill.requested).map((skill) => skill.name)))
       .catch(() => undefined)
     const contextOptions = planningContextOptions(task.userPrompt)
-    const [settings, { index, checks, digest }, profiles, orchestrator] = await Promise.all([
+    const [settings, { index, checks, digest }, profiles, resolved] = await Promise.all([
       this.settings.get(),
       // precise per-file instructions need the file contents; every planner read costs a slow turn
       this.repoContext.digest(task.projectId, task.project.repoPath, task.userPrompt, contextOptions.budgetTokens, contextOptions),
       this.localModels.engineProfiles(),
-      this.orchestrators.active(),
+      taskOverride(this.prisma, taskId).then((override) => this.orchestrators.activeWithNotice(override)),
     ])
-    this.events.publish('run', 'plan_context_ready', { taskId, orchestrator: orchestrator?.id ?? null, contextTokens: digest.tokenEstimate })
+    const orchestrator = resolved.adapter
+    // duo requested but not possible (or a chosen CLI is not signed in): say so once per task
+    if (resolved.notice) await this.noteOnce(taskId, 'orchestrator_notice', resolved.notice)
+    this.events.publish('run', 'plan_context_ready', { taskId, orchestrator: orchestrator ? orchestratorLabel(orchestrator) : null, contextTokens: digest.tokenEstimate })
 
     let plan: ExecutionPlan
     let source: string
     const warnings: string[] = []
     // Fast path: unambiguous small requests skip premium planning (rules in engine fastpath/fast-path.ts).
-    const fast = settings.fastPath && !feedback ? classifyFastPath(task.userPrompt, index) : ({ mode: 'none', reason: 'disabled' } as const)
+    // design-001 precedes the planned tasks
+    const maxTasks = design ? Math.max(1, settings.maxTasks - 1) : settings.maxTasks
+    const fast = settings.fastPath && !feedback && !design ? classifyFastPath(task.userPrompt, index) : ({ mode: 'none', reason: 'disabled' } as const)
     let fastTool: FastPathTool | undefined
     if (fast.mode === 'tool' || (fast.mode === 'local-single' && settings.costMode !== 'quality' && profiles.some((profile) => profile.available))) {
       const files = fast.mode === 'tool' ? fast.tool.files : [fast.file]
@@ -273,10 +335,11 @@ export class ExecutionService implements OnModuleInit {
             context,
             costMode: settings.costMode,
             localModels: profiles.map((profile) => ({ role: profile.roles.join('/'), model: profile.model, toolCalling: profile.toolCalling, strengths: [] })),
-            maxTasks: settings.maxTasks,
+            maxTasks,
             feedback,
             agents,
             skills,
+            ...(design ? { design: design.brief } : {}),
           },
           {
             runId: `plan-${taskId}`,
@@ -296,8 +359,13 @@ export class ExecutionService implements OnModuleInit {
           },
         )
         plan = result
-        source = orchestrator.id
+        // duo: 'duo:<lead>+<partner>' (the plan message and the Leitstand name both orchestrators)
+        source = orchestratorLabel(orchestrator)
         await this.recordPlanCall(orchestrator, 'ok', Date.now() - started, meta)
+        if (meta.duo) {
+          const duo = duoReconciledMessage(meta.duo)
+          await this.chat(taskId, 'assistant', duo.content, duo.metadata)
+        }
       } catch (error) {
         const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
         // a rejected plan (needs_clarification, invalid_output) still used the quota: book its tokens
@@ -313,12 +381,12 @@ export class ExecutionService implements OnModuleInit {
           return { taskPlan: undefined, subtasks: [] as Subtask[], routing: undefined, warnings, source: 'clarification', questions }
         }
         warnings.push(`${orchestrator.displayName} planning failed (${kind}): ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)
-        plan = deterministicPlan(task.userPrompt, index, { maxTasks: settings.maxTasks })
+        plan = deterministicPlan(task.userPrompt, index, { maxTasks })
         source = 'deterministic-fallback'
       }
     } else {
-      warnings.push(settings.orchestrator ? `${settings.orchestrator} is not connected; using the deterministic fallback planner.` : 'No orchestrator selected; using the deterministic fallback planner.')
-      plan = deterministicPlan(task.userPrompt, index, { maxTasks: settings.maxTasks })
+      warnings.push(resolved.notice ? `${resolved.notice} Using the deterministic fallback planner.` : settings.orchestrator ? `${settings.orchestrator} is not connected; using the deterministic fallback planner.` : 'No orchestrator selected; using the deterministic fallback planner.')
+      plan = deterministicPlan(task.userPrompt, index, { maxTasks })
       source = 'deterministic-fallback'
     }
 
@@ -326,13 +394,20 @@ export class ExecutionService implements OnModuleInit {
     this.events.publish('run', 'plan_progress', { taskId, kind: 'phase', phase: 'saving' })
     // agent manager: each subtask gets an agent profile (the user can change it): the planner's choice, else the
     // agent named in the request (one-task plans only), else the best keyword match
-    const agents = assignAgents(await agentProfilesPromise, plan.tasks, task.userPrompt)
+    let agents: Array<AgentProfile | undefined> = assignAgents(await agentProfilesPromise, plan.tasks, task.userPrompt)
     // pinned skills per subtask: only active skills (the planner may invent names); a one-task plan also gets the
     // skills named in the request, like the named agent
     const activeSkills = await activeSkillsPromise
     const known = new Set(activeSkills.map((skill) => skill.name))
     const requestedSkills = plan.tasks.length === 1 ? activeSkills.filter((skill) => skill.requested).map((skill) => skill.name) : []
     plan = { ...plan, tasks: plan.tasks.map((planned) => ({ ...planned, skills: [...new Set([...planned.skills.filter((name) => known.has(name)), ...requestedSkills])] })) }
+    // deterministic design-001 (writes design/tokens.css, DESIGN.md, mockup.html) first; set here because
+    // normalizePlan drops dependencies on ids the planner did not create
+    const designTool = design ? designFilesTool(design.brief, design.mockupHtml) : undefined
+    if (designTool) {
+      plan = withDesignTask(plan, designPlanTask(designTool))
+      agents = [undefined, ...agents]
+    }
     const created: Subtask[] = await this.prisma.$transaction([
       this.prisma.subtask.deleteMany({ where: { taskId } }),
       ...plan.tasks.map((planned, position) => {
@@ -363,7 +438,7 @@ export class ExecutionService implements OnModuleInit {
             expectedInputTokens: planned.expectedInputTokens,
             suggestedExecutor: planned.suggestedExecutor,
             priority: plan.tasks.length - position,
-            fastPath: position === 0 && fastTool ? asJson(fastTool) : undefined,
+            fastPath: designTool && planned.id === DESIGN_TASK_ID ? asJson(designTool) : position === 0 && fastTool ? asJson(fastTool) : undefined,
             modelReason: planned.rationale,
           },
         })
@@ -375,7 +450,7 @@ export class ExecutionService implements OnModuleInit {
     const autoStartSmall = settings.planApproval && !autoStart && settings.autoStartSmallPlans && isSmallSafePlan(plan, created, routing.assignments, source)
     const needsApproval = settings.planApproval && !autoStart && !autoStartSmall
     // The plan names the local models; loading them overlaps with the user's plan review.
-    void this.localModels.warmup(routing.assignments.filter((entry) => entry.executor === 'local').map((entry) => entry.model), 'plan').catch(() => undefined)
+    this.trackWarmup(taskId, this.localModels.warmup(routing.assignments.filter((entry) => entry.executor === 'local').map((entry) => entry.model), 'plan'))
     const taskPlan = await this.prisma.taskPlan.create({
       data: {
         taskId,
@@ -406,25 +481,11 @@ export class ExecutionService implements OnModuleInit {
     return { taskPlan, subtasks: created, routing, warnings, source }
   }
 
-  private async recordPlanCall(orchestrator: OrchestratorAdapter, status: 'ok' | 'error', durationMs: number, meta?: { model?: string; sessionId?: string; usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; measured: boolean; apiEquivalentUsd?: number; billing: string } }, errorClass?: string) {
-    await this.prisma.modelCall.create({
-      data: {
-        kind: 'orchestrator',
-        provider: orchestrator.id,
-        model: meta?.model ?? orchestrator.id,
-        purpose: 'plan',
-        status,
-        errorClass,
-        sessionId: meta?.sessionId,
-        durationMs,
-        inputTokens: meta?.usage.inputTokens ?? 0,
-        outputTokens: meta?.usage.outputTokens ?? 0,
-        cachedInputTokens: meta?.usage.cachedInputTokens ?? 0,
-        tokensMeasured: meta?.usage.measured ?? false,
-        apiEquivalentUsd: meta?.usage.apiEquivalentUsd === undefined ? undefined : new Prisma.Decimal(meta.usage.apiEquivalentUsd),
-        billing: meta?.usage.billing ?? 'unknown',
-      },
-    })
+  /** Books a plan request: one row, or one per call in duo mode (both plans and the reconciliation). */
+  private async recordPlanCall(orchestrator: OrchestratorAdapter, status: 'ok' | 'error', durationMs: number, meta?: CallMeta, errorClass?: string) {
+    for (const data of modelCallRows(orchestrator.id, meta, { kind: 'orchestrator', purpose: 'plan', status, errorClass, durationMs, billing: 'unknown' })) {
+      await this.prisma.modelCall.create({ data })
+    }
   }
 
   private planMessage(plan: ExecutionPlan, source: string, assignments: Array<{ key: string; executor: string; model?: string }>, warnings: string[], needsApproval: boolean, smallPlan: boolean, agentNames: Array<string | undefined>) {
@@ -435,7 +496,7 @@ export class ExecutionService implements OnModuleInit {
       return `- **${task.id}** ${task.title} — Komplexität ${task.complexity}/5, Risiko ${task.risk}/5 → ${target}${agent ? ` · ${agent}` : ''}${task.skills.length ? ` · Skills: ${task.skills.join(', ')}` : ''}${task.dependsOn.length ? ` (nach ${task.dependsOn.join(', ')})` : ''}`
     })
     return [
-      source === 'fast-path' ? '**Fast Path (ohne Premium-Planung)**' : source === 'deterministic-fallback' ? '**Fallback-Plan (ohne Orchestrator)**' : `**Plan von ${source === 'claude-code' ? 'Claude Code' : 'Codex'}**`,
+      source === 'fast-path' ? '**Fast Path (ohne Premium-Planung)**' : source === 'deterministic-fallback' ? '**Fallback-Plan (ohne Orchestrator)**' : `**Plan von ${orchestratorLabelName(source)}**`,
       plan.summary,
       '',
       ...lines,
@@ -493,7 +554,7 @@ export class ExecutionService implements OnModuleInit {
 
   /** Routing preview ("Modellzuordnungen prüfen"); persisted on the subtasks. */
   async previewRouting(taskId: string) {
-    const [tasks, profiles, stats, orchestrator, settings] = await Promise.all([this.engineTasks(taskId), this.localModels.engineProfiles(), this.suitability(), this.orchestrators.active(), this.settings.get()])
+    const [tasks, profiles, stats, orchestrator, settings] = await Promise.all([this.engineTasks(taskId), this.localModels.engineProfiles(), this.suitability(), taskOverride(this.prisma, taskId).then((override) => this.orchestrators.active(override)), this.settings.get()])
     const assignments = []
     const updates = []
     for (const task of tasks) {
@@ -537,6 +598,10 @@ export class ExecutionService implements OnModuleInit {
   private async startLocked(taskId: string) {
     const task = await this.prisma.task.findUniqueOrThrow({ where: { id: taskId }, include: { project: true, subtasks: true } })
     if (task.currentStep === 'plan_clarification') throw new BadRequestException('Der Orchestrator hat Rückfragen – bitte beantworten und neu planen.')
+    if (task.currentStep === 'designing') throw new BadRequestException('Der Design-Entwurf wird noch erstellt – die Planung folgt nach der Freigabe.')
+    if (task.currentStep === 'awaiting_design_approval') throw new BadRequestException('Der Design-Entwurf wartet auf deine Freigabe – freigeben, überarbeiten oder ohne Design planen.')
+    // subtasks of an older plan must not run while the design phase that replaces it has failed
+    if (task.currentStep === 'design_failed') throw new BadRequestException('Der Design-Entwurf ist fehlgeschlagen – neu entwerfen oder ohne Design planen.')
     if (!task.subtasks.length) throw new BadRequestException('The task has no plan yet.')
     // git is set up here at the latest (no repository or no commit yet): the user never has to do it.
     // Checked before a run exists: otherwise the run is created and fails right away.
@@ -548,7 +613,7 @@ export class ExecutionService implements OnModuleInit {
     const active = await this.prisma.executionRun.findFirst({ where: { taskId, status: { in: [...ACTIVE_STATUSES] } } })
     if (active) return active
     const settings = await this.settings.get()
-    const orchestrator = await this.orchestrators.active()
+    const orchestrator = await this.orchestrators.active(await taskOverride(this.prisma, taskId))
     // A fresh run gets a fresh integration branch, so every task runs again (resume keeps completed ones).
     await this.prisma.subtask.updateMany({ where: { taskId }, data: { status: 'queued', errorMessage: null, attempts: 0, commitSha: null } })
     const execution = await this.prisma.executionRun.create({
@@ -556,7 +621,7 @@ export class ExecutionService implements OnModuleInit {
         taskId,
         projectId: task.projectId,
         status: 'pending',
-        orchestrator: orchestrator?.id ?? null,
+        orchestrator: orchestrator ? orchestratorLabel(orchestrator) : null,
         costMode: settings.costMode,
         approvalMode: settings.approvalMode,
         premiumAllowed: settings.premiumExecutionAllowed,
@@ -596,21 +661,28 @@ export class ExecutionService implements OnModuleInit {
     const execution = await this.prisma.executionRun.findUniqueOrThrow({ where: { id: executionId }, include: { task: { include: { project: true } } } })
     const project = execution.task.project
     const settings = await this.settings.get()
-    void this.prisma.subtask
-      .findMany({ where: { taskId: execution.taskId, selectedModelClass: 'local_llm' }, select: { selectedModelName: true } })
-      .then((rows) => this.localModels.warmup(rows.map((row) => row.selectedModelName), 'run'))
-      .catch(() => undefined)
+    this.trackWarmup(
+      execution.taskId,
+      this.prisma.subtask
+        .findMany({ where: { taskId: execution.taskId, selectedModelClass: 'local_llm' }, select: { selectedModelName: true } })
+        .then((rows) => this.localModels.warmup(rows.map((row) => row.selectedModelName), 'run')),
+    )
     // the run only needs the index and the checks (the planning digest is not rebuilt here)
-    const [tasks, profiles, stats, orchestrator, localSlots, ollama, { index, checks }] = await Promise.all([
+    const [tasks, profiles, stats, resolved, localSlots, ollama, { index, checks }, design] = await Promise.all([
       this.engineTasks(execution.taskId),
       this.localModels.engineProfiles(),
       this.suitability(),
-      this.orchestrators.active(),
+      // a duo run stays a duo (also when resumed); otherwise the task's own choice, else the settings as before
+      (async () => this.orchestrators.activeWithNotice(overrideFromLabel(execution.orchestrator) === 'duo' ? 'duo' : await taskOverride(this.prisma, execution.taskId)))(),
       this.localModels.localSlots(),
       this.localModels.client(),
       this.repoContext.runContext(project.id, project.repoPath, execution.task.userPrompt),
+      // loaded once per run: UI tasks get the approved design as instructions (also local models without tools)
+      execution.task.designMode === 'skip' ? undefined : this.design?.approved(execution.taskId).catch(() => undefined),
     ])
+    const orchestrator = resolved.adapter
     const store = new PrismaEngineStore(this.prisma, this.events, executionId, execution.taskId)
+    if (resolved.notice) store.emit({ runId: executionId, level: 'warn', type: 'orchestrator_notice', message: resolved.notice })
     if (!profiles.some((profile) => profile.available)) {
       store.emit({ runId: executionId, level: 'warn', type: 'no_local_models', message: 'No local model roles are assigned/installed; tasks will be routed to the premium orchestrator or blocked.' })
     }
@@ -651,20 +723,24 @@ export class ExecutionService implements OnModuleInit {
           taskTimeoutMs: settings.taskTimeoutMinutes * 60_000,
           strictScope: settings.strictScope,
           reviewFixRounds: settings.reviewFixRounds,
+          premiumHints: settings.premiumHints,
           keepAlive: `${settings.keepAliveMinutes}m`,
         },
         // skills, MCP and plugin tools assigned to the "coder" role
-        agentResources: this.agentResources
+        agentResources: this.agentResources || design
           ? async ({ task, worktreePath, supportsTools }) => {
-              const profile = task.agent ? await this.prisma.agentProfile.findUnique({ where: { id: task.agent.id } }) : null
-              return this.agentResources!.forAgent('coder', {
-                projectId: project.id,
-                goal: `${task.title}\n${task.description}`,
-                cwd: worktreePath,
-                supportsTools,
-                pinned: task.skills ?? [],
-                profile: profile ? { skills: profile.skills as string[], mcpServers: profile.mcpServers as string[], pluginTools: profile.pluginTools } : undefined,
-              })
+              const profile = task.agent && this.agentResources ? await this.prisma.agentProfile.findUnique({ where: { id: task.agent.id } }) : null
+              const resources = this.agentResources
+                ? await this.agentResources.forAgent('coder', {
+                    projectId: project.id,
+                    goal: `${task.title}\n${task.description}`,
+                    cwd: worktreePath,
+                    supportsTools,
+                    pinned: task.skills ?? [],
+                    profile: profile ? { skills: profile.skills as string[], mcpServers: profile.mcpServers as string[], pluginTools: profile.pluginTools } : undefined,
+                  })
+                : { tools: [], sources: [] }
+              return design ? withDesignGuidance(resources, design.brief, task) : resources
             }
           : undefined,
       },
@@ -701,6 +777,96 @@ export class ExecutionService implements OnModuleInit {
       this.runners.delete(executionId)
       const final = await this.prisma.executionRun.findUnique({ where: { id: executionId }, select: { status: true } }).catch(() => null)
       this.events.publish('run', 'execution_finished', { executionId, taskId: execution.taskId, projectId: execution.projectId, sessionId: execution.task.sessionId, status: final?.status }, executionId)
+      // the models of the run leave the VRAM right away instead of after keepAliveMinutes (on shutdown the
+      // run is resumed later, its models stay)
+      if (!this.shuttingDown) void this.unloadRunModels(executionId, execution.taskId)
+    }
+  }
+
+  /** Models warmed for a task (plan and run warm-ups): the end of its run unloads them as well. */
+  private readonly warmed = new Map<string, { at: number; models: Set<string> }>()
+
+  /** Warm-up requests per task that have not reported their models yet (unloadRunModels waits for them). */
+  private readonly pendingWarmups = new Map<string, Set<Promise<void>>>()
+
+  private trackWarmup(taskId: string, warmup: Promise<string[] | undefined>) {
+    const pending = this.pendingWarmups.get(taskId) ?? new Set<Promise<void>>()
+    const tracked: Promise<void> = warmup
+      .then((started) => this.rememberWarmed(taskId, started))
+      .catch(() => undefined)
+      .finally(() => {
+        pending.delete(tracked)
+        if (!pending.size && this.pendingWarmups.get(taskId) === pending) this.pendingWarmups.delete(taskId)
+      })
+    pending.add(tracked)
+    this.pendingWarmups.set(taskId, pending)
+  }
+
+  private rememberWarmed(taskId: string, models: string[] | undefined) {
+    if (!Array.isArray(models) || !models.length) return
+    const entry = this.warmed.get(taskId) ?? { at: 0, models: new Set<string>() }
+    entry.at = Date.now()
+    for (const model of models) entry.models.add(model)
+    this.warmed.set(taskId, entry)
+  }
+
+  /**
+   * Unloads the local models of a finished run (models of its subtasks and agent attempts, models warmed
+   * for its task) from the app's Ollama instance, unless another active run or a freshly planned task
+   * still needs them. Best effort: never throws; returns the unloaded models.
+   */
+  async unloadRunModels(executionId: string, taskId: string): Promise<string[]> {
+    try {
+      const settings = await this.settings.get()
+      if (!settings.unloadAfterRun) {
+        this.warmed.delete(taskId)
+        return []
+      }
+      // a warm-up of this task still being prepared would load its models after the unload: wait for it first
+      await Promise.allSettled([...(this.pendingWarmups.get(taskId) ?? [])])
+      const warmed = this.warmed.get(taskId)
+      this.warmed.delete(taskId)
+      const localNames = (rows: Array<{ selectedModelClass?: string | null; selectedModelName: string | null; manualModel?: string | null }>) =>
+        rows.flatMap((row) => [row.selectedModelClass === 'local_llm' ? row.selectedModelName : null, row.manualModel && row.manualModel !== 'premium' ? row.manualModel : null]).filter((name): name is string => Boolean(name))
+      const [subtasks, attempts] = await Promise.all([
+        this.prisma.subtask.findMany({ where: { taskId }, select: { selectedModelClass: true, selectedModelName: true, manualModel: true } }),
+        this.prisma.agentRun.findMany({ where: { executionId, selectedModelClass: 'local_llm' }, select: { selectedModelClass: true, selectedModelName: true } }),
+      ])
+      const used = new Set([...localNames(subtasks), ...localNames(attempts), ...(warmed?.models ?? [])])
+      if (!used.size) return []
+      // models still loading in the background (warm-up) appear in `running` only once loaded
+      await this.localModels.loadsSettled([...used])
+      // read after the waits: a run started meanwhile (also a resumed run of this task) keeps its models
+      const otherRuns = await this.prisma.executionRun.findMany({ where: { id: { not: executionId }, status: { in: [...ACTIVE_STATUSES] } }, select: { id: true, taskId: true } })
+      if (otherRuns.some((run) => run.taskId === taskId)) return []
+      const otherTasks = [...new Set(otherRuns.map((run) => run.taskId))]
+      const [otherSubtasks, otherAttempts] = otherRuns.length
+        ? await Promise.all([
+            this.prisma.subtask.findMany({ where: { taskId: { in: otherTasks } }, select: { selectedModelClass: true, selectedModelName: true, manualModel: true } }),
+            // escalations of other runs use models their subtasks do not name
+            this.prisma.agentRun.findMany({ where: { executionId: { in: otherRuns.map((run) => run.id) }, selectedModelClass: 'local_llm' }, select: { selectedModelClass: true, selectedModelName: true } }),
+          ])
+        : [[], []]
+      const needed = new Set([...localNames(otherSubtasks), ...localNames(otherAttempts)])
+      // models warmed for other tasks (a plan waiting for approval, another run) stay while Ollama would keep them anyway
+      for (const [otherTask, entry] of this.warmed) {
+        if (otherTask !== taskId && (otherTasks.includes(otherTask) || Date.now() - entry.at < settings.keepAliveMinutes * 60_000)) for (const model of entry.models) needed.add(model)
+      }
+      const loaded = new Set((await this.localModels.running()).map((entry) => entry.name))
+      const unloaded: string[] = []
+      for (const model of used) {
+        if (needed.has(model) || !loaded.has(model)) continue
+        try {
+          await this.localModels.unload(model)
+          unloaded.push(model)
+        } catch (error) {
+          this.logger.warn(`Model ${model} could not be unloaded after run ${executionId}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      return unloaded
+    } catch (error) {
+      this.logger.warn(`Unloading the models of run ${executionId} failed: ${error instanceof Error ? error.message : String(error)}`)
+      return []
     }
   }
 
@@ -874,7 +1040,10 @@ export class ExecutionService implements OnModuleInit {
       }
       // merged text is new code: the project's checks decide whether it is kept
       checks ??= (await this.repoContext.runContext(run.project.id, repoPath, run.task.userPrompt)).checks
-      const report = await runValidationChecks(run.integrationWorktree, checks, { allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+      // compared with the run's own final validation: failures it already accepted (red before the change) do not count
+      const raw = await runValidationChecks(run.integrationWorktree, checks, { allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+      const validated = run.finalValidation as Partial<ValidationReport> | null
+      const report = !raw.ok && Array.isArray(validated?.results) ? againstBaseline(raw, validated as ValidationReport) : raw
       if (report.ok) {
         caughtUp = merge
         break
@@ -924,7 +1093,8 @@ export class ExecutionService implements OnModuleInit {
         },
       }
     }
-    const orchestrator = await this.orchestrators.active()
+    const active = await this.orchestrators.active()
+    const orchestrator = isDuo(active) ? active.leadAdapter : active
     if (!orchestrator) return undefined
     return {
       label: orchestrator.displayName,
@@ -935,16 +1105,14 @@ export class ExecutionService implements OnModuleInit {
         const [system, user] = mergePrompt(hunk, feedback)
         try {
           const { result, meta } = await orchestrator.chat({ question: `${system!.content}\n\n${user!.content}`, context: { summary: '', relevantFiles: [], validationCommands: [] } }, { runId: `merge-${executionId}-${started}`, cwd, timeoutMs: 5 * 60_000, effort: 'low' })
-          await this.prisma.modelCall.create({
-            data: {
-              kind: 'orchestrator', provider: orchestrator.id, model: meta.model ?? orchestrator.id, purpose: 'merge', status: 'ok', durationMs: meta.durationMs, executionId,
-              inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, cachedInputTokens: meta.usage.cachedInputTokens, tokensMeasured: meta.usage.measured,
-              apiEquivalentUsd: meta.usage.apiEquivalentUsd === undefined ? undefined : new Prisma.Decimal(meta.usage.apiEquivalentUsd), billing: meta.usage.billing,
-            },
-          })
+          for (const data of modelCallRows(orchestrator.id, meta, { kind: 'orchestrator', purpose: 'merge', status: 'ok', durationMs: meta.durationMs, executionId })) {
+            await this.prisma.modelCall.create({ data })
+          }
           return accepted(hunk, result.answer)
         } catch (error) {
-          await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: orchestrator.id, purpose: 'merge', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, executionId, ...failedCallFields(error, orchestrator.id) } })
+          for (const data of failedCallRows(orchestrator.id, error, { kind: 'orchestrator', purpose: 'merge', durationMs: Date.now() - started, executionId })) {
+            await this.prisma.modelCall.create({ data })
+          }
           return undefined
         }
       },
@@ -1078,7 +1246,8 @@ export class ExecutionService implements OnModuleInit {
       billing: call.billing,
       peakMemoryMb: call.peakMemoryMb,
     }))
-    return summarizeUsage(usage, { priceOverride: settings.premiumPriceOverride ?? undefined, gpuWatts: settings.gpuWatts ?? undefined })
+    const summary = summarizeUsage(usage, { priceOverride: settings.premiumPriceOverride ?? undefined, gpuWatts: settings.gpuWatts ?? undefined })
+    return { ...summary, premium: { ...summary.premium, byProvider: premiumByProvider(usage) } }
   }
 
   private async chat(taskId: string, role: 'assistant' | 'agent' | 'system', content: string, metadata: Record<string, unknown>) {

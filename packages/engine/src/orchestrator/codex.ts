@@ -3,8 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { runProcess } from '../util/process.js'
 import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from './cli-base.js'
-import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
-import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
+import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, repairHintPrompt, reviewPrompt } from './prompts.js'
+import { designPrompt, DESIGN_SYSTEM_PROMPT } from './design-prompt.js'
+import { ANALYSIS_SCHEMA, CHAT_SCHEMA, DESIGN_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizeDesignDraft, normalizePlan, normalizeRepairHint, normalizeReview, PLAN_SCHEMA, REPAIR_HINT_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
   mergeCallMeta,
   normalizeWithMeta,
@@ -16,13 +17,16 @@ import {
   type ChatInput,
   type ConnectionResult,
   type ConnectionStatus,
+  type DesignInput,
   type DiagnosticReport,
   type ExecutionInput,
   type OrchestratorAdapter,
   type OrchestratorCapabilities,
   type PlanningInput,
+  type RepairHintInput,
   type ReviewInput,
   type RuntimeDetection,
+  type StructuredRequest,
   type UsageReport,
 } from './types.js'
 
@@ -226,9 +230,20 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
     return { result: normalizeWithMeta(call.meta, () => normalizePlan(call.structured, input.maxTasks)), meta: call.meta }
   }
 
+  async createDesign(input: DesignInput, ctx: CallContext) {
+    const prompt = `${DESIGN_SYSTEM_PROMPT}\n\n${designPrompt({ ...input, provider: 'codex' })}`
+    const call = await this.callStructured(prompt, { schema: DESIGN_SCHEMA, sandbox: 'read-only', ephemeral: true }, ctx)
+    return { result: normalizeWithMeta(call.meta, () => normalizeDesignDraft(call.structured)), meta: call.meta }
+  }
+
   async reviewResult(input: ReviewInput, ctx: CallContext) {
     const call = await this.callStructured(withSystem(reviewPrompt(input)), { schema: REVIEW_SCHEMA, sandbox: 'read-only', ephemeral: true }, ctx)
     return { result: normalizeWithMeta(call.meta, () => normalizeReview(call.structured)), meta: call.meta }
+  }
+
+  async repairHint(input: RepairHintInput, ctx: CallContext) {
+    const call = await this.callStructured(withSystem(repairHintPrompt(input)), { schema: REPAIR_HINT_SCHEMA, sandbox: 'read-only', ephemeral: true }, ctx)
+    return { result: normalizeWithMeta(call.meta, () => normalizeRepairHint(call.structured)), meta: call.meta }
   }
 
   async chat(input: ChatInput, ctx: CallContext) {
@@ -253,6 +268,12 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
     }
     const answer = (call.structured as { answer?: unknown })?.answer
     return { result: { answer: typeof answer === 'string' ? answer : call.text }, meta: call.meta }
+  }
+
+  async structuredCall(request: StructuredRequest, ctx: CallContext) {
+    const prompt = `${request.systemPrompt ?? ORCHESTRATOR_SYSTEM_PROMPT}\n\n${request.prompt}`
+    const call = await this.callStructured(prompt, { schema: request.schema, sandbox: 'read-only', ephemeral: true }, ctx)
+    return { result: call.structured, meta: call.meta }
   }
 
   async executeComplexTask(input: ExecutionInput, ctx: CallContext) {
@@ -323,7 +344,11 @@ export class CodexAdapter extends CliOrchestratorBase implements OrchestratorAda
     const schemaFile = path.join(schemaDir, 'schema.json')
     await fs.writeFile(schemaFile, JSON.stringify(options.schema), 'utf8')
 
-    const shared = ['--json', '--output-schema', schemaFile, '--skip-git-repo-check', '--sandbox', options.sandbox]
+    // `codex exec resume` accepts neither `--sandbox` nor `-C` (verified with codex-cli 0.153.4): the sandbox is
+    // set via config there and the working directory comes from the spawned process (ctx.cwd).
+    const shared = ['--json', '--output-schema', schemaFile, '--skip-git-repo-check']
+    if (options.resumeSessionId) shared.push('-c', `sandbox_mode="${options.sandbox}"`)
+    else shared.push('--sandbox', options.sandbox)
     // MCP isolation (verified with `codex mcp list --json`): a `-c mcp_servers={…}` table override only
     // merges, so the user's own servers would stay active. Instead plugin-provided servers are switched
     // off with the `plugins` feature and every remaining configured server with `enabled=false` – all

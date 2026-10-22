@@ -9,11 +9,12 @@ import { PrismaService } from '../common/prisma.service.js'
 import { asJson } from '../common/json.js'
 import { EventBusService } from '../runtime/event-bus.service.js'
 import { runtimeConfig } from '../runtime/runtime-config.js'
+import { SKILL_CATALOG } from '@multi-ai-coder/shared'
 import { namesSkill, parseSkill, renderSkill, SKILL_NAME, SkillFormatError, skillRelevance, type SkillFrontMatter } from './skill-format.js'
 
 export type SkillSource = 'builtin' | 'user' | 'project'
 /** Roles an agent can have; skills, MCP servers and plugin tools are assigned to roles. */
-export const AGENT_ROLES = ['planner', 'coder', 'chat'] as const
+export const AGENT_ROLES = ['planner', 'coder', 'chat', 'designer'] as const
 export type AgentRole = (typeof AGENT_ROLES)[number]
 
 export interface Skill {
@@ -43,6 +44,7 @@ export interface Skill {
 
 const MAX_FILES = 200
 const SCRIPT_TIMEOUT_MS = 120_000
+const catalogSkills = new Set(SKILL_CATALOG.map((skill) => skill.id))
 
 /**
  * Scripts an agent may run for a skill: "allowed actions" name scripts of the skill (with or
@@ -146,42 +148,47 @@ export class SkillsService {
     const skills: Skill[] = []
     for (const root of await this.roots(projectId)) {
       if (!existsSync(root.dir)) continue
-      for (const entry of await fs.readdir(root.dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-        const dir = path.join(root.dir, entry.name)
-        const file = path.join(dir, 'SKILL.md')
-        if (!existsSync(file)) continue
-        const base = { source: root.source, location: root.location, dir, editable: root.source !== 'builtin' }
-        try {
-          const { meta, body } = parseSkill(await fs.readFile(file, 'utf8'))
-          const key = this.keyOf(root.source, meta.name, root.projectId)
-          if (skills.some((skill) => skill.key === key)) continue
-          const files = await listFiles(dir)
-          const scripts = files.filter((candidate) => candidate.startsWith('scripts/'))
-          const scriptsHash = scripts.length ? await hashFiles(dir, scripts) : undefined
-          const state = (projectId ? states.get(`activation:${projectId}:${key}`) : undefined) ?? states.get(key)
-          skills.push({
-            ...base,
-            key,
-            name: meta.name,
-            description: meta.description,
-            triggers: meta.triggers,
-            version: meta.version,
-            tools: meta.tools,
-            allowedActions: meta.allowedActions,
-            resources: meta.resources,
-            testTask: meta.testTask,
-            bodyChars: body.length,
-            files,
-            scripts,
-            scriptsHash,
-            scriptsApproved: Boolean(scriptsHash && state?.scriptsApprovedHash === scriptsHash),
-            enabled: state?.enabled ?? true,
-            agents: (state?.agents as string[] | undefined) ?? ['*'],
-          })
-        } catch (error) {
-          skills.push({ ...base, key: this.keyOf(root.source, entry.name, root.projectId), name: entry.name, description: '', triggers: [], bodyChars: 0, files: [], scripts: [], scriptsApproved: false, enabled: false, agents: [], error: error instanceof Error ? error.message : String(error) })
-        }
+      const entries = await fs.readdir(root.dir, { withFileTypes: true })
+      // Bounded parallel reads keep the larger shipped catalog cheap; scripts are still hashed on
+      // every discovery so changing their bytes immediately invalidates an existing approval.
+      for (let offset = 0; offset < entries.length; offset += 8) {
+        const batch = await Promise.all(entries.slice(offset, offset + 8).map(async (entry): Promise<Skill | undefined> => {
+          if (!entry.isDirectory()) return undefined
+          const dir = path.join(root.dir, entry.name)
+          const file = path.join(dir, 'SKILL.md')
+          if (!existsSync(file)) return undefined
+          const base = { source: root.source, location: root.location, dir, editable: root.source !== 'builtin' }
+          try {
+            const { meta, body } = parseSkill(await fs.readFile(file, 'utf8'))
+            const key = this.keyOf(root.source, meta.name, root.projectId)
+            const files = await listFiles(dir)
+            const scripts = files.filter((candidate) => candidate.startsWith('scripts/'))
+            const scriptsHash = scripts.length ? await hashFiles(dir, scripts) : undefined
+            const state = (projectId ? states.get(`activation:${projectId}:${key}`) : undefined) ?? states.get(key)
+            return {
+              ...base,
+              key,
+              name: meta.name,
+              description: meta.description,
+              triggers: meta.triggers,
+              version: meta.version,
+              tools: meta.tools,
+              allowedActions: meta.allowedActions,
+              resources: meta.resources,
+              testTask: meta.testTask,
+              bodyChars: body.length,
+              files,
+              scripts,
+              scriptsHash,
+              scriptsApproved: Boolean(scriptsHash && state?.scriptsApprovedHash === scriptsHash),
+              enabled: state?.enabled ?? !(root.source === 'builtin' && catalogSkills.has(meta.name)),
+              agents: (state?.agents as string[] | undefined) ?? ['*'],
+            }
+          } catch (error) {
+            return { ...base, key: this.keyOf(root.source, entry.name, root.projectId), name: entry.name, description: '', triggers: [], bodyChars: 0, files: [], scripts: [], scriptsApproved: false, enabled: false, agents: [], error: error instanceof Error ? error.message : String(error) }
+          }
+        }))
+        for (const skill of batch) if (skill && !skills.some((entry) => entry.key === skill.key)) skills.push(skill)
       }
     }
     return skills

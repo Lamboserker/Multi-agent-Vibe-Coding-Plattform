@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addedLines, parseUnifiedDiff } from './diff'
-import { agentCards, decisions, localizeReason, milestones, openQuestions, shortModel, stageInfo, tokenShare } from './leitstand'
+import { agentCards, decisions, designInterrupted, designRevision, designView, isColorValue, localizeReason, milestones, openQuestions, shortModel, stageInfo, tokenShare } from './leitstand'
 import type { ChatMessage, ExecutionRun, RunEvent, Subtask, Task, TaskPlan } from './types'
 
 const subtask = (key: string, patch: Partial<Subtask> = {}): Subtask => ({
@@ -40,6 +40,9 @@ describe('leitstand derivations', () => {
     const run = { taskId: 'task', status: 'awaiting_approval' } as ExecutionRun
     expect(stageInfo({ ...task, currentStep: 'awaiting_approval' }, run)).toMatchObject({ state: 'approval', phase: 3 })
     expect(stageInfo({ ...task, currentStep: 'plan_clarification' }, run)).toMatchObject({ state: 'plan_questions', tone: 'tool', phase: 1 })
+    expect(stageInfo({ ...task, currentStep: 'designing' }, undefined)).toMatchObject({ state: 'designing', tone: 'accent', phase: 1, label: 'Design-Entwurf läuft' })
+    expect(stageInfo({ ...task, currentStep: 'awaiting_design_approval' }, run)).toMatchObject({ state: 'design_review', tone: 'tool', phase: 1, label: 'Design prüfen' })
+    expect(stageInfo({ ...task, currentStep: 'design_failed' }, undefined)).toMatchObject({ state: 'design_error', tone: 'err', phase: 1 })
   })
 
   it('builds agent cards with kind, role, forecast wait and checks', () => {
@@ -61,6 +64,17 @@ describe('leitstand derivations', () => {
     expect(card).toMatchObject({ kind: 'premium', escalated: true, role: 'Eskaliert an Premium (manuell)' })
   })
 
+  it('sorts card logs by time and ends a finished card on its last persisted event', () => {
+    const events = [event('task_integrated', 'T1: integrated (1 file(s), tests 4 passed).', { subtaskId: 'id-T1', createdAt: '2026-10-16T08:02:00.000Z' })]
+    const live = [{ ts: '2026-10-16T08:01:00.000Z', level: 'info', type: 'check_output', message: 'late chunk A', subtaskId: 'id-T1' }, { ts: '2026-10-16T08:03:00.000Z', level: 'info', type: 'check_output', message: 'late chunk B', subtaskId: 'id-T1' }]
+    const [done] = agentCards({ subtasks: [subtask('T1', { status: 'completed' })], events, live })
+    expect(done!.logs.map((entry) => entry.text)).toHaveLength(3)
+    expect([done!.logs[0]!.text, done!.logs[2]!.text]).toEqual(['late chunk A', 'late chunk B'])
+    expect(done!.lastLog).toBe(done!.logs[1]!.text)
+    const [running] = agentCards({ subtasks: [subtask('T1', { status: 'running' })], events, live })
+    expect(running!.lastLog).toBe('late chunk B')
+  })
+
   it('collects decisions and chat milestones from plan and events', () => {
     const subtasks = [subtask('T1'), subtask('T2', { selectedModelClass: 'premium_llm' }), subtask('T3', { dependsOn: ['T1', 'T2'] })]
     const events = [event('validation_failed', 'T2: typecheck failed', { subtaskId: 'id-T2', createdAt: '2026-10-16T08:05:00.000Z' }), event('task_integrated', 'T1: integrated (2 file(s), tests 12 passed).', { subtaskId: 'id-T1' })]
@@ -72,6 +86,21 @@ describe('leitstand derivations', () => {
       { at: events[0]!.createdAt, key: 'T2', text: 'Prüfung fehlgeschlagen, Reparatur folgt', tone: 'tool' },
       { at: events[1]!.createdAt, key: 'T1', text: 'fertig · integriert · 2 Datei(en) · 12 Tests ok', tone: 'local' },
     ])
+  })
+
+  it('shows a premium repair hint with its diagnosis in decisions and milestones', () => {
+    const subtasks = [subtask('T1')]
+    const events = [
+      event('premium_hint', 'T1: premium repair hint (confidence high, 1 edit(s)): Gruß falsch.', { subtaskId: 'id-T1', data: { diagnosis: 'Gruß falsch.', confidence: 'high' } }),
+      event('premium_hint_skipped', 'T1: premium repair hint not actionable (confidence low, 0 edit(s)).', { subtaskId: 'id-T1', createdAt: '2026-10-16T08:01:00.000Z' }),
+    ]
+    const list = decisions({ subtasks, events }).map((entry) => entry.text)
+    expect(list).toEqual([
+      'T1: Premium gibt Reparaturhinweise, das lokale Modell setzt sie um – Gruß falsch.',
+      'T1: kein verwertbarer Premium-Hinweis – Premium übernimmt die Ausführung.',
+    ])
+    expect(milestones(events, subtasks)).toEqual([{ at: events[0]!.createdAt, key: 'T1', text: 'Premium-Hinweis · lokales Modell repariert', tone: 'accent' }])
+    expect(localizeReason('Orchestrator suggested premium; balanced mode keeps complexity 2/risk 1 local.')).toBe('Orchestrator empfiehlt Premium; Balanced bleibt bei Komplexität 2/Risiko 1 lokal')
   })
 
   it('formats model names, reasons and the local token share', () => {
@@ -104,5 +133,56 @@ describe('openQuestions', () => {
     expect(openQuestions([message({ metadata: { kind: 'plan_questions', questions: ['Frage?'] } })], undefined)).toEqual([])
     expect(openQuestions([message({ metadata: { kind: 'task_plan' } })], 'task')).toEqual([])
     expect(openQuestions([message({ metadata: { kind: 'plan_questions', questions: 'keine Liste' } })], 'task')).toEqual([])
+  })
+})
+
+describe('design phase', () => {
+  let next = 0
+  const message = (patch: Partial<ChatMessage>): ChatMessage => ({ id: `d${(next += 1)}`, taskId: 'task', role: 'system', content: '', metadata: {}, createdAt: '2026-10-21T08:00:00.000Z', ...patch })
+
+  it('splits the stored spec into color swatches, other tokens, components and screens', () => {
+    const view = designView({
+      direction: 'Ruhig, Zinc-Basis, ein Akzent',
+      tokens: [
+        { name: '--accent', value: '#6366f1', darkValue: '#818cf8', group: 'color' },
+        { name: '--surface', value: 'oklch(0.98 0 0)', darkValue: '', group: 'color' },
+        { name: '--bg-image', value: 'url(https://evil.example/x.png)', darkValue: '', group: 'color' },
+        { name: '--radius', value: '12px', darkValue: '', group: 'radius' },
+        { name: '', value: '#000', darkValue: '', group: 'color' },
+        'kaputt',
+      ],
+      components: [{ name: 'KpiCard', purpose: 'Kennzahl', file: 'src/KpiCard.tsx', spec: 'Karte', tokens: ['--accent'] }, { purpose: 'ohne Namen' }],
+      screens: [{ name: 'Übersicht', route: '/', layout: 'Bento-Grid', components: ['KpiCard', 3] }],
+      questions: ['Dunkles Theme?', ''],
+    })
+    expect(view.direction).toBe('Ruhig, Zinc-Basis, ein Akzent')
+    expect(view.colors.map((token) => token.name)).toEqual(['--accent', '--surface'])
+    expect(view.tokens.map((token) => token.name)).toEqual(['--bg-image', '--radius'])
+    expect(view.components).toEqual([{ name: 'KpiCard', purpose: 'Kennzahl', file: 'src/KpiCard.tsx', spec: 'Karte' }])
+    expect(view.screens).toEqual([{ name: 'Übersicht', route: '/', layout: 'Bento-Grid', components: ['KpiCard'] }])
+    expect(view.questions).toEqual(['Dunkles Theme?'])
+  })
+
+  it('is empty for a missing or malformed spec', () => {
+    for (const spec of [null, undefined, 'text', { tokens: 'x', components: {}, screens: null }]) expect(designView(spec)).toEqual({ direction: '', colors: [], tokens: [], components: [], screens: [], questions: [] })
+  })
+
+  it('accepts only literal colors as swatches', () => {
+    for (const value of ['#fff', '#18181bcc', 'rgb(0 0 0 / 0.5)', 'hsl(240 5% 96%)', 'oklch(0.7 0.1 250)', 'transparent', 'white']) expect(isColorValue(value)).toBe(true)
+    for (const value of ['', 'url(x.png)', 'var(--accent)', 'linear-gradient(red, blue)', 'none', 'inherit', 'expression(alert(1))']) expect(isColorValue(value)).toBe(false)
+  })
+
+  it('keys reloads on the latest design message and detects an interruption', () => {
+    const messages = [
+      message({ metadata: { kind: 'design_requested' } }),
+      message({ role: 'assistant', metadata: { kind: 'design_draft', version: 1 } }),
+      message({ taskId: 'other', metadata: { kind: 'design_error', interrupted: true } }),
+      message({ metadata: { kind: 'planning' } }),
+    ]
+    expect(designRevision(messages, 'task')).toBe(messages[1]!.id)
+    expect(designRevision(messages, undefined)).toBe('')
+    expect(designInterrupted(messages, 'task')).toBe(false)
+    expect(designInterrupted([...messages, message({ metadata: { kind: 'design_error', interrupted: true } })], 'task')).toBe(true)
+    expect(designInterrupted([...messages, message({ metadata: { kind: 'design_error' } })], 'task')).toBe(false)
   })
 })

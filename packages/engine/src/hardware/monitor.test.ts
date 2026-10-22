@@ -25,6 +25,49 @@ describe('resource monitor', () => {
     const warnings = assessResources({ sample, models, hasGpu: true })
     expect(warnings.map((warning) => warning.code)).toEqual(['cpu_offload', 'vram_full'])
     expect(warnings[0]!.message).toContain('60 %')
+    expect(warnings[1]!.message).toContain('auf die CPU ausgelagert')
+  })
+
+  it('attributes full VRAM to other processes when the app models sit fully on the GPU', () => {
+    const sample: ResourceSample = { at: '', cpuPct: 5, ramUsedBytes: 8 * GB, ramTotalBytes: 32 * GB, gpus: [{ index: 0, name: 'RTX', vramUsedMb: 15_800, vramTotalMb: 16_380 }], gpuSource: 'nvidia-smi' }
+    const models = loadedModelUsage([{ name: 'qwen2.5-coder:7b', model: 'qwen2.5-coder:7b', size: 5 * GB, size_vram: 5 * GB, expires_at: '' }])
+    const warnings = assessResources({ sample, models, hasGpu: true })
+    expect(warnings.map((warning) => warning.code)).toEqual(['vram_full'])
+    expect(warnings[0]!.message).toContain('davon 5,0 GB durch Modelle der App')
+    expect(warnings[0]!.message).toContain('anderen Prozessen oder einer anderen Ollama-Instanz')
+    expect(warnings[0]!.message).not.toContain('ausgelagert')
+    // no app model loaded at all: the whole VRAM belongs to others
+    expect(assessResources({ sample, models: [], hasGpu: true })[0]!.message).toContain('davon 0,0 GB')
+  })
+
+  it('probes a failed GPU reader again after the retry pause instead of giving up', async () => {
+    let now = 0
+    let reads = 0
+    let available = false
+    const sampler = new ResourceSampler({
+      now: () => new Date(now),
+      readCpu: () => [{ idle: 0, total: 0 }],
+      readMemory: () => ({ totalBytes: GB, freeBytes: GB }),
+      readGpu: async () => {
+        reads += 1
+        return available ? [{ index: 0, name: 'GPU', utilizationPct: 40 }] : undefined
+      },
+      minIntervalMs: 1000,
+      gpuRetryMs: 30_000,
+    })
+    expect(await sampler.sample()).toMatchObject({ gpuSource: 'none' })
+    available = true
+    for (const at of [1000, 10_000, 29_000]) {
+      now = at
+      expect((await sampler.sample()).gpuSource).toBe('none')
+    }
+    expect(reads).toBe(1)
+    now = 30_000
+    expect(await sampler.sample()).toMatchObject({ gpuSource: 'nvidia-smi', gpus: [{ utilizationPct: 40 }] })
+    now = 31_000
+    await sampler.sample()
+    // telemetry works again: every sample reads the GPU
+    expect(reads).toBe(3)
   })
 
   it('reports missing GPU telemetry instead of guessing', () => {

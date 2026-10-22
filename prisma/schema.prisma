@@ -236,6 +236,8 @@ model Task {
   mode              String            @default("balanced")
   premiumAllowed    Boolean           @default(false)
   currentStep       String            @default("draft")
+  /// Design phase before planning: auto | force | skip
+  designMode        String            @default("auto")
   lastRunId         String?
   sessionId         String?
   session           ChatSession?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
@@ -249,6 +251,7 @@ model Task {
   chatMessages      ChatMessage[]
   plans             TaskPlan[]
   executions        ExecutionRun[]
+  designDrafts      DesignDraft[]
 
   @@index([projectId, createdAt])
   @@index([sessionId])
@@ -428,6 +431,27 @@ model TaskPlan {
   dag               Json     @default("{}")
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  @@index([taskId, createdAt])
+}
+
+// A design draft of a UI task (design phase before planning); the approved one is the base of the plan.
+model DesignDraft {
+  id         String   @id @default(cuid())
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  version    Int      @default(1)
+  /// generating | draft | approved | rejected | failed
+  status     String   @default("generating")
+  provider   String?
+  designType String?
+  summary    String   @default("")
+  /// DesignBrief fields (direction, tokens, components, screens) plus questions
+  spec       Json     @default("{}")
+  mockupHtml String   @default("")
+  feedback   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([taskId, createdAt])
 }
@@ -671,6 +695,41 @@ model McpServer {
 }
 
 /// User decisions about a discovered skill (the skill itself is a folder with SKILL.md).
+model IntegrationInstallation {
+  presetId       String   @id
+  catalogVersion String
+  packageVersion String?
+  serverId       String   @unique
+  owned          Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model IntegrationSetupJob {
+  id          String   @id @default(cuid())
+  presetId    String
+  phase       String
+  serverId    String?
+  message     String   @default("")
+  error       String?
+  /// Only non-secret, validated setup parameters. Secrets go directly to the vault.
+  config      Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([presetId, createdAt])
+}
+
+model IntegrationBundle {
+  id        String   @id
+  version   String
+  /// Explicit selected optional preset ids.
+  optional  Json     @default("[]")
+  /// Resource membership; detaching a bundle never deletes shared resources.
+  members   Json     @default("[]")
+  createdAt DateTime @default(now())
+}
+
 model SkillState {
   /// "<source>:<name>" e.g. "user:react-testing", "project:<projectId>:deploy", "builtin:code-review"
   key            String   @id

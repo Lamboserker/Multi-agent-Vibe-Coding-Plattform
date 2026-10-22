@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import * as actions from '../../lib/actions'
 import { useExecution } from '../../lib/execution'
 import { useLiveState } from '../../lib/store'
-import { SUBTASK_STATUS, workflowState } from '../../lib/workflow'
+import { isWorking, SUBTASK_STATUS, workflowState } from '../../lib/workflow'
 import { Spinner, StatusDot } from '../common'
 
 /** Executions whose diff was opened automatically once (closing the tab is respected). */
@@ -27,11 +27,11 @@ export function RunOverview() {
 
   if (!task || current.state === 'draft') return null
   const subtasks = execution?.task?.subtasks ?? task.subtasks
-  const busy = current.state === 'planning' || current.state === 'running'
+  const busy = isWorking(current.state)
   return (
     <div className="run-overview" data-testid="run-overview">
       <div className="row run-overview-head">
-        {busy ? <Spinner /> : <StatusDot status={current.state === 'done' ? 'ok' : current.state === 'recoverable' || current.state === 'cancelled' || current.state === 'plan_error' ? 'failed' : 'warn'} />}
+        {busy ? <Spinner /> : <StatusDot status={current.state === 'done' ? 'ok' : ['recoverable', 'cancelled', 'plan_error', 'design_error'].includes(current.state) ? 'failed' : 'warn'} />}
         <strong>{current.label}</strong>
         <span className="spacer" />
         <button className="btn small ghost" onClick={() => void actions.openWorkflow()}>

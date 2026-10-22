@@ -127,9 +127,19 @@ export function assessResources(input: { sample: ResourceSample; models: LoadedM
       })
     }
   }
+  // the models passed in are the app's own: only their split proves that something is offloaded
+  const offloaded = models.some((model) => model.sizeBytes > 0 && model.vramBytes < model.sizeBytes)
+  const appModelsGb = models.reduce((sum, model) => sum + model.vramBytes, 0) / 1024 ** 3
   for (const gpu of sample.gpus) {
     if (gpu.vramTotalMb && gpu.vramUsedMb !== undefined && gpu.vramUsedMb / gpu.vramTotalMb >= 0.95) {
-      warnings.push({ code: 'vram_full', severity: 'warn', message: `VRAM von ${gpu.name} ist zu ${Math.round((gpu.vramUsedMb / gpu.vramTotalMb) * 100)} % belegt. Weitere Modelle werden teilweise auf die CPU ausgelagert.` })
+      const used = Math.round((gpu.vramUsedMb / gpu.vramTotalMb) * 100)
+      warnings.push({
+        code: 'vram_full',
+        severity: 'warn',
+        message: offloaded
+          ? `VRAM von ${gpu.name} ist zu ${used} % belegt. Modelle der App werden teilweise auf die CPU ausgelagert.`
+          : `VRAM von ${gpu.name} ist zu ${used} % belegt, davon ${appModelsGb.toFixed(1).replace('.', ',')} GB durch Modelle der App – der Rest gehört anderen Prozessen oder einer anderen Ollama-Instanz.`,
+      })
     }
     if (gpu.temperatureC !== undefined && gpu.temperatureC >= 85) warnings.push({ code: 'gpu_hot', severity: 'warn', message: `${gpu.name} ist ${gpu.temperatureC} °C warm; die GPU kann drosseln.` })
   }
@@ -163,6 +173,8 @@ export interface ResourceSamplerOptions {
   historySize?: number
   /** Samples requested more often than this reuse the last one. */
   minIntervalMs?: number
+  /** After a failed GPU read, the GPU is probed again only after this pause (default 30 s). */
+  gpuRetryMs?: number
 }
 
 /**
@@ -173,7 +185,8 @@ export class ResourceSampler {
   private previousCpu: CpuTimes
   private readonly history: ResourceSample[] = []
   private inflight?: Promise<ResourceSample>
-  private gpuAvailable = true
+  /** Time of the last failed GPU read (a missing nvidia-smi is not probed on every sample). */
+  private gpuFailedAt?: number
 
   constructor(private readonly options: ResourceSamplerOptions = {}) {
     this.previousCpu = (options.readCpu ?? cpuTimes)()
@@ -199,9 +212,11 @@ export class ResourceSampler {
 
   private async take(now: Date): Promise<ResourceSample> {
     const readGpu = this.options.readGpu ?? readNvidiaUsage
-    // a machine without nvidia-smi is not probed again on every sample
-    const gpus = this.gpuAvailable ? await readGpu().catch(() => undefined) : undefined
-    if (!this.options.readGpu && gpus === undefined) this.gpuAvailable = false
+    // a machine without nvidia-smi is not probed on every sample, but again after a pause (driver
+    // update, nvidia-smi busy or timed out once)
+    const probe = this.gpuFailedAt === undefined || now.getTime() - this.gpuFailedAt >= (this.options.gpuRetryMs ?? 30_000)
+    const gpus = probe ? await readGpu().catch(() => undefined) : undefined
+    if (probe) this.gpuFailedAt = gpus === undefined ? now.getTime() : undefined
     const cpu = (this.options.readCpu ?? cpuTimes)()
     const memory = (this.options.readMemory ?? (() => ({ totalBytes: os.totalmem(), freeBytes: os.freemem() })))()
     const sample: ResourceSample = {

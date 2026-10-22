@@ -24,7 +24,8 @@ import {
   type UiState,
   type WorkspaceState,
 } from './stores'
-import type { Activity, ExecutionRun, FileContent, Project, RunEvent, SessionDetail, SessionSummary, Settings, Task, VersionedSettings } from './types'
+import type { Activity, DesignMode, ExecutionRun, OrchestratorChoice, FileContent, Project, RunEvent, SessionDetail, SessionSummary, Settings, Task, VersionedSettings } from './types'
+import { composerAfterSend } from './workflow'
 
 /*
  * All state transitions of the renderer. Plain functions (no React): they can be called from any
@@ -580,18 +581,18 @@ function newClientId() {
  * confirmed that it is stored. A failed send keeps the text and can be retried with the same
  * idempotency key, so a retry after a reload never creates a duplicate task or run.
  */
-export async function sendMessage(content: string, mode: 'task' | 'ask', autoRun: boolean) {
+export async function sendMessage(content: string, mode: 'task' | 'ask', autoRun: boolean, designMode?: DesignMode, orchestrator?: OrchestratorChoice) {
   const project = appStore.get().project
   if (!project || !content.trim()) return
   updateWorkspace({ chatView: mode === 'task' ? 'workflow' : 'history' })
   const clientId = newClientId()
   const sessionId = appStore.get().workspace.activeSessionId
-  sessionStore.set((state) => ({ pending: [...state.pending, { clientId, sessionId, content, mode, status: 'sending', createdAt: new Date().toISOString() }] }))
-  setComposerDraft(sessionId, { text: '' })
-  await deliver(clientId, { content, mode, autoRun, projectId: project.id })
+  sessionStore.set((state) => ({ pending: [...state.pending, { clientId, sessionId, content, mode, designMode, orchestrator, status: 'sending', createdAt: new Date().toISOString() }] }))
+  setComposerDraft(sessionId, composerAfterSend(designMode))
+  await deliver(clientId, { content, mode, autoRun, designMode, orchestrator, projectId: project.id })
 }
 
-async function deliver(clientId: string, input: { content: string; mode: 'task' | 'ask'; autoRun: boolean; projectId: string }) {
+async function deliver(clientId: string, input: { content: string; mode: 'task' | 'ask'; autoRun: boolean; designMode?: DesignMode; orchestrator?: OrchestratorChoice; projectId: string }) {
   const setPending = (patch: Partial<{ sessionId: string; status: 'sending' | 'failed'; error: string }>) =>
     sessionStore.set((state) => ({ pending: state.pending.map((message) => (message.clientId === clientId ? { ...message, ...patch } : message)) }))
   try {
@@ -610,7 +611,7 @@ async function deliver(clientId: string, input: { content: string; mode: 'task' 
         sessionStore.set({ active: undefined, task: undefined, execution: undefined, events: [] })
       }
     }
-    const result = await api.post<{ session: SessionSummary; duplicate: boolean }>(`/sessions/${sessionId}/messages`, { content: input.content, mode: input.mode, autoRun: input.autoRun, clientId })
+    const result = await api.post<{ session: SessionSummary; duplicate: boolean }>(`/sessions/${sessionId}/messages`, { content: input.content, mode: input.mode, autoRun: input.autoRun, clientId, ...(input.designMode ? { designMode: input.designMode } : {}), ...(input.orchestrator ? { orchestrator: input.orchestrator } : {}) })
     upsertSessionSummary(result.session)
     if (appStore.get().workspace.activeSessionId === sessionId) await reloadActiveSession()
     sessionStore.set((state) => ({ pending: state.pending.filter((message) => message.clientId !== clientId) }))
@@ -626,7 +627,7 @@ export async function retryPending(clientId: string) {
   const message = sessionStore.get().pending.find((entry) => entry.clientId === clientId)
   if (!message || !project) return
   sessionStore.set((state) => ({ pending: state.pending.map((entry) => (entry.clientId === clientId ? { ...entry, status: 'sending', error: undefined } : entry)) }))
-  await deliver(clientId, { content: message.content, mode: message.mode, autoRun: false, projectId: project.id })
+  await deliver(clientId, { content: message.content, mode: message.mode, autoRun: false, designMode: message.designMode, orchestrator: message.orchestrator, projectId: project.id })
 }
 
 export function discardPending(clientId: string) {

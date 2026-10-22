@@ -149,9 +149,12 @@ export async function recentCommits(dir: string, limit = 30): Promise<Array<{ sh
 
 export const DEPENDENCY_DIR_EXCLUDES = [':(exclude,glob)**/node_modules', ':(exclude,glob)**/node_modules/**']
 
-/** Stages everything in an agent worktree except linked dependency folders. */
+/** Output that test runners write into the project (Playwright, coverage); never part of a change. */
+export const TEST_OUTPUT_EXCLUDES = ['test-results', 'playwright-report', 'blob-report', 'coverage', '.nyc_output'].flatMap((name) => [`:(exclude,glob)**/${name}`, `:(exclude,glob)**/${name}/**`])
+
+/** Stages everything in an agent worktree except linked dependency folders and test runner output. */
 export async function stageAll(dir: string): Promise<void> {
-  await git(dir, ['add', '-A', '--', '.', ...DEPENDENCY_DIR_EXCLUDES], { internal: true })
+  await git(dir, ['add', '-A', '--', '.', ...DEPENDENCY_DIR_EXCLUDES, ...TEST_OUTPUT_EXCLUDES], { internal: true })
 }
 
 export async function hasStagedChanges(dir: string): Promise<boolean> {

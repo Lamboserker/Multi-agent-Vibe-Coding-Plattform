@@ -2,7 +2,7 @@ import { api } from './api'
 import * as actions from './actions'
 import { createStore, useStore } from './store/core'
 import { sessionStore } from './stores'
-import type { ExecutionRun } from './types'
+import type { DesignDraft, ExecutionRun } from './types'
 import { explainApplyRejection } from './engine-text'
 
 const busyStore = createStore<{ targets: Record<string, boolean> }>({ targets: {} })
@@ -40,6 +40,21 @@ export function startTask(taskId: string) {
 export function replanTask(taskId: string, feedback?: string) {
   return mutate(`task:${taskId}`, async () => {
     await api.post(`/tasks/${taskId}/plan-with-orchestrator`, { feedback })
+    await refresh(taskId)
+  })
+}
+
+/** The task's latest design draft with spec and mockup (null when it has none). */
+export async function latestDesign(taskId: string): Promise<DesignDraft | null> {
+  return (await api.get<DesignDraft | null>(`/tasks/${taskId}/design`)) ?? null
+}
+
+/** Design phase before planning: approve (→ plan), revise with feedback (→ next draft), skip (→ plan without design), draft again. */
+export function designAction(taskId: string, action: 'approve' | 'skip' | 'regenerate'): Promise<void>
+export function designAction(taskId: string, action: 'reject', feedback: string): Promise<void>
+export function designAction(taskId: string, action: 'approve' | 'reject' | 'skip' | 'regenerate', feedback?: string) {
+  return mutate(`task:${taskId}`, async () => {
+    await api.post(`/tasks/${taskId}/design/${action}`, action === 'reject' ? { feedback } : undefined)
     await refresh(taskId)
   })
 }

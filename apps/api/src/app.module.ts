@@ -58,6 +58,10 @@ import { AgentProfilesService } from './agents/agent-profiles.service.js'
 import { AgentsController } from './agents/agents.controller.js'
 import { IdeController } from './ide/ide.controller.js'
 import { LocalHistoryService } from './ide/local-history.service.js'
+import { DesignService } from './design/design.service.js'
+import { DesignController } from './design/design.controller.js'
+import { IntegrationsService } from './integrations/integrations.service.js'
+import { IntegrationsController } from './integrations/integrations.controller.js'
 
 @Module({
   controllers: [
@@ -84,6 +88,8 @@ import { LocalHistoryService } from './ide/local-history.service.js'
     McpController,
     IdeController,
     AgentsController,
+    DesignController,
+    IntegrationsController,
   ],
   providers: [
     PrismaService,
@@ -121,6 +127,8 @@ import { LocalHistoryService } from './ide/local-history.service.js'
     IdeService,
     AgentProfilesService,
     LocalHistoryService,
+    DesignService,
+    IntegrationsService,
   ],
 })
 export class AppModule implements NestModule {

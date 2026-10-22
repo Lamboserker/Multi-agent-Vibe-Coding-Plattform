@@ -19,6 +19,8 @@ export type LocalAgentEvent =
   | { type: 'usage'; promptTokens: number; completionTokens: number }
 
 /** A tool provided by the application (MCP server, plugin, skill loader) next to the file tools. */
+export type AgentToolContent = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
+export interface AgentToolResult { content: AgentToolContent[]; isError?: boolean }
 export interface AgentTool {
   name: string
   description: string
@@ -30,6 +32,8 @@ export interface AgentTool {
   parameters: Record<string, unknown>
   /** Returns the text handed back to the model (truncated by the agent loop). */
   execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<string>
+  /** Optional rich MCP path for premium orchestrators; local text models keep using execute. */
+  executeContent?(args: Record<string, unknown>, signal?: AbortSignal): Promise<AgentToolResult>
 }
 
 export interface LocalAgentInput {

@@ -1,19 +1,21 @@
-import { Fragment, useState } from 'react'
-import { ArrowUpRight, Brain, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleDashed, GitMerge, GitPullRequestArrow, LayoutGrid, MessageCircle, MessageCircleQuestion, Orbit, Pause, Play, RotateCcw, Search, ShieldCheck, Sparkles, Square, Terminal, XCircle } from 'lucide-react'
+import { Fragment, useMemo, useState } from 'react'
+import { ArrowUpRight, Brain, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleDashed, GitMerge, GitPullRequestArrow, LayoutGrid, MessageCircle, MessageCircleQuestion, Monitor, Orbit, Palette, Pause, PenLine, Play, RotateCcw, Search, ShieldCheck, SkipForward, Smartphone, Sparkles, Square, Terminal, XCircle } from 'lucide-react'
 import * as actions from '../../lib/actions'
 import { api, errorMessage } from '../../lib/api'
 import { openChangedFile } from '../../lib/agent-files'
-import { formatClock, openQuestions, TONE, type AgentCard, type StageInfo, type Tone } from '../../lib/leitstand'
+import { DESIGN_TYPE_LABEL, DESIGNER_LABEL, designInterrupted, designRevision, designView, formatClock, openQuestions, TONE, type AgentCard, type StageInfo, type Tone } from '../../lib/leitstand'
 import { useAppState, useSessionState } from '../../lib/store'
 import type { ExecutionRun, InstalledModel, ReviewSummary, ScheduleForecast, Subtask, Task, ValidationReport } from '../../lib/types'
 import { useLoader } from '../../lib/hooks'
 import { AgentSwitcher } from '../agents/AgentProfiles'
 import { ProjectSetup } from '../panels/ProjectsPanel'
 import { useLeitstand } from '../../lib/use-leitstand'
-import { controlRun, discardRun, replanTask, startTask, useWorkflowBusy } from '../../lib/workflow-actions'
+import { controlRun, designAction, discardRun, latestDesign, replanTask, startTask, useWorkflowBusy } from '../../lib/workflow-actions'
+import { isPrePlan, isWorking } from '../../lib/workflow'
 import { localizeEngineText } from '../../lib/engine-text'
+import { orchestratorLabelName, providerUsage } from '../../lib/duo'
 import { AsyncButton, PromptDialog } from '../common'
-import { Bar, Chip, Dot, Eyebrow, KindIcon, StatusPill } from '../ui'
+import { Bar, Chip, Dot, Eyebrow, KindIcon, Seg, StatusPill } from '../ui'
 import { OrchestratorChat } from './OrchestratorChat'
 
 const SUGGESTIONS = ['Fehlende Tests für die zuletzt geänderten Module ergänzen', 'Flaky Tests finden und stabilisieren', 'TODO-Kommentare im Code abarbeiten']
@@ -81,7 +83,7 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
     <div className="ls-head">
       <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span className="stage-label" style={{ color: TONE[stage.tone].color }}>
-          <Dot tone={stage.tone} pulse={stage.state === 'running' || stage.state === 'planning'} />
+          <Dot tone={stage.tone} pulse={isWorking(stage.state)} />
           {stage.label}
         </span>
         <div className="ls-title truncate" data-testid="session-title">{title}</div>
@@ -110,6 +112,16 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
               <Play size={14} /> Ausführung starten
             </AsyncButton>
           </>
+        ) : null}
+        {(stage.state === 'designing' || stage.state === 'design_error') && task ? (
+          <AsyncButton className="btn" disabled={busy} title="Beendet die Design-Phase und plant die Aufgabe ohne Entwurf" onClick={() => designAction(task.id, 'skip')}>
+            <SkipForward size={13} /> Ohne Design planen
+          </AsyncButton>
+        ) : null}
+        {stage.state === 'design_error' && task ? (
+          <AsyncButton className="btn primary" disabled={busy} onClick={() => designAction(task.id, 'regenerate')}>
+            <RotateCcw size={13} /> Neu entwerfen
+          </AsyncButton>
         ) : null}
         {stage.state === 'plan_error' && task ? (
           <AsyncButton className="btn primary" disabled={busy} onClick={() => replanTask(task.id)}>
@@ -209,6 +221,9 @@ function RunHeader({ task, execution, stage, cards, elapsedMs }: Data) {
 function orchestratorSummary(stage: StageInfo, cards: AgentCard[], execution?: ExecutionRun): string {
   const premium = cards.filter((card) => card.kind === 'premium' && card.active).map((card) => card.key)
   switch (stage.state) {
+    case 'designing': return 'Entwirft das Design (Tokens, Komponenten, Vorschau) …'
+    case 'design_review': return 'Design-Entwurf wartet auf deine Freigabe'
+    case 'design_error': return 'Design-Entwurf fehlgeschlagen'
     case 'planning': return 'Analysiert Repository und plant …'
     case 'ready': return 'Plan wartet auf deine Freigabe'
     case 'running': return execution?.status === 'integrating' ? 'Integriert Ergebnisse, startet Review' : `Überwacht ${cards.filter((card) => card.active).length} Agent(en)${premium.length ? `, bearbeitet ${premium.join(', ')} selbst` : ''}`
@@ -481,23 +496,228 @@ function PlanQuestions() {
 }
 
 // ---------------------------------------------------------------------------
+// Design phase (UI tasks): draft → review → plan
+// ---------------------------------------------------------------------------
+
+const DESIGN_STATES = new Set<StageInfo['state']>(['designing', 'design_review', 'design_error'])
+
+function DesignStage({ task, stage }: { task: Task; stage: StageInfo }) {
+  if (stage.state === 'designing') return <DesignPending />
+  if (stage.state === 'design_error') return <DesignError task={task} />
+  return <DesignReview task={task} />
+}
+
+function DesignPending() {
+  return (
+    <div className="ls-empty" data-testid="design-pending">
+      <div className="empty-mark">
+        <Palette size={26} />
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 600 }}>Design-Entwurf wird erstellt</div>
+      <div className="muted" style={{ textWrap: 'pretty' }}>Der Designer entwirft Tokens, Komponenten und eine Vorschau. Danach gibst du den Entwurf frei oder lässt ihn überarbeiten – erst dann wird geplant.</div>
+    </div>
+  )
+}
+
+function DesignError({ task }: { task: Task }) {
+  const messages = useSessionState((state) => state.active?.messages)
+  return (
+    <div className="ls-empty" data-testid="design-error">
+      <XCircle size={28} style={{ color: 'var(--err)' }} />
+      <div style={{ fontSize: 18, fontWeight: 600 }}>{designInterrupted(messages ?? [], task.id) ? 'Der Design-Entwurf wurde unterbrochen' : 'Der Design-Entwurf ist fehlgeschlagen'}</div>
+      <div className="muted">Details stehen im Chat. „Neu entwerfen“ startet ihn erneut, „Ohne Design planen“ überspringt die Design-Phase – es wird nichts automatisch wiederholt.</div>
+    </div>
+  )
+}
+
+/** The draft to approve: mockup preview (sandboxed, no scripts), tokens, components, screens and the decision. */
+function DesignReview({ task }: { task: Task }) {
+  const messages = useSessionState((state) => state.active?.messages)
+  // reloads whenever a new draft is posted (revision) – the request itself is cheap
+  const revision = designRevision(messages ?? [], task.id)
+  const { data, error, loading, reload } = useLoader(() => latestDesign(task.id), [task.id, revision])
+  const busy = useWorkflowBusy(`task:${task.id}`)
+  const [revise, setRevise] = useState(false)
+  const [viewport, setViewport] = useState<'desktop' | 'mobile'>('desktop')
+  const draft = data?.taskId === task.id ? data : undefined
+  const view = useMemo(() => designView(draft?.spec), [draft])
+  if (!draft) {
+    if (loading) return <div className="design-review"><div className="skeleton" style={{ height: 420, borderRadius: 16 }} /></div>
+    return (
+      <div className="ls-empty">
+        <XCircle size={28} style={{ color: 'var(--err)' }} />
+        <div style={{ fontSize: 18, fontWeight: 600 }}>Der Design-Entwurf konnte nicht geladen werden</div>
+        <div className="muted">{error ?? 'Für diese Aufgabe gibt es noch keinen Entwurf.'}</div>
+        <AsyncButton className="btn" onClick={reload}><RotateCcw size={13} /> Erneut laden</AsyncButton>
+      </div>
+    )
+  }
+  const open = draft.status === 'draft'
+  // approved, but the planning request failed afterwards: the task still waits here, approve starts planning again
+  const approvedWaiting = draft.status === 'approved' && task.currentStep === 'awaiting_design_approval'
+  const mockup = draft.mockupHtml?.trim() ?? ''
+  return (
+    <div className="design-review" data-testid="design-review">
+      <div className="design-head">
+        <div className="kind-icon" style={{ width: 34, height: 34, borderRadius: 11, background: 'var(--accent)', color: 'var(--on-accent)' }}><Palette size={17} /></div>
+        <div className="stack" style={{ gap: 4, flex: 1, minWidth: 0 }}>
+          <div className="row wrap" style={{ gap: 6 }}>
+            <Eyebrow>Design-Entwurf {draft.version}</Eyebrow>
+            {draft.designType ? <Chip tone="accent">{DESIGN_TYPE_LABEL[draft.designType] ?? draft.designType}</Chip> : null}
+            {draft.provider ? <Chip tone="muted">{DESIGNER_LABEL[draft.provider] ?? draft.provider}</Chip> : null}
+            {open ? null : <Chip tone="tool">{draft.status === 'approved' ? 'freigegeben' : draft.status === 'generating' ? 'wird erstellt' : draft.status}</Chip>}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 600, textWrap: 'pretty' }}>{draft.summary || 'Ohne Zusammenfassung'}</div>
+          {view.direction ? <div className="muted" style={{ fontSize: 12.5, textWrap: 'pretty' }}>{view.direction}</div> : null}
+        </div>
+        <div className="row wrap" style={{ gap: 8, flex: 'none', justifyContent: 'flex-end' }}>
+          <AsyncButton className="btn" disabled={busy} title="Plant die Aufgabe ohne Design-Entwurf" onClick={() => designAction(task.id, 'skip')}>
+            <SkipForward size={13} /> Ohne Design planen
+          </AsyncButton>
+          <button className="btn" disabled={busy || !open} title="Beschreibe, was sich ändern soll – es entsteht ein neuer Entwurf" onClick={() => setRevise(true)}>
+            <PenLine size={13} /> Überarbeiten…
+          </button>
+          {approvedWaiting ? (
+            <AsyncButton className="btn primary" disabled={busy} title="Der Entwurf ist freigegeben – startet die Planung auf seiner Basis" onClick={() => designAction(task.id, 'approve')}>
+              <CheckCircle2 size={14} /> Planung starten
+            </AsyncButton>
+          ) : (
+            <AsyncButton className="btn primary" disabled={busy || !open} title="Startet die Planung auf Basis dieses Entwurfs" onClick={() => designAction(task.id, 'approve')}>
+              <CheckCircle2 size={14} /> Design freigeben
+            </AsyncButton>
+          )}
+        </div>
+      </div>
+      <div className="design-body">
+        <div className="design-preview">
+          <div className="design-preview-bar">
+            <Eyebrow>Vorschau</Eyebrow>
+            <span className="faint" style={{ fontSize: 11.5 }}>statisches Mockup, ohne Skripte</span>
+            <span className="spacer" />
+            {mockup ? <Seg size="sm" label="Breite der Vorschau" value={viewport} onChange={setViewport} options={[{ id: 'desktop', label: 'Desktop', icon: Monitor }, { id: 'mobile', label: 'Mobil', icon: Smartphone }]} /> : null}
+          </div>
+          {mockup ? (
+            <div className="design-stage">
+              {/* empty sandbox: no scripts, no forms, no same-origin access; the mockup is sanitized server-side as well */}
+              <iframe className="design-frame" title="Design-Vorschau" sandbox="" referrerPolicy="no-referrer" srcDoc={mockup} style={{ width: viewport === 'mobile' ? 390 : '100%' }} data-testid="design-mockup" />
+            </div>
+          ) : (
+            <div className="design-stage empty muted">Dieser Entwurf hat keine Vorschau (das Mockup fehlte oder wurde beim Bereinigen verworfen). Tokens und Komponenten unten gelten trotzdem.</div>
+          )}
+        </div>
+        <div className="design-side">
+          {view.colors.length ? (
+            <section className="stack" style={{ gap: 8 }}>
+              <Eyebrow>Farben</Eyebrow>
+              <div className="swatch-grid">
+                {view.colors.map((token) => (
+                  <div key={token.name} className="swatch" title={`${token.name}: ${token.value}${token.darkValue ? ` · dunkel ${token.darkValue}` : ''}`}>
+                    <span className="swatch-chip">
+                      <span style={{ background: token.value }} />
+                      {token.darkValue ? <span style={{ background: token.darkValue }} /> : null}
+                    </span>
+                    <span className="stack" style={{ gap: 0, minWidth: 0 }}>
+                      <span className="mono truncate" style={{ fontSize: 11.5 }}>{token.name}</span>
+                      <span className="mono faint truncate" style={{ fontSize: 10.5 }}>{token.value}{token.darkValue ? ` / ${token.darkValue}` : ''}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {view.tokens.length ? (
+            <section className="stack" style={{ gap: 6 }}>
+              <Eyebrow>Weitere Tokens</Eyebrow>
+              <div className="kv-grid">
+                {view.tokens.slice(0, 24).map((token) => (
+                  <Fragment key={token.name}>
+                    <span className="mono">{token.name}</span>
+                    <span className="mono" title={token.darkValue ? `${token.value} · dunkel ${token.darkValue}` : token.value}>{token.value}</span>
+                  </Fragment>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {view.components.length ? (
+            <section className="stack" style={{ gap: 6 }}>
+              <Eyebrow>Komponenten ({view.components.length})</Eyebrow>
+              {view.components.map((component) => (
+                <div key={component.name} className="design-item" title={component.spec || undefined}>
+                  <div className="row" style={{ gap: 8 }}>
+                    <strong className="truncate" style={{ fontSize: 12.5 }}>{component.name}</strong>
+                    <span className="spacer" />
+                    {component.file ? <span className="mono faint truncate" style={{ fontSize: 10.5, maxWidth: '60%' }}>{component.file}</span> : null}
+                  </div>
+                  {component.purpose ? <div className="muted" style={{ fontSize: 12 }}>{component.purpose}</div> : null}
+                </div>
+              ))}
+            </section>
+          ) : null}
+          {view.screens.length ? (
+            <section className="stack" style={{ gap: 6 }}>
+              <Eyebrow>Screens</Eyebrow>
+              {view.screens.map((screen) => (
+                <div key={screen.name} className="design-item">
+                  <div className="row" style={{ gap: 8 }}>
+                    <strong className="truncate" style={{ fontSize: 12.5 }}>{screen.name}</strong>
+                    {screen.route ? <span className="mono faint" style={{ fontSize: 10.5 }}>{screen.route}</span> : null}
+                  </div>
+                  {screen.layout ? <div className="muted" style={{ fontSize: 12 }}>{screen.layout}</div> : null}
+                  {screen.components.length ? <div className="row wrap" style={{ gap: 4 }}>{screen.components.map((name) => <Chip key={name} tone="muted">{name}</Chip>)}</div> : null}
+                </div>
+              ))}
+            </section>
+          ) : null}
+          {view.questions.length ? (
+            <section className="stack" style={{ gap: 6 }}>
+              <Eyebrow>Offene Fragen des Designers</Eyebrow>
+              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {view.questions.map((question, index) => <li key={index} style={{ textWrap: 'pretty' }}>{question}</li>)}
+              </ol>
+            </section>
+          ) : null}
+        </div>
+      </div>
+      <div className="row faint" style={{ gap: 6, fontSize: 12 }}>
+        <MessageCircle size={13} />
+        Oder im Chat antworten: „passt“ gibt frei, alles andere wird als Änderungswunsch übernommen.
+      </div>
+      {revise ? (
+        <PromptDialog
+          title="Design überarbeiten – was soll anders sein?"
+          placeholder="z. B. dunklere Sidebar, mehr Weißraum, Tabelle statt Karten …"
+          multiline
+          onCancel={() => setRevise(false)}
+          onSubmit={(feedback) => {
+            setRevise(false)
+            void designAction(task.id, 'reject', feedback).catch((caught: unknown) => actions.notify(errorMessage(caught), 'error'))
+          }}
+        >
+          <div className="muted" style={{ fontSize: 12.5 }}>Der Designer erstellt mit deinem Feedback Version {draft.version + 1}; der aktuelle Entwurf dient als Grundlage.</div>
+        </PromptDialog>
+      ) : null}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Variant A: flow graph
 // ---------------------------------------------------------------------------
 
 function RunGraph(data: Data) {
   const { task, execution, stage, cards, plan, forecast, selected, subtasks } = data
   const inspectorOpen = useAppState((state) => state.ui.inspectorOpen)
-  const pre = stage.state === 'draft' || stage.state === 'planning' || stage.state === 'plan_error' || stage.state === 'plan_questions'
+  const pre = isPrePlan(stage.state)
   const pipe = pipelineStates(stage, execution)
   return (
     <>
       <div className="graph-canvas">
-        {stage.state === 'draft' ? <DraftState /> : stage.state === 'plan_error' && task ? <PlanError task={task} /> : stage.state === 'plan_questions' ? <PlanQuestions /> : (
+        {stage.state === 'draft' ? <DraftState /> : task && DESIGN_STATES.has(stage.state) ? <DesignStage task={task} stage={stage} /> : stage.state === 'plan_error' && task ? <PlanError task={task} /> : stage.state === 'plan_questions' ? <PlanQuestions /> : (
           <div className="graph-row">
             <div className="node orch-node" style={{ borderColor: ['planning', 'running'].includes(stage.state) ? 'var(--accent)' : 'var(--line2)', boxShadow: ['planning', 'running'].includes(stage.state) ? 'var(--glow)' : 'none' }}>
               <div className="row" style={{ gap: 8 }}>
                 <div className="kind-icon" style={{ width: 26, height: 26, background: 'var(--accent)', color: 'var(--on-accent)' }}><Sparkles size={14} /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}><strong>Orchestrator</strong><span className="faint" style={{ fontSize: 11 }}>plant, delegiert, prüft</span></div>
+                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}><strong>Orchestrator</strong><span className="faint" style={{ fontSize: 11 }}>{orchestratorLabelName(execution?.orchestrator ?? plan?.source) ?? 'plant, delegiert, prüft'}</span></div>
               </div>
               <div className="muted" style={{ fontSize: 12 }}>{orchestratorSummary(stage, cards, execution)}</div>
               <OrchestratorUsage execution={execution} />
@@ -533,13 +753,26 @@ function RunGraph(data: Data) {
   )
 }
 
+const kTokens = (tokens: number) => `${(tokens / 1000).toFixed(1).replace('.', ',')}k Tok.`
+
 function OrchestratorUsage({ execution }: { execution?: ExecutionRun }) {
   const premium = execution?.usage?.premium
   if (!premium) return null
+  // duo: one line per provider (each call is booked with its own provider)
+  const providers = providerUsage(execution)
   return (
-    <div className="row mono faint" style={{ gap: 10, fontSize: 10.5 }}>
-      <span>{premium.calls} Aufrufe</span>
-      <span>{((premium.inputTokens + premium.outputTokens) / 1000).toFixed(1).replace('.', ',')}k Tok.</span>
+    <div className="stack" style={{ gap: 2 }}>
+      <div className="row mono faint" style={{ gap: 10, fontSize: 10.5 }}>
+        <span>{premium.calls} Aufrufe</span>
+        <span>{kTokens(premium.inputTokens + premium.outputTokens)}</span>
+      </div>
+      {providers.map((entry) => (
+        <div key={entry.provider} className="row mono faint" style={{ gap: 10, fontSize: 10.5 }} data-testid="orchestrator-usage-provider">
+          <span style={{ fontFamily: 'var(--sans)' }}>{entry.name}</span>
+          <span>{entry.calls} Aufrufe</span>
+          <span>{kTokens(entry.tokens)}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -607,15 +840,16 @@ function AgentNode({ card, selected }: { card: AgentCard; selected: boolean }) {
 // ---------------------------------------------------------------------------
 
 function RunTiles(data: Data) {
-  const { task, execution, stage, cards, decisions, forecast, selected, elapsedMs } = data
-  const pre = stage.state === 'draft' || stage.state === 'planning' || stage.state === 'plan_error' || stage.state === 'plan_questions'
+  const { task, execution, stage, cards, decisions, forecast, selected, elapsedMs, plan } = data
+  const pre = isPrePlan(stage.state)
   const pipe = pipelineStates(stage, execution)
   const done = cards.filter((card) => card.status === 'completed').length
   const usage = execution?.usage
   const localTokens = usage ? usage.local.inputTokens + usage.local.outputTokens : 0
   const allTokens = usage ? localTokens + usage.premium.inputTokens + usage.premium.outputTokens : 0
   const chips: Array<{ label: string; state: PipeState | Subtask['status'] }> = [
-    { label: 'Analyse', state: stage.state === 'draft' ? 'pending' : stage.state === 'planning' ? 'running' : 'completed' },
+    ...(DESIGN_STATES.has(stage.state) ? [{ label: 'Design', state: (stage.state === 'design_error' ? 'failed' : 'running') as PipeState }] : []),
+    { label: 'Analyse', state: stage.state === 'draft' || DESIGN_STATES.has(stage.state) ? 'pending' : stage.state === 'planning' ? 'running' : 'completed' },
     { label: 'Plan', state: pre ? (stage.state === 'planning' ? 'running' : 'pending') : 'completed' },
     ...cards.map((card) => ({ label: `${card.key} ${card.short}`, state: card.status })),
     { label: 'Integration', state: pipe.integration },
@@ -645,12 +879,12 @@ function RunTiles(data: Data) {
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)' }}>Noch keine Agenten aktiv</div>
             <div>Sobald der Plan steht, bekommt jeder Agent hier seine eigene Live-Kachel.</div>
           </div>
-        ) : stage.state === 'plan_error' && task ? <div style={{ gridColumn: '1 / -1' }}><PlanError task={task} /></div> : stage.state === 'plan_questions' ? <div style={{ gridColumn: '1 / -1' }}><PlanQuestions /></div> : (
+        ) : task && DESIGN_STATES.has(stage.state) ? <div style={{ gridColumn: '1 / -1' }}><DesignStage task={task} stage={stage} /></div> : stage.state === 'plan_error' && task ? <div style={{ gridColumn: '1 / -1' }}><PlanError task={task} /></div> : stage.state === 'plan_questions' ? <div style={{ gridColumn: '1 / -1' }}><PlanQuestions /></div> : (
           <div className="orch-tile" style={{ borderColor: ['planning', 'running'].includes(stage.state) ? 'var(--accent)' : 'var(--line2)', boxShadow: ['planning', 'running'].includes(stage.state) ? 'var(--glow)' : 'none' }}>
             <div className="stack" style={{ gap: 10 }}>
               <div className="row" style={{ gap: 10 }}>
                 <div className="kind-icon" style={{ width: 34, height: 34, borderRadius: 11, background: 'var(--accent)', color: 'var(--on-accent)' }}><Sparkles size={17} /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}><strong style={{ fontSize: 15 }}>Orchestrator</strong><span className="faint" style={{ fontSize: 12 }}>plant, delegiert, prüft</span></div>
+                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}><strong style={{ fontSize: 15 }}>Orchestrator</strong><span className="faint" style={{ fontSize: 12 }}>{orchestratorLabelName(execution?.orchestrator ?? plan?.source) ?? 'plant, delegiert, prüft'}</span></div>
               </div>
               <div className="muted">{orchestratorSummary(stage, cards, execution)}</div>
               <div className="row" style={{ gap: 18 }}>

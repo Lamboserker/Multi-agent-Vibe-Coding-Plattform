@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import type { AgentTool } from '@multi-ai-coder/engine'
-import { ResultPages } from './mcp-results.js'
+import { MAX_MCP_RESULT_BYTES, ResultPages } from './mcp-results.js'
 
 /** One loopback capability endpoint per call. Upstream secrets never leave McpService. */
 export async function openMcpGateway(loadTools: (query: string) => Promise<AgentTool[]>) {
@@ -39,6 +39,14 @@ export async function openMcpGateway(loadTools: (query: string) => Promise<Agent
             // Resolve again on every invocation: disabled/reassigned tools cannot use a stale handle.
             const tool = (await loadTools(args.name)).find((entry) => entry.name === args.name)
             if (!tool) throw new Error('Tool is unavailable or is not assigned to this agent.')
+            if (tool.executeContent) {
+              const result = await tool.executeContent(args.arguments as Record<string, unknown>)
+              if (Buffer.byteLength(JSON.stringify(result)) > MAX_MCP_RESULT_BYTES) throw new Error('MCP result exceeds the 16 MB byte limit.')
+              // Check assignments again after a potentially long-running screenshot/render call.
+              const permitted = async () => (await loadTools(tool.name)).some((candidate) => candidate.name === tool.name)
+              if (!(await permitted())) throw new Error('Tool permission was revoked.')
+              return { isError: Boolean(result.isError), content: result.content.map((block) => block.type === 'text' ? { type: 'text' as const, text: results.page(block.text, permitted) } : block) }
+            }
             text = results.page(await tool.execute(args.arguments as Record<string, unknown>), async () => (await loadTools(tool.name)).some((candidate) => candidate.name === tool.name))
           } else if (request.params.name === 'read_result') {
             text = await results.read(args.reference, args.offset ?? 0)

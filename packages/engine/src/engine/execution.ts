@@ -1,13 +1,15 @@
 import path from 'node:path'
 import { requiredToolNames, runLocalAgent, type AgentTool, type LocalAgentResult } from '../agents/local-agent.js'
-import { commitStaged, git, hasStagedChanges, headCommit, integratedTaskCommits, squashSince, stageAll } from '../git/git.js'
+import { applyPatch, commitStaged, DEPENDENCY_DIR_EXCLUDES, git, hasStagedChanges, headCommit, integratedTaskCommits, squashSince, stageAll } from '../git/git.js'
 import { WorktreeManager, type WorktreeHandle } from '../git/worktrees.js'
 import { buildContextDigest, searchCode, type RepoIndex } from '../index/repo-index.js'
 import { cherryPick } from '../git/git.js'
 import { Mutex } from '../integration/integrator.js'
 import { OllamaClient } from '../ollama/client.js'
-import { renderContext } from '../orchestrator/prompts.js'
-import { OrchestratorError, type OrchestratorAdapter, type OrchestratorEvent, type ReviewResult, type UsageReport } from '../orchestrator/types.js'
+import { chooseExecutionPrompt, renderContext, renderRepairHint } from '../orchestrator/prompts.js'
+import { isDuo, type DuoOrchestrator } from '../orchestrator/duo.js'
+import { CHOOSE_SCHEMA, normalizeChoice } from '../orchestrator/schemas.js'
+import { bookableCalls, normalizeWithMeta, OrchestratorError, type CallContext, type CallMeta, type ExecutionInput, type OrchestratorAdapter, type OrchestratorEvent, type RepairHint, type ReviewResult, type UsageReport } from '../orchestrator/types.js'
 import { DEFAULT_DENIED_PATTERNS, validatePatch, type PatchPolicy, type PatchValidationResult } from '../patch/validator.js'
 import { WorkspaceFiles } from '../patch/workspace-files.js'
 import { analyzeDag } from '../planning/dag.js'
@@ -16,7 +18,7 @@ import { routeTask, type CostMode, type LocalModelProfile, type RouteDecision } 
 import type { SuitabilityStats } from '../routing/stats.js'
 import { DagScheduler, type SchedulableTask, type TaskState } from '../scheduler/scheduler.js'
 import { isSecurityCriticalPath } from '../security/paths.js'
-import { failureDigest, runValidationChecks, type ValidationCheck, type ValidationReport } from '../validation/checks.js'
+import { againstBaseline, baselineFailures, failureDigest, runValidationChecks, type RunChecksOptions, type ValidationCheck, type ValidationReport } from '../validation/checks.js'
 import { runProcess, sanitizedEnv } from '../util/process.js'
 import { runFastPathTool, type FastPathTool } from '../fastpath/fast-path.js'
 import { normalizeDesign } from '../ui/design-normalize.js'
@@ -103,6 +105,11 @@ export interface EngineSettings {
   keepAlive?: string
   /** Auto uses one structured edit for small tasks with complete file context. */
   localExecutionMode?: 'auto' | 'tools'
+  /**
+   * "Premium advises, local executes": before full premium execution the orchestrator returns precise
+   * repair edits for the failed local attempt and the strongest local model applies them. Default true.
+   */
+  premiumHints?: boolean
 }
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
@@ -119,6 +126,7 @@ export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   taskTimeoutMs: 20 * 60_000,
   strictScope: false,
   reviewFixRounds: 1,
+  premiumHints: true,
 }
 
 export type AttemptOutcome = 'success' | 'validation_failed' | 'invalid_patch' | 'no_changes' | 'error' | 'timeout' | 'cancelled' | 'conflict'
@@ -155,7 +163,8 @@ export interface ModelCallRecord {
   kind: 'orchestrator' | 'local'
   provider: string
   model: string
-  purpose: 'plan' | 'review' | 'execute' | 'repair' | 'analyze' | 'chat' | 'review_fix'
+  /** `duo_choose`: duo mode, the lead picks one of two premium executions whose checks tied. */
+  purpose: 'plan' | 'review' | 'execute' | 'repair' | 'analyze' | 'chat' | 'review_fix' | 'repair_hint' | 'duo_choose'
   status: 'ok' | 'error'
   errorClass?: string
   sessionId?: string
@@ -260,7 +269,42 @@ export interface ReviewSummary {
 interface ChainStep {
   executor: 'local' | 'premium'
   model?: string
+  /** Local repair round guided by the orchestrator's repair hint (inserted before premium execution). */
+  hint?: boolean
 }
+
+/** The last behavioural failure of a task: what the orchestrator gets for a repair hint. */
+interface FailedAttempt {
+  diff: string
+  failures: string
+}
+
+/** Result of one premium agent step, as executeTask consumes it. */
+interface PremiumAgentResult {
+  hardFailure: boolean
+  timedOut: boolean
+  error: string | undefined
+  inputTokens: number
+  outputTokens: number
+  tokensMeasured: boolean
+  sessionId: string | undefined
+  summary: string | undefined
+}
+
+/** One executeComplexTask call, already booked. */
+interface PremiumCallOutcome {
+  ok: boolean
+  summary?: string
+  sessionId?: string
+  usage: UsageReport
+  kind?: string
+  message?: string
+  /** The CLI cannot be used for the rest of the run (login, quota, installation, model). */
+  blocking: boolean
+}
+
+const NO_USAGE: UsageReport = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' }
+const BLOCKING_KINDS = ['not_authenticated', 'session_expired', 'quota_exhausted', 'not_installed', 'model_unavailable']
 
 const short = (id: string) => id.replace(/[^a-z0-9]/gi, '').slice(-8).toLowerCase()
 
@@ -279,6 +323,11 @@ export class ExecutionRunner {
   private integrationWorktree?: WorktreeHandle
   private readonly decisions = new Map<string, RouteDecision>()
   private readonly handoffs = new Map<string, TaskHandoff>()
+  private baseline?: Promise<ValidationReport | undefined>
+  /** Duo mode: the partner's CLI session per task, resumed in its repair round (the lead's travels as `sessionId`). */
+  private readonly duoPartnerSessions = new Map<string, string>()
+  /** Duo mode: sides that hit a blocking error (usage limit, auth) – not called again in this run. */
+  private readonly duoBlockedSides = new Map<string, string>()
 
   constructor(
     private readonly run: EngineRun,
@@ -463,11 +512,29 @@ export class ExecutionRunner {
     const decision = this.decisions.get(task.key) ?? this.route(task)
     if (decision.executor === 'blocked') return []
     const chain: ChainStep[] = [{ executor: decision.executor, model: decision.model }, ...decision.escalation]
-    const allowed = chain.slice(0, 1 + this.deps.settings.maxEscalationSteps).filter((step) => step.executor === 'local' || this.deps.settings.premiumExecutionAllowed || decision.executor === 'premium')
+    const capped = chain.slice(0, 1 + this.deps.settings.maxEscalationSteps)
+    const allowed = capped.filter((step) => step.executor === 'local' || this.deps.settings.premiumExecutionAllowed || decision.executor === 'premium')
     // the assigned agent limits escalation (the first step is always its own)
     if (task.agent?.escalation === 'none') return allowed.slice(0, 1)
-    if (task.agent?.escalation === 'local') return allowed.filter((step, index) => index === 0 || step.executor === 'local')
-    return allowed
+    const local = task.agent?.escalation === 'local' ? allowed.filter((step, index) => index === 0 || step.executor === 'local') : allowed
+    // premium execution was ruled out, but premium may still advise the local model
+    const premiumDropped = capped.some((step) => step.executor === 'premium') && !local.some((step) => step.executor === 'premium')
+    return this.withHintStep(local, premiumDropped)
+  }
+
+  /**
+   * "Premium advises, local executes": before the first premium step that follows local attempts, one more
+   * local round with the strongest local model of the chain, guided by the orchestrator's repair hint.
+   * When premium execution was ruled out (setting or agent escalation 'local'), the hint round ends the chain.
+   * Not counted as an escalation step (it is a repair round of a model that already ran).
+   */
+  private withHintStep(chain: ChainStep[], premiumDropped = false): ChainStep[] {
+    if (this.deps.settings.premiumHints === false || typeof this.deps.orchestrator?.repairHint !== 'function') return chain
+    const premiumIndex = premiumDropped ? chain.length : chain.findIndex((step) => step.executor === 'premium')
+    if (premiumIndex <= 0) return chain
+    const strongest = chain.slice(0, premiumIndex).filter((step) => step.executor === 'local' && step.model).at(-1)
+    if (!strongest) return chain
+    return [...chain.slice(0, premiumIndex), { executor: 'local', model: strongest.model, hint: true }, ...chain.slice(premiumIndex)]
   }
 
   private async executeTask(task: EngineTask, signal: AbortSignal): Promise<'succeeded' | 'failed'> {
@@ -479,6 +546,12 @@ export class ExecutionRunner {
     if (task.tool) {
       const viaTool = await this.executeTool(task, task.tool, signal)
       if (viaTool) return viaTool
+      // Generated content (approved design files) cannot be reproduced by an agent: fail instead of falling back.
+      if (task.tool.kind === 'write-files') {
+        task.status = 'failed'
+        await store.updateTask(task.id, { status: 'failed', finishedAt: new Date(), errorMessage: `${task.tool.kind} could not write a validated change.` })
+        return 'failed'
+      }
       this.event('info', 'fast_path_fallback', `${task.key}: deterministic ${task.tool.kind} did not produce a validated change; using an agent.`, undefined, task.id)
     }
 
@@ -508,6 +581,7 @@ export class ExecutionRunner {
         this.event('info', 'worktree_created', `${task.key}: worktree at ${startHead.slice(0, 8)}.`, { path: worktree.path }, task.id)
 
         let success: { commit: string; patch: PatchValidationResult; report: ValidationReport } | undefined
+        let lastFailed: FailedAttempt | undefined
 
         for (const [stepIndex, step] of chain.entries()) {
           if (signal.aborted) throw new CancelledError()
@@ -516,14 +590,20 @@ export class ExecutionRunner {
             this.event('warn', 'premium_unavailable', `${task.key}: premium skipped – ${this.premiumBlockedReason}`, undefined, task.id)
             continue
           }
-          if (stepIndex > 0) {
+          if (step.hint) {
+            const hint = await this.prepareHintRound(task, worktree, startHead, lastFailed, signal)
+            if (!hint) continue
+            previousFailures = renderRepairHint(hint, lastFailed?.failures)
+          } else if (stepIndex > 0) {
             await worktrees.reset(worktree.path, startHead)
             this.event('warn', 'task_escalated', `${task.key}: escalating to ${step.executor === 'premium' ? 'premium orchestrator' : step.model}.`, undefined, task.id)
           }
-          const maxRounds = step.executor === 'local' ? 1 + (task.agent?.maxRepairs ?? settings.maxLocalRepairs) : 1 + Math.min(1, task.agent?.maxRepairs ?? 1)
+          // the hint round is exactly one repair round of a model that already ran
+          const maxRounds = step.hint ? 1 : step.executor === 'local' ? 1 + (task.agent?.maxRepairs ?? settings.maxLocalRepairs) : 1 + Math.min(1, task.agent?.maxRepairs ?? 1)
           let sessionId: string | undefined
-          for (let round = 0; round < maxRounds; round += 1) {
+          for (let stepRound = 0; stepRound < maxRounds; stepRound += 1) {
             if (signal.aborted) throw new CancelledError()
+            const round = step.hint ? 1 : stepRound
             attemptsTotal += 1
             await store.updateTask(task.id, { status: round > 0 ? 'repairing' : 'running', attempts: attemptsTotal })
             const modelName = step.executor === 'premium' ? this.deps.orchestrator!.id : step.model!
@@ -580,6 +660,7 @@ export class ExecutionRunner {
               })
               previousFailures = 'The previous response was incomplete: ' + agent.error + '. Inspect current files and finish the complete task.'
               lastError = previousFailures
+              lastFailed = { diff: '', failures: previousFailures }
               continue
             }
 
@@ -606,6 +687,7 @@ export class ExecutionRunner {
               })
               previousFailures = `Your previous attempt did not change any file.${agent.error ? ` (${agent.error})` : ''} Implement the task by writing the files.`
               lastError = 'No changes produced.'
+              lastFailed = { diff: '', failures: previousFailures }
               continue
             }
 
@@ -620,6 +702,7 @@ export class ExecutionRunner {
               this.event('warn', 'patch_rejected', `${task.key}: patch rejected.\n${issues}`, undefined, task.id)
               previousFailures = `The patch was rejected by the safety validator:\n${issues}`
               lastError = previousFailures
+              lastFailed = { diff: patch.diff, failures: previousFailures }
               continue
             }
 
@@ -634,15 +717,11 @@ export class ExecutionRunner {
               this.event('warn', 'patch_rejected', `${task.key}: ${hollow}`, undefined, task.id)
               previousFailures = `${hollow} The task is not a removal: replace every removed piece with its equivalent that fulfils the task, then call finish.`
               lastError = hollow
+              lastFailed = { diff: patch.diff, failures: hollow }
               continue
             }
 
-            let report = await runValidationChecks(worktree.path, this.deps.checks, {
-              signal,
-              allowProjectCode: settings.allowProjectCode,
-              approvedCommands: settings.approvedCommands,
-              onOutput: (checkId, chunk) => this.event('debug', 'check_output', chunk.slice(0, 2000), { checkId }, task.id),
-            })
+            let report = await this.validate(worktree.path, signal, (checkId, chunk) => this.event('debug', 'check_output', chunk.slice(0, 2000), { checkId }, task.id))
             if (!report.ok) {
               const fixed = await this.deterministicFix(worktree.path, report, patch, task)
               if (fixed) report = fixed.report
@@ -654,11 +733,12 @@ export class ExecutionRunner {
               await store.finishAttempt(attemptId, {
                 outcome: 'validation_failed', status: 'failed', durationMs: Date.now() - started, inputTokens: agent.inputTokens, outputTokens: agent.outputTokens,
                 tokensMeasured: agent.tokensMeasured, patchText: patch.diff.slice(0, 200_000), patchStatus: 'validation_failed', diffSummary: summarizePatch(patch), validation: report, logs,
-                errorMessage: report.summary, escalated: round === maxRounds - 1 && stepIndex < chain.length - 1,
+                errorMessage: report.summary, escalated: stepRound === maxRounds - 1 && stepIndex < chain.length - 1,
               })
               this.event('warn', 'validation_failed', `${task.key}: ${report.summary}`, undefined, task.id)
               previousFailures = digest
               lastError = report.summary
+              lastFailed = { diff: patch.diff, failures: digest || report.summary }
               continue
             }
 
@@ -740,6 +820,14 @@ export class ExecutionRunner {
       this.event('info', 'fast_path_started', `${task.key}: deterministic ${tool.kind} (no model call).`, undefined, task.id)
       const result = await runFastPathTool(worktree.path, tool, { signal })
       const commit = result.ok && result.changed.length ? await commitIfChanged(worktree.path, `${task.key}: ${task.title}`) : undefined
+      if (result.ok && !commit && tool.kind === 'write-files') {
+        // The files already hold exactly this content (re-run, or only line endings differ): nothing to integrate.
+        await finish({ outcome: 'no_changes', status: 'completed', logs: [result.message] })
+        task.status = 'completed'
+        await store.updateTask(task.id, { status: 'completed', selectedModelClass: 'no_llm', selectedModelName: `Werkzeug: ${tool.kind}`, finishedAt: new Date(), errorMessage: null })
+        this.event('info', 'task_integrated', `${task.key}: files already up to date (${tool.kind}).`, undefined, task.id)
+        return 'succeeded'
+      }
       if (!commit) {
         await finish({ outcome: result.ok ? 'no_changes' : 'error', status: 'failed', errorMessage: result.message, logs: [result.message] })
         return undefined
@@ -749,7 +837,7 @@ export class ExecutionRunner {
         await finish({ outcome: 'invalid_patch', status: 'failed', patchText: patch.diff.slice(0, 200_000), patchStatus: 'rejected', errorMessage: patch.issues.map((issue) => issue.message).join('; ') })
         return undefined
       }
-      const report = await runValidationChecks(worktree.path, this.deps.checks, { signal, allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+      const report = await this.validate(worktree.path, signal)
       if (!report.ok) {
         await finish({ outcome: 'validation_failed', status: 'failed', patchText: patch.diff.slice(0, 200_000), patchStatus: 'validation_failed', validation: report, errorMessage: report.summary })
         return undefined
@@ -928,57 +1016,321 @@ export class ExecutionRunner {
       : undefined
     const guidance = [task.agent?.instructions ? `## Your role: ${task.agent.name}\n${task.agent.instructions}` : '', resources?.instructions ?? ''].filter(Boolean).join('\n\n') || undefined
     this.event('info', 'agent_started', `${task.key}: ${orchestrator.displayName}${round ? ' (repair)' : ''}${resources?.sources?.length ? `, mit ${resources.sources.join(', ')}` : ''}.`, undefined, task.id)
+    const input: ExecutionInput = {
+      taskId: task.key,
+      title: task.title,
+      instructions: task.description,
+      guidance,
+      acceptanceCriteria: task.acceptanceCriteria,
+      relevantFiles: [...task.relevantFiles, ...task.newFiles],
+      previousFailures: previousFailures || undefined,
+      resumeSessionId: round > 0 ? resumeSessionId : undefined,
+    }
+    const callContext = (cwd: string, sink: string[]): CallContext => ({
+      runId: `${this.run.id}:${task.key}`,
+      cwd,
+      mcpRole: 'coder',
+      // externalTools: false = no MCP tools at all; otherwise the agent's assigned servers
+      mcpServers: task.agent?.permissions?.externalTools === false ? [] : task.agent?.mcpServers,
+      signal,
+      timeoutMs: Math.min(this.deps.settings.taskTimeoutMs, task.agent?.resources?.timeoutMs ?? Infinity),
+      effort: task.complexity >= 4 ? 'high' : 'medium',
+      onEvent: (event) => this.forwardOrchestratorEvent(event, task, sink),
+    })
+    if (isDuo(orchestrator)) return this.runDuoPremium(orchestrator, task, worktree, input, callContext, signal, logs, round)
+    return this.runSinglePremium(orchestrator, task, input, callContext(worktree.path, logs), logs, round)
+  }
+
+  private async runSinglePremium(adapter: OrchestratorAdapter, task: EngineTask, input: ExecutionInput, ctx: CallContext, logs: string[], round: number): Promise<PremiumAgentResult> {
+    const outcome = await this.premiumCall(adapter, task, input, ctx, round)
+    if (outcome.ok) {
+      logs.push(`Summary: ${outcome.summary}`)
+      return { hardFailure: false, timedOut: false, error: undefined, inputTokens: outcome.usage.inputTokens, outputTokens: outcome.usage.outputTokens, tokensMeasured: outcome.usage.measured, sessionId: outcome.sessionId, summary: outcome.summary }
+    }
+    if (outcome.blocking) this.blockPremium(adapter.displayName, outcome, task)
+    logs.push(`Error (${outcome.kind}): ${outcome.message}`)
+    return { hardFailure: true, timedOut: outcome.kind === 'timeout', error: `${outcome.kind}: ${outcome.message}`, inputTokens: outcome.usage.inputTokens, outputTokens: outcome.usage.outputTokens, tokensMeasured: outcome.usage.measured, sessionId: undefined, summary: undefined }
+  }
+
+  private blockPremium(name: string, outcome: PremiumCallOutcome, task: EngineTask) {
+    this.premiumBlockedReason = `${name}: ${(outcome.kind ?? 'process_failed').replace(/_/g, ' ')}`
+    this.event('error', 'premium_blocked', `${this.premiumBlockedReason}. Premium execution disabled for this run. ${(outcome.message ?? '').slice(0, 300)}`, { kind: outcome.kind }, task.id)
+  }
+
+  /** The one event when a duo side becomes unusable; the other side then works alone for the rest of the run. */
+  private duoSideBlockedEvent(adapter: OrchestratorAdapter, outcome: PremiumCallOutcome, task: EngineTask) {
+    this.event('warn', 'duo_partner_unavailable', `${task.key}: ${adapter.displayName} is unavailable (${outcome.kind}); the other orchestrator's result is used and it works alone for the rest of this run.`, { kind: outcome.kind, provider: adapter.id }, task.id)
+  }
+
+  /** One executeComplexTask call of one CLI, booked with that CLI as provider. */
+  private async premiumCall(adapter: OrchestratorAdapter, task: EngineTask, input: ExecutionInput, ctx: CallContext, round: number): Promise<PremiumCallOutcome> {
+    const purpose = round ? 'repair' : 'execute'
     const started = Date.now()
     try {
-      const { result, meta } = await orchestrator.executeComplexTask(
-        {
-          taskId: task.key,
-          title: task.title,
-          instructions: task.description,
-          guidance,
-          acceptanceCriteria: task.acceptanceCriteria,
-          relevantFiles: [...task.relevantFiles, ...task.newFiles],
-          previousFailures: previousFailures || undefined,
-          resumeSessionId: round > 0 ? resumeSessionId : undefined,
-        },
-        {
-          runId: `${this.run.id}:${task.key}`,
-          cwd: worktree.path,
-          mcpRole: 'coder',
-          // externalTools: false = no MCP tools at all; otherwise the agent's assigned servers
-          mcpServers: task.agent?.permissions?.externalTools === false ? [] : task.agent?.mcpServers,
-          signal,
-          timeoutMs: Math.min(this.deps.settings.taskTimeoutMs, task.agent?.resources?.timeoutMs ?? Infinity),
-          effort: task.complexity >= 4 ? 'high' : 'medium',
-          onEvent: (event) => this.forwardOrchestratorEvent(event, task, logs),
-        },
-      )
-      await this.deps.store.recordModelCall({
-        runId: this.run.id, taskId: task.id, kind: 'orchestrator', provider: orchestrator.id, model: meta.model ?? orchestrator.id,
-        purpose: round ? 'repair' : 'execute', status: 'ok', sessionId: meta.sessionId, durationMs: meta.durationMs, usage: meta.usage,
-      })
-      logs.push(`Summary: ${result.summary}`)
-      return { hardFailure: false, timedOut: false, error: undefined as string | undefined, inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, tokensMeasured: meta.usage.measured, sessionId: result.sessionId, summary: result.summary as string | undefined }
+      const { result, meta } = await adapter.executeComplexTask(input, ctx)
+      await this.recordOrchestratorCall(adapter.id, { taskId: task.id, purpose, status: 'ok', durationMs: meta.durationMs, meta })
+      return { ok: true, summary: result.summary, sessionId: result.sessionId, usage: meta.usage, blocking: false }
     } catch (error) {
       const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
       const message = error instanceof Error ? error.message : String(error)
       // a completed call whose output was rejected still used the quota
       const meta = error instanceof OrchestratorError ? error.details.meta : undefined
-      const usage = meta?.usage ?? { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' as const }
+      await this.recordOrchestratorCall(adapter.id, { taskId: task.id, purpose, status: 'error', errorClass: kind, durationMs: Date.now() - started, meta })
+      return { ok: false, kind, message, usage: meta?.usage ?? NO_USAGE, blocking: BLOCKING_KINDS.includes(kind) }
+    }
+  }
+
+  /**
+   * Duo premium execution (ADR-004): lead and partner implement the task at the same time, the lead in the task
+   * worktree, the partner in a sibling worktree on the same commit with the same uncommitted state. The winner is
+   * chosen deterministically (checks green > fewer failed tests > fewer failed checks > fewer type errors); on a
+   * tie the lead picks (`duo_choose` call). The task worktree then holds exactly the winner's change, and
+   * executeTask validates and integrates it as usual. The sibling worktree is always removed.
+   */
+  private async runDuoPremium(duo: DuoOrchestrator, task: EngineTask, worktree: WorktreeHandle, input: ExecutionInput, callContext: (cwd: string, sink: string[]) => CallContext, signal: AbortSignal, logs: string[], round: number): Promise<PremiumAgentResult> {
+    const { worktrees } = this.deps
+    // a side that hit a usage limit or lost its login earlier in this run is not called again
+    const leadBlocked = this.duoBlockedSides.has(duo.leadAdapter.id)
+    const partnerBlocked = this.duoBlockedSides.has(duo.partnerAdapter.id)
+    if (leadBlocked && !partnerBlocked) {
+      const alone = await this.runSinglePremium(duo.partnerAdapter, task, { ...input, resumeSessionId: round > 0 ? this.duoPartnerSessions.get(task.key) : undefined }, callContext(worktree.path, logs), logs, round)
+      if (alone.sessionId) this.duoPartnerSessions.set(task.key, alone.sessionId)
+      return alone
+    }
+    if (partnerBlocked && leadBlocked) {
+      const error = `premium blocked: ${this.premiumBlockedReason ?? [...this.duoBlockedSides.values()].join('; ')}`
+      return { hardFailure: true, timedOut: false, error, inputTokens: 0, outputTokens: 0, tokensMeasured: false, sessionId: undefined, summary: undefined }
+    }
+    if (partnerBlocked) return this.runSinglePremium(duo.leadAdapter, task, input, callContext(worktree.path, logs), logs, round)
+    const runKey = short(this.run.id)
+    const head = (await headCommit(worktree.path))!
+    // a repair round starts from the failed attempt's files, which are still uncommitted in the task worktree
+    const carried = await workingDiff(worktree.path)
+    let sibling: WorktreeHandle | undefined
+    try {
+      sibling = await worktrees.create(this.run.repoPath, { projectKey: this.run.projectKey, name: `${runKey}-${task.key}-duo`, branch: `mac/${runKey}/${task.key}-duo`, baseCommit: head })
+      if (carried.trim()) {
+        const copied = await applyPatch(sibling.path, carried)
+        if (!copied.ok) throw new Error(`the current files could not be copied (${copied.message.slice(0, 200)})`)
+      }
+    } catch (error) {
+      if (sibling) await worktrees.remove(this.run.repoPath, sibling.path, sibling.branch).catch(() => undefined)
+      this.event('warn', 'duo_sibling_failed', `${task.key}: no worktree for ${duo.partnerAdapter.displayName} (${error instanceof Error ? error.message : String(error)}); ${duo.leadAdapter.displayName} executes alone.`, undefined, task.id)
+      return this.runSinglePremium(duo.leadAdapter, task, input, callContext(worktree.path, logs), logs, round)
+    }
+
+    try {
+      const leadLogs: string[] = []
+      const partnerLogs: string[] = []
+      const partnerInput: ExecutionInput = { ...input, resumeSessionId: round > 0 ? this.duoPartnerSessions.get(task.key) : undefined }
+      const [lead, partner] = await Promise.all([
+        this.premiumCall(duo.leadAdapter, task, input, callContext(worktree.path, leadLogs), round),
+        this.premiumCall(duo.partnerAdapter, task, partnerInput, callContext(sibling.path, partnerLogs), round),
+      ])
+      if (partner.sessionId) this.duoPartnerSessions.set(task.key, partner.sessionId)
+      // a cancelled run must not continue with the side that happened to finish
+      if (signal.aborted) throw new CancelledError()
+      const sides = [
+        { adapter: duo.leadAdapter, outcome: lead, path: worktree.path, sideLogs: leadLogs },
+        { adapter: duo.partnerAdapter, outcome: partner, path: sibling.path, sideLogs: partnerLogs },
+      ] as const
+      for (const side of sides) {
+        logs.push(...side.sideLogs.map((line) => `[${side.adapter.displayName}] ${line}`))
+        logs.push(side.outcome.ok ? `[${side.adapter.displayName}] Summary: ${side.outcome.summary}` : `[${side.adapter.displayName}] Error (${side.outcome.kind}): ${side.outcome.message}`)
+        if (side.outcome.ok) this.event('info', 'duo_proposal', `${task.key}: ${side.adapter.displayName}: ${(side.outcome.summary ?? '').slice(0, 300)}`, { provider: side.adapter.id, phase: 'execute', summary: (side.outcome.summary ?? '').slice(0, 300) }, task.id)
+      }
+      const usage = { inputTokens: lead.usage.inputTokens + partner.usage.inputTokens, outputTokens: lead.usage.outputTokens + partner.usage.outputTokens, tokensMeasured: lead.usage.measured && partner.usage.measured }
+
+      for (const side of sides) {
+        if (side.outcome.ok || !side.outcome.blocking) continue
+        this.duoBlockedSides.set(side.adapter.id, `${side.adapter.displayName}: ${(side.outcome.kind ?? 'process_failed').replace(/_/g, ' ')}`)
+      }
+      if (!lead.ok && !partner.ok) {
+        if (lead.blocking && partner.blocking) this.blockPremium(duo.displayName, lead, task)
+        else for (const side of sides) if (side.outcome.blocking) this.duoSideBlockedEvent(side.adapter, side.outcome, task)
+        return { hardFailure: true, timedOut: lead.kind === 'timeout', error: `${lead.kind}: ${lead.message}`, ...usage, sessionId: undefined, summary: undefined }
+      }
+      for (const side of sides) {
+        if (!side.outcome.ok && side.outcome.blocking) this.duoSideBlockedEvent(side.adapter, side.outcome, task)
+      }
+
+      const leadDiff = lead.ok ? await workingDiff(worktree.path) : ''
+      const partnerDiff = partner.ok ? await workingDiff(sibling.path) : ''
+      const changed = (diff: string) => diff.trim() !== '' && diff !== carried
+      let winner: 'lead' | 'partner'
+      let reason: string
+      let fallback: string | undefined
+      if (!lead.ok || !partner.ok) {
+        winner = lead.ok ? 'lead' : 'partner'
+        const failed = lead.ok ? sides[1] : sides[0]
+        fallback = `${failed.adapter.displayName} ist fehlgeschlagen (${failed.outcome.kind}); es gilt das Ergebnis von ${sides[winner === 'lead' ? 0 : 1].adapter.displayName}.`
+        reason = fallback
+      } else if (changed(leadDiff) !== changed(partnerDiff)) {
+        winner = changed(leadDiff) ? 'lead' : 'partner'
+        reason = `Nur ${sides[winner === 'lead' ? 0 : 1].adapter.displayName} hat Dateien geändert.`
+      } else if (!changed(leadDiff)) {
+        winner = 'lead'
+        reason = 'Keiner der beiden hat Dateien geändert.'
+      } else {
+        const leadReport = await this.validate(worktree.path, signal)
+        const partnerReport = await this.validate(sibling.path, signal)
+        const order = compareValidation(leadReport, partnerReport)
+        if (order !== 0) {
+          winner = order < 0 ? 'lead' : 'partner'
+          const winnerReport = winner === 'lead' ? leadReport : partnerReport
+          reason = `Bessere Prüfergebnisse: ${winnerReport.summary.slice(0, 200)}`
+        } else {
+          const choice = await this.chooseExecution(duo, task, worktree.path, signal, [
+            { label: duo.leadAdapter.displayName, diff: leadDiff, summary: lead.summary ?? '', validation: leadReport.summary },
+            { label: duo.partnerAdapter.displayName, diff: partnerDiff, summary: partner.summary ?? '', validation: partnerReport.summary },
+          ])
+          winner = choice.winner
+          reason = choice.reason
+        }
+      }
+
+      // The task worktree gets exactly the winner's change: validation may have left build output behind, and a
+      // failed lead may have left partial edits.
+      const winnerSide = sides[winner === 'lead' ? 0 : 1]
+      const winnerDiff = winner === 'lead' ? leadDiff : partnerDiff
+      if (winner === 'partner' || changed(leadDiff)) {
+        await worktrees.reset(worktree.path, head)
+        if (winnerDiff.trim()) {
+          const applied = await applyPatch(worktree.path, winnerDiff)
+          if (!applied.ok) {
+            const error = `the change of ${winnerSide.adapter.displayName} could not be applied to the task worktree (${applied.message.slice(0, 300)})`
+            this.event('error', 'duo_apply_failed', `${task.key}: ${error}`, undefined, task.id)
+            return { hardFailure: true, timedOut: false, error, ...usage, sessionId: undefined, summary: undefined }
+          }
+        }
+      }
+      this.event('info', 'duo_reconciled', `${task.key}: ${winnerSide.adapter.displayName} gewinnt – ${reason}`, { phase: 'execute', winner: winnerSide.adapter.id, notes: [reason], ...(fallback ? { fallback } : {}) }, task.id)
+      logs.push(`Duo: ${winnerSide.adapter.displayName} gewinnt – ${reason}`)
+      return { hardFailure: false, timedOut: false, error: undefined, ...usage, sessionId: lead.sessionId, summary: winnerSide.outcome.summary }
+    } finally {
+      await worktrees.remove(this.run.repoPath, sibling.path, sibling.branch).catch(() => undefined)
+    }
+  }
+
+  /** Tie between two green executions: the lead picks; without an answer the lead's change wins. */
+  private async chooseExecution(duo: DuoOrchestrator, task: EngineTask, cwd: string, signal: AbortSignal, candidates: Array<{ label: string; diff: string; summary: string; validation: string }>): Promise<{ winner: 'lead' | 'partner'; reason: string }> {
+    const choose = duo.leadAdapter.structuredCall
+    if (!choose) return { winner: 'lead', reason: `Gleichstand; ${duo.leadAdapter.displayName} entscheidet als Lead.` }
+    const started = Date.now()
+    try {
+      const call = await choose.call(
+        duo.leadAdapter,
+        { prompt: chooseExecutionPrompt({ taskId: task.key, title: task.title, instructions: task.description, acceptanceCriteria: task.acceptanceCriteria }, candidates), schema: CHOOSE_SCHEMA },
+        { runId: `${this.run.id}:${task.key}`, cwd, signal, timeoutMs: Math.min(this.deps.settings.taskTimeoutMs, 5 * 60_000), effort: 'low', onEvent: (event) => this.forwardOrchestratorEvent(event, task, []) },
+      )
+      const choice = normalizeWithMeta(call.meta, () => normalizeChoice(call.result))
+      await this.recordOrchestratorCall(duo.leadAdapter.id, { taskId: task.id, purpose: 'duo_choose', status: 'ok', durationMs: call.meta.durationMs, meta: call.meta })
+      return { winner: choice.winner === 'A' ? 'lead' : 'partner', reason: `Gleichstand, ${duo.leadAdapter.displayName} wählt: ${choice.reason || (choice.winner === 'A' ? candidates[0]!.label : candidates[1]!.label)}` }
+    } catch (error) {
+      if (signal.aborted) throw new CancelledError()
+      const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
+      const meta = error instanceof OrchestratorError ? error.details.meta : undefined
+      await this.recordOrchestratorCall(duo.leadAdapter.id, { taskId: task.id, purpose: 'duo_choose', status: 'error', errorClass: kind, durationMs: Date.now() - started, meta })
+      return { winner: 'lead', reason: `Gleichstand; die Auswahl ist fehlgeschlagen (${kind}), es gilt die Änderung von ${duo.leadAdapter.displayName}.` }
+    }
+  }
+
+  /** Books one orchestrator request: one ModelCall per duo part (with its own provider), else one for the call. */
+  private async recordOrchestratorCall(provider: string, call: { taskId?: string; purpose: ModelCallRecord['purpose']; status: 'ok' | 'error'; errorClass?: string; durationMs: number; meta?: CallMeta }) {
+    for (const entry of bookableCalls(provider, call.meta, call.status, call.errorClass)) {
       await this.deps.store.recordModelCall({
-        runId: this.run.id, taskId: task.id, kind: 'orchestrator', provider: orchestrator.id, model: meta?.model ?? orchestrator.id, purpose: round ? 'repair' : 'execute',
-        status: 'error', errorClass: kind, sessionId: meta?.sessionId, durationMs: Date.now() - started, usage,
+        runId: this.run.id,
+        ...(call.taskId !== undefined ? { taskId: call.taskId } : {}),
+        kind: 'orchestrator',
+        provider: entry.provider,
+        model: entry.meta?.model ?? entry.provider,
+        purpose: call.purpose,
+        status: entry.status,
+        ...(entry.status === 'error' ? { errorClass: entry.errorClass } : {}),
+        sessionId: entry.meta?.sessionId,
+        durationMs: entry.durationMs ?? call.durationMs,
+        usage: entry.meta?.usage ?? NO_USAGE,
       })
-      if (['not_authenticated', 'session_expired', 'quota_exhausted', 'not_installed', 'model_unavailable'].includes(kind)) {
+    }
+  }
+
+  /**
+   * Restores the last failed local attempt in the worktree and asks the orchestrator for a repair hint.
+   * Returns the hint only when it is actionable; undefined means: go straight to premium execution.
+   */
+  private async prepareHintRound(task: EngineTask, worktree: WorktreeHandle, startHead: string, failed: FailedAttempt | undefined, signal: AbortSignal): Promise<RepairHint | undefined> {
+    if (!failed || this.premiumBlockedReason || signal.aborted) return undefined
+    // the orchestrator advises on exactly the files the local model will repair: base + the failed attempt
+    await this.deps.worktrees.reset(worktree.path, startHead)
+    if (failed.diff.trim()) {
+      const applied = await applyPatch(worktree.path, failed.diff)
+      if (!applied.ok) {
+        this.event('warn', 'premium_hint_skipped', `${task.key}: the failed attempt could not be restored for a repair hint (${applied.message.slice(0, 200)}).`, undefined, task.id)
+        return undefined
+      }
+    }
+    const hint = await this.requestRepairHint(task, worktree, failed, signal)
+    if (!hint) return undefined
+    if (hint.confidence === 'low' || !hint.edits.length) {
+      this.event('info', 'premium_hint_skipped', `${task.key}: premium repair hint not actionable (confidence ${hint.confidence}, ${hint.edits.length} edit(s)). ${hint.diagnosis.slice(0, 300)}`, { diagnosis: hint.diagnosis, confidence: hint.confidence }, task.id)
+      return undefined
+    }
+    this.event('info', 'premium_hint', `${task.key}: premium repair hint (confidence ${hint.confidence}, ${hint.edits.length} edit(s)): ${hint.diagnosis.slice(0, 600)}`, { diagnosis: hint.diagnosis, confidence: hint.confidence, files: [...new Set(hint.edits.map((edit) => edit.file))] }, task.id)
+    return hint
+  }
+
+  private async requestRepairHint(task: EngineTask, worktree: WorktreeHandle, failed: FailedAttempt, signal: AbortSignal): Promise<RepairHint | undefined> {
+    const orchestrator = this.deps.orchestrator!
+    const started = Date.now()
+    this.event('info', 'premium_hint_requested', `${task.key}: asking ${orchestrator.displayName} for a repair hint before premium execution.`, undefined, task.id)
+    try {
+      const { result, meta } = await orchestrator.repairHint!(
+        {
+          taskId: task.key,
+          title: task.title,
+          instructions: task.description,
+          acceptanceCriteria: task.acceptanceCriteria,
+          files: [...task.relevantFiles, ...task.newFiles],
+          diff: failed.diff,
+          failures: failed.failures,
+        },
+        {
+          runId: `${this.run.id}:${task.key}:hint`,
+          cwd: worktree.path,
+          signal,
+          timeoutMs: Math.min(this.deps.settings.taskTimeoutMs, 10 * 60_000),
+          effort: 'medium',
+          onEvent: (event) => this.forwardOrchestratorEvent(event, task, []),
+        },
+      )
+      await this.recordOrchestratorCall(orchestrator.id, { taskId: task.id, purpose: 'repair_hint', status: 'ok', durationMs: meta.durationMs, meta })
+      return result
+    } catch (error) {
+      if (signal.aborted) throw new CancelledError()
+      const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
+      const message = error instanceof Error ? error.message : String(error)
+      // a completed call whose output was rejected still used the quota
+      const meta = error instanceof OrchestratorError ? error.details.meta : undefined
+      await this.recordOrchestratorCall(orchestrator.id, { taskId: task.id, purpose: 'repair_hint', status: 'error', errorClass: kind, durationMs: Date.now() - started, meta })
+      if (BLOCKING_KINDS.includes(kind)) {
         this.premiumBlockedReason = `${orchestrator.displayName}: ${kind.replace(/_/g, ' ')}`
         this.event('error', 'premium_blocked', `${this.premiumBlockedReason}. Premium execution disabled for this run. ${message.slice(0, 300)}`, { kind }, task.id)
+      } else {
+        this.event('warn', 'premium_hint_failed', `${task.key}: repair hint failed (${kind}): ${message.slice(0, 300)}`, { kind }, task.id)
       }
-      logs.push(`Error (${kind}): ${message}`)
-      return { hardFailure: true, timedOut: kind === 'timeout', error: `${kind}: ${message}`, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, tokensMeasured: usage.measured, sessionId: undefined, summary: undefined }
+      return undefined
     }
   }
 
   private forwardOrchestratorEvent(event: OrchestratorEvent, task: EngineTask | undefined, logs: string[]) {
+    if (event.type === 'duo_proposal' || event.type === 'duo_reconciled') {
+      // duo milestones (review, repair hint) become their own engine events for the chat
+      const { type, ...data } = event
+      const message = event.type === 'duo_proposal' ? `${event.provider} (${event.phase}): ${event.summary}` : `${event.phase}: ${[event.fallback, ...event.notes].filter(Boolean).join(' ') || `winner ${event.winner ?? '–'}`}`
+      logs.push(`Duo ${message}`)
+      this.event('info', type, message.slice(0, 1000), data, task?.id)
+      return
+    }
     if (event.type === 'text') logs.push(event.text.slice(0, 2000))
     if (event.type === 'tool') logs.push(`${event.name} ${event.detail}`)
     if (event.type === 'file_change') logs.push(`changed ${event.path}`)
@@ -1005,15 +1357,48 @@ export class ExecutionRunner {
     const commit = await commitIfChanged(worktreePath, `${task.key}: deterministic formatting`)
     if (!commit) return undefined
     this.event('info', 'deterministic_fix', `${task.key}: applied formatter/eslint --fix without a model call.`, undefined, task.id)
-    const rerun = await runValidationChecks(worktreePath, this.deps.checks, { allowProjectCode: this.deps.settings.allowProjectCode, approvedCommands: this.deps.settings.approvedCommands })
+    const rerun = await this.validate(worktreePath)
     return { report: rerun }
+  }
+
+  /** Runs the project checks; a check that already fails on the run's base commit only blocks when the change adds failures. */
+  private async validate(cwd: string, signal?: AbortSignal, onOutput?: RunChecksOptions['onOutput']): Promise<ValidationReport> {
+    const { settings } = this.deps
+    const report = await runValidationChecks(cwd, this.deps.checks, { signal, onOutput, allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+    if (report.ok) return report
+    const baseline = await this.baselineReport()
+    return baseline ? againstBaseline(report, baseline) : report
+  }
+
+  /** Validation of the run's base commit in its own worktree – computed once, on the first failing check. */
+  private baselineReport(): Promise<ValidationReport | undefined> {
+    this.baseline ??= (async () => {
+      const { worktrees, settings } = this.deps
+      const runKey = short(this.run.id)
+      const worktree = await worktrees.create(this.run.repoPath, { projectKey: this.run.projectKey, name: `${runKey}-baseline`, branch: `mac/${runKey}/baseline`, baseCommit: this.run.baseCommit! })
+      try {
+        const report = await runValidationChecks(worktree.path, this.deps.checks, { signal: this.signal, allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands })
+        const failing = baselineFailures(report)
+        if (failing.length) {
+          const hint = failing.some((result) => /playwright install/i.test(result.output)) ? ' Playwright browsers are missing: run "npx playwright install" in the project.' : ''
+          this.event('warn', 'baseline_failing', `Already failing before any change: ${failing.map((result) => `${result.kind} (${result.command})`).join(', ')}. These checks only block a task that adds failures.${hint}`, { checks: failing.map((result) => result.id) })
+        }
+        return report
+      } finally {
+        await worktrees.remove(this.run.repoPath, worktree.path, worktree.branch).catch(() => undefined)
+      }
+    })().catch((error: unknown) => {
+      this.event('warn', 'baseline_unavailable', `Could not validate the base commit: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    })
+    return this.baseline
   }
 
   private async finalize(failedTasks: string[]): Promise<{ ok: boolean; validation: ValidationReport; review: ReviewSummary; patch: PatchValidationResult }> {
     const { store, settings } = this.deps
     const integration = this.integrationWorktree!
     let head = (await headCommit(integration.path))!
-    let validation = await runValidationChecks(integration.path, this.deps.checks, { allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands, signal: this.signal })
+    let validation = await this.validate(integration.path, this.signal)
     let patch = await validatePatch(integration.path, this.run.baseCommit!, head, { ...this.patchPolicyAll(), allowEmpty: false })
     let review = await this.review(validation, patch, failedTasks)
 
@@ -1050,11 +1435,12 @@ export class ExecutionRunner {
       }
       const runner = new ExecutionRunner(this.run, [fixTask], { ...this.deps, store: fixStore })
       runner.integrationWorktree = integration
+      runner.baseline = this.baseline
       runner.decisions.set('review-fix', runner.route(fixTask))
       const outcome = await runner.executeTask(fixTask, this.signal)
       if (outcome === 'succeeded') {
         head = (await headCommit(integration.path))!
-        validation = await runValidationChecks(integration.path, this.deps.checks, { allowProjectCode: settings.allowProjectCode, approvedCommands: settings.approvedCommands, signal: this.signal })
+        validation = await this.validate(integration.path, this.signal)
         patch = await validatePatch(integration.path, this.run.baseCommit!, head, { ...this.patchPolicyAll(), allowEmpty: false })
         review = await this.review(validation, patch, failedTasks, true)
       } else {
@@ -1115,14 +1501,14 @@ export class ExecutionRunner {
         },
         { runId: this.run.id, cwd: this.integrationWorktree!.path, signal: this.signal, timeoutMs: 10 * 60_000, effort: patch.securityCritical.length ? 'high' : 'medium', onEvent: (event) => this.forwardOrchestratorEvent(event, undefined, []) },
       )
-      await this.deps.store.recordModelCall({ runId: this.run.id, kind: 'orchestrator', provider: this.deps.orchestrator.id, model: meta.model ?? this.deps.orchestrator.id, purpose: afterFix ? 'review_fix' : 'review', status: 'ok', sessionId: meta.sessionId, durationMs: meta.durationMs, usage: meta.usage })
+      await this.recordOrchestratorCall(this.deps.orchestrator.id, { purpose: afterFix ? 'review_fix' : 'review', status: 'ok', durationMs: meta.durationMs, meta })
       this.event('info', 'review_done', `Premium review: ${result.verdict} (${result.score}/100). ${result.summary}`)
       return { kind: 'premium', reason: `Premium review because: ${riskReasons.join('; ')}.`, result, deterministicIssues, requiresHumanApproval: true }
     } catch (error) {
       const kind = error instanceof OrchestratorError ? error.kind : 'process_failed'
       // a completed review whose output was rejected still used the quota
       const meta = error instanceof OrchestratorError ? error.details.meta : undefined
-      await this.deps.store.recordModelCall({ runId: this.run.id, kind: 'orchestrator', provider: this.deps.orchestrator.id, model: meta?.model ?? this.deps.orchestrator.id, purpose: afterFix ? 'review_fix' : 'review', status: 'error', errorClass: kind, sessionId: meta?.sessionId, durationMs: Date.now() - started, usage: meta?.usage ?? { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, measured: false, billing: 'unknown' } })
+      await this.recordOrchestratorCall(this.deps.orchestrator.id, { purpose: afterFix ? 'review_fix' : 'review', status: 'error', errorClass: kind, durationMs: Date.now() - started, meta })
       return { kind: 'human_required', reason: `Premium review failed (${kind}): ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`, deterministicIssues, requiresHumanApproval: true }
     }
   }
@@ -1152,7 +1538,31 @@ export async function commitIfChanged(worktreePath: string, message: string): Pr
   return commitStaged(worktreePath, message)
 }
 
-const REMOVAL_TASK = /\b(remove|delete|drop|strip|clean ?up|entfern\w*|lösch\w*|streich\w*|aufräum\w*)\b/i
+/** Uncommitted change of a worktree against its HEAD (new files included, dependency links excluded); the index is left unstaged. */
+export async function workingDiff(worktreePath: string): Promise<string> {
+  await stageAll(worktreePath)
+  try {
+    return (await git(worktreePath, ['diff', '--cached', '--binary', '--no-color', '--no-ext-diff', 'HEAD', '--', '.', ...DEPENDENCY_DIR_EXCLUDES], { internal: true })).stdout
+  } finally {
+    await git(worktreePath, ['reset', '-q'], { internal: true, allowFailure: true })
+  }
+}
+
+const failedChecks = (report: ValidationReport) => report.results.filter((result) => result.blocking && result.status !== 'passed' && result.status !== 'skipped' && !result.preexisting).length
+const typeErrors = (report: ValidationReport) => report.results.filter((result) => result.kind === 'typecheck' && result.status === 'failed').reduce((sum, result) => sum + (result.errorCount ?? 1), 0)
+
+/** Duo execution: < 0 when `first` validated better, > 0 when `second` did, 0 on a tie. */
+export function compareValidation(first: ValidationReport, second: ValidationReport): number {
+  const rank = (report: ValidationReport) => [report.ok ? 0 : 1, report.testsFailed, failedChecks(report), typeErrors(report)]
+  const a = rank(first)
+  const b = rank(second)
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return a[index]! - b[index]!
+  }
+  return 0
+}
+
+const REMOVAL_TASK =/\b(remove|delete|drop|strip|clean ?up|entfern\w*|lösch\w*|streich\w*|aufräum\w*)\b/i
 
 /**
  * Detects an attempt that only removed code (e.g. an import replaced by a lone ";") although the task

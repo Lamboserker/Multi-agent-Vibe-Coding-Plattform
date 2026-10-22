@@ -33,6 +33,10 @@ export interface CheckResult {
   /** Tail of the output, secret-redacted, for logs and repair prompts. */
   output: string
   reason?: string
+  /** Already failing on the run's base commit: reported, but blocks nothing (see againstBaseline). */
+  preexisting?: boolean
+  /** Normalized failure lines of the full (untruncated) output of a red check, see failureLines. */
+  failureLines?: string[]
 }
 
 export interface ValidationReport {
@@ -110,6 +114,12 @@ export function parseTestCounts(output: string): { passed?: number; failed?: num
   if (vitestFailedOnly) return { passed: Number(vitestFailedOnly[2]) - Number(vitestFailedOnly[1]), failed: Number(vitestFailedOnly[1]) }
   const jest = text.match(/Tests:\s+(?:(\d+)\s+failed,\s+)?(?:\d+\s+skipped,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total/)
   if (jest) return { passed: Number(jest[2] ?? 0), failed: Number(jest[1] ?? 0) }
+  // Playwright – "Running 23 tests using 8 workers" … "  2 failed" / "  21 passed (4.1s)" on their own lines
+  if (/Running \d+ tests? using \d+ workers?/.test(text)) {
+    const failed = text.match(/^\s*(\d+) failed\s*$/m)
+    const passed = text.match(/^\s*(\d+) passed\b/m)
+    if (failed || passed) return { passed: Number(passed?.[1] ?? 0), failed: Number(failed?.[1] ?? 0) }
+  }
   const pytest = text.match(/=+\s+(?:(\d+)\s+failed,?\s*)?(?:(\d+)\s+passed)?/)
   if (pytest && (pytest[1] || pytest[2])) return { passed: Number(pytest[2] ?? 0), failed: Number(pytest[1] ?? 0) }
   // node:test – TAP ("# pass 3") and the spec reporter summary ("ℹ pass 3")
@@ -158,7 +168,8 @@ export async function runValidationChecks(cwd: string, checks: ValidationCheck[]
         const value = await withAbort(check.execute(cwd, checkSignal), checkSignal)
         if (!Number.isSafeInteger(value.passed) || value.passed < 0 || !Number.isSafeInteger(value.failed) || value.failed < 0 || typeof value.output !== 'string') throw new Error('Plugin test runner returned an invalid result.')
         const status = value.failed ? 'failed' : 'passed'
-        results.push({ id: check.id, kind: check.kind, command: check.command, status, blocking: check.blocking, durationMs: Date.now() - started, exitCode: value.failed ? 1 : 0, testsPassed: value.passed, testsFailed: value.failed, output: redactSecrets(value.output).slice(-6000) })
+        const output = redactSecrets(value.output)
+        results.push({ id: check.id, kind: check.kind, command: check.command, status, blocking: check.blocking, durationMs: Date.now() - started, exitCode: value.failed ? 1 : 0, testsPassed: value.passed, testsFailed: value.failed, output: output.slice(-6000), ...(value.failed ? { failureLines: failureLines(output, cwd) } : {}) })
       } catch (error) {
         results.push({ id: check.id, kind: check.kind, command: check.command, status: checkSignal?.reason?.name === 'TimeoutError' ? 'timeout' : 'error', blocking: check.blocking, durationMs: Date.now() - started, exitCode: null, output: '', reason: error instanceof Error ? error.message : String(error) })
       }
@@ -207,8 +218,13 @@ export async function runValidationChecks(cwd: string, checks: ValidationCheck[]
       errorCount: check.kind === 'typecheck' ? parseErrorCount(output) : undefined,
       output: output.slice(-6000),
       reason: result.spawnError,
+      ...(status === 'passed' ? {} : { failureLines: failureLines(output, cwd) }),
     })
   }
+  return summarizeResults(results)
+}
+
+function summarizeResults(results: CheckResult[]): ValidationReport {
   const testsPassed = results.reduce((sum, result) => sum + (result.testsPassed ?? 0), 0)
   const testsFailed = results.reduce((sum, result) => sum + (result.testsFailed ?? 0), 0)
   const ok = results.every((result) => !result.blocking || result.status === 'passed' || result.status === 'skipped')
@@ -218,10 +234,101 @@ export async function runValidationChecks(cwd: string, checks: ValidationCheck[]
   return { ok, results, testsPassed, testsFailed, summary }
 }
 
+const red = (result: CheckResult) => result.status === 'failed' || result.status === 'timeout' || result.status === 'error'
+
+/**
+ * Blocking checks that already fail on the base commit, e.g. tests that need a browser that is not installed.
+ * The baseline may itself be an adjusted report (a run's final validation): its preexisting failures count too.
+ */
+export function baselineFailures(baseline: ValidationReport): CheckResult[] {
+  return baseline.results.filter((result) => (result.blocking || result.preexisting) && red(result))
+}
+
+/** Upper bound of stored failure lines per check (the process output itself is capped at 512 KiB). */
+const MAX_FAILURE_LINES = 2000
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Matches `dir` written with either slash style, case-insensitive, followed by a separator. */
+function directoryPrefix(dir: string): RegExp | undefined {
+  const parts = path.resolve(dir).split(/[\\/]+/).filter(Boolean)
+  if (parts.length < 2) return undefined
+  return new RegExp(`${parts.map(escapeRegExp).join('[\\\\/]+')}[\\\\/]+`, 'gi')
+}
+
+const basename = (file: string) => file.split(/[\\/]/).filter(Boolean).pop() ?? ''
+
+/**
+ * Normalized error lines of a check output, sorted and deduplicated, to compare failures across worktrees.
+ * Removes only what differs between two runs of the same failure: ANSI codes, the worktree prefix (`cwd`),
+ * other absolute directories (the file name stays), line/column positions, durations, timestamps and
+ * free-standing counts ("Found 25 errors"). Digits inside file and test names are kept.
+ */
+export function failureLines(output: string, cwd?: string): string[] {
+  const worktree = cwd ? directoryPrefix(cwd) : undefined
+  const lines = new Set<string>()
+  for (const raw of output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n/)) {
+    if (!/error|fail|not found|cannot find|missing/i.test(raw)) continue
+    let line = worktree ? raw.replace(worktree, '') : raw
+    line = line
+      .replace(/[^\s'"():]*[\\/](?:worktrees?|\.worktrees|\.multi-ai-coder)[\\/][^\s'"():\\/]+[\\/]/gi, '')
+      .replace(/[A-Za-z]:[\\/][^\s'"():]*/g, (file) => basename(file))
+      .replace(/(^|[\s'"(])\/[^\s'"():]*/g, (match: string, lead: string) => lead + basename(match.slice(lead.length)))
+      .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/g, '')
+      .replace(/\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b/g, '')
+      .replace(/\(\d+,\d+\)/g, '')
+      .replace(/:\d+(?::\d+)?/g, '')
+      .replace(/(?<![\w.])\d+(?:[.,]\d+)?\s*(?:ms|s|sec|secs|seconds|m|min)\b/gi, '')
+      .replace(/(?<![\w./\\-])\d+(?![\w./\\-])/g, '')
+      .replace(/\(\s*\)/g, '')
+      .replace(/\\/g, '/')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (line) lines.add(line.slice(0, 500))
+  }
+  return [...lines].sort().slice(0, MAX_FAILURE_LINES)
+}
+
+/** The full normalized failure set as one string (order-independent), see failureLines. */
+export function failureSignature(output: string, cwd?: string): string {
+  return failureLines(output, cwd).join('\n')
+}
+
+const linesOf = (result: CheckResult) => result.failureLines ?? failureLines(result.output)
+
+/**
+ * A check that already failed on the run's base commit does not block a change – the change did not
+ * cause it. With base test counts it blocks when the change adds failures or reports none. With
+ * TypeScript error counts on both sides it blocks when the change adds errors. Otherwise it is waived
+ * only if every normalized failure line of the change already failed on the base commit (or both runs
+ * could not even spawn the runner) – a single new failure line blocks.
+ */
+export function againstBaseline(report: ValidationReport, baseline: ValidationReport): ValidationReport {
+  const failing = new Map(baselineFailures(baseline).map((result) => [result.id, result]))
+  const results = report.results.map((result) => {
+    const before = failing.get(result.id)
+    if (!before || !result.blocking || !red(result)) return result
+    if (before.testsFailed !== undefined) {
+      if (result.testsFailed === undefined || result.testsFailed > before.testsFailed) return result
+    } else {
+      if (before.errorCount !== undefined && result.errorCount !== undefined && result.errorCount > before.errorCount) return result
+      const bothUnspawned = result.status === 'error' && before.status === 'error'
+      const now = linesOf(result)
+      const known = new Set(linesOf(before))
+      const subset = now.length > 0 && now.every((line) => known.has(line))
+      if (!subset && !bothUnspawned) return result
+    }
+    return { ...result, blocking: false, preexisting: true, reason: [result.reason, 'already failing before the change'].filter(Boolean).join(' – ') }
+  })
+  return summarizeResults(results)
+}
+
 /** Compact failure description for repair prompts. */
 export function failureDigest(report: ValidationReport, maxChars = 5000): string {
   return report.results
-    .filter((result) => result.status === 'failed' || result.status === 'timeout' || result.status === 'error')
+    .filter((result) => red(result) && !result.preexisting)
     .map((result) => `## ${result.kind} failed: ${result.command}\n${result.output.slice(-Math.floor(maxChars / 2))}`)
     .join('\n\n')
     .slice(0, maxChars)

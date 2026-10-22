@@ -152,6 +152,10 @@ export type OrchestratorEvent =
   | { type: 'rate_limit'; info: RateLimitInfo }
   | { type: 'usage'; usage: UsageReport }
   | { type: 'error'; message: string }
+  /** Duo mode: one side's own result of a phase (before reconciliation). */
+  | { type: 'duo_proposal'; provider: OrchestratorId; phase: DuoPhase; summary: string }
+  /** Duo mode: both results of a phase were reconciled (or one side's result was used). */
+  | { type: 'duo_reconciled'; phase: DuoPhase; notes: string[]; winner?: OrchestratorId | 'merged'; fallback?: string }
 
 export interface CallContext {
   /** Hard per-call limits. CLIs must reject unsupported limits before invoking the model. */
@@ -175,6 +179,53 @@ export interface CallMeta {
   model?: string
   usage: UsageReport
   durationMs: number
+  /**
+   * Duo mode: the single calls that served this request (each booked as its own ModelCall with its
+   * provider). The top-level usage/duration is their sum; without parts the meta is one call.
+   */
+  parts?: CallMetaPart[]
+  /** Duo mode: what both orchestrators proposed and how it was reconciled (for chat milestones). */
+  duo?: DuoInfo
+}
+
+export type DuoRole = 'lead' | 'partner' | 'reconcile' | 'choose'
+export type DuoPhase = 'plan' | 'design' | 'review' | 'repair_hint' | 'chat' | 'execute'
+
+/** One call of a duo request. `status` is the call's own outcome (one side may fail while the request succeeds). */
+export interface CallMetaPart extends Omit<CallMeta, 'parts' | 'duo'> {
+  provider: OrchestratorId
+  role: DuoRole
+  status: 'ok' | 'error'
+  errorClass?: string
+}
+
+export interface DuoInfo {
+  phase: DuoPhase
+  lead: OrchestratorId
+  partner: OrchestratorId
+  /** Short summary of each side's own result (only sides that answered). */
+  proposals: Array<{ provider: OrchestratorId; summary: string }>
+  /** Reconciliation notes (from the lead's reconcile call or the deterministic merge). */
+  notes: string[]
+  /** Whose result was used: one provider, or 'merged' when both results were combined. */
+  winner?: OrchestratorId | 'merged'
+  /** Set when only one side's result could be used (the other failed); shown to the user as a hint. */
+  fallback?: string
+}
+
+/**
+ * Booking units of one orchestrator request: one entry per duo part, otherwise the request itself.
+ * `durationMs` is only set for parts (a single call keeps the caller's own duration semantics).
+ */
+export function bookableCalls(provider: string, meta: CallMeta | undefined, status: 'ok' | 'error', errorClass?: string): Array<{ provider: string; status: 'ok' | 'error'; errorClass?: string; meta?: CallMeta; durationMs?: number }> {
+  if (!meta?.parts?.length) return [{ provider, status, errorClass, meta }]
+  return meta.parts.map(({ provider: partProvider, role: _role, status: partStatus, errorClass: partError, ...call }) => ({
+    provider: partProvider,
+    status: partStatus,
+    errorClass: partStatus === 'error' ? partError ?? errorClass : undefined,
+    meta: call,
+    durationMs: call.durationMs,
+  }))
 }
 
 export interface RepoContextDigest {
@@ -219,6 +270,8 @@ export interface PlanningInput {
   agents?: AgentOffer[]
   /** Active skills the planner may attach to tasks; `requested` = the user named it in the request. */
   skills?: SkillOffer[]
+  /** The approved design draft the plan has to build on. */
+  design?: DesignBrief
 }
 
 export interface AgentOffer {
@@ -305,6 +358,35 @@ export interface ExecutionResult {
   sessionId?: string
 }
 
+/** Failed local attempt handed to the orchestrator for advice ("premium advises, local executes"). */
+export interface RepairHintInput {
+  taskId: string
+  title: string
+  /** Task description as planned (the instruction the local model got). */
+  instructions: string
+  acceptanceCriteria: string[]
+  /** Files the task may touch (relevant + new). */
+  files: string[]
+  /** Diff of the last failed attempt against the task's base commit ('' if nothing was written). */
+  diff: string
+  /** Compact output of the failing checks or the rejection reason. */
+  failures: string
+}
+
+export interface RepairHintEdit {
+  file: string
+  /** Exact text in the current file ('' = the file does not exist yet; replace is its full content). */
+  find: string
+  replace: string
+  note: string
+}
+
+export interface RepairHint {
+  diagnosis: string
+  edits: RepairHintEdit[]
+  confidence: 'high' | 'medium' | 'low'
+}
+
 export interface ChatInput {
   question: string
   context: RepoContextDigest
@@ -315,6 +397,22 @@ export interface ChatInput {
    * resumed, the adapter falls back to a full prompt.
    */
   resumeSessionId?: string
+  /** Duo mode: the partner's own CLI session of an earlier answer (`resumeSessionId` belongs to the lead). */
+  partnerResumeSessionId?: string
+}
+
+export interface ChatResult {
+  answer: string
+  /** Duo mode: the partner's answer, shown next to the lead's. */
+  duo?: { partner: OrchestratorId; partnerAnswer: string }
+}
+
+/** A free structured call (no tools, read-only) – used by the duo orchestrator to reconcile two results. */
+export interface StructuredRequest {
+  prompt: string
+  schema: Record<string, unknown>
+  /** Replaces the default orchestrator system prompt (e.g. the designer prompt). */
+  systemPrompt?: string
 }
 
 /** Common contract for premium orchestrators (Claude Code, Codex). */
@@ -329,8 +427,74 @@ export interface OrchestratorAdapter {
   diagnose(options?: { liveCall?: boolean; cwd?: string }): Promise<DiagnosticReport>
   analyzeTask(input: AnalysisInput, ctx: CallContext): Promise<{ result: TaskAnalysis; meta: CallMeta }>
   createPlan(input: PlanningInput, ctx: CallContext): Promise<{ result: ExecutionPlan; meta: CallMeta }>
+  /** Optional: plugin orchestrators may not support the design phase. */
+  createDesign?(input: DesignInput, ctx: CallContext): Promise<{ result: DesignDraft; meta: CallMeta }>
   reviewResult(input: ReviewInput, ctx: CallContext): Promise<{ result: ReviewResult; meta: CallMeta }>
+  /** Optional: precise "old → new" repair instructions for a failed local attempt (read-only, no edits). */
+  repairHint?(input: RepairHintInput, ctx: CallContext): Promise<{ result: RepairHint; meta: CallMeta }>
   executeComplexTask(input: ExecutionInput, ctx: CallContext): Promise<{ result: ExecutionResult; meta: CallMeta }>
-  chat(input: ChatInput, ctx: CallContext): Promise<{ result: { answer: string }; meta: CallMeta }>
+  chat(input: ChatInput, ctx: CallContext): Promise<{ result: ChatResult; meta: CallMeta }>
+  /** Optional: one structured answer to a free prompt (no tools). Without it the duo lead cannot reconcile and its own result is used. */
+  structuredCall?(request: StructuredRequest, ctx: CallContext): Promise<{ result: unknown; meta: CallMeta }>
   cancelRun(runId: string): Promise<void>
+}
+
+export type DesignMode = 'auto' | 'force' | 'skip'
+
+export const DESIGN_TYPES = ['dashboard', 'crm', 'landing-page', 'saas-app', 'admin-forms', 'ecommerce', 'other'] as const
+export type DesignType = (typeof DESIGN_TYPES)[number]
+
+export const DESIGN_TOKEN_GROUPS = ['color', 'typography', 'spacing', 'radius', 'shadow', 'motion'] as const
+
+export interface DesignToken {
+  /** CSS custom property, e.g. `--accent`. */
+  name: string
+  value: string
+  /** Dark-mode value; '' = same as the light value. */
+  darkValue: string
+  group: (typeof DESIGN_TOKEN_GROUPS)[number]
+}
+
+export interface DesignComponent {
+  name: string
+  purpose: string
+  /** Suggested repo path; '' = the planner decides. */
+  file: string
+  /** Precise build spec for a small model (markup structure, classes, states, tokens). */
+  spec: string
+  tokens: string[]
+}
+
+export interface DesignScreen {
+  name: string
+  route: string
+  layout: string
+  /** Names of the components the screen uses. */
+  components: string[]
+}
+
+export interface DesignDraft {
+  summary: string
+  designType: DesignType
+  direction: string
+  tokens: DesignToken[]
+  components: DesignComponent[]
+  screens: DesignScreen[]
+  /** One self-contained HTML document (sanitized); '' = no preview. */
+  mockupHtml: string
+  questions: string[]
+}
+
+/** The approved part of a draft that planning and executors build on. */
+export type DesignBrief = Omit<DesignDraft, 'mockupHtml' | 'questions'>
+
+export interface DesignInput {
+  goal: string
+  context: RepoContextDigest
+  /** Inline text of the design skills. */
+  skills?: string
+  skillCatalog?: Array<{ name: string; description: string }>
+  feedback?: string
+  previous?: DesignBrief
+  provider: OrchestratorId
 }

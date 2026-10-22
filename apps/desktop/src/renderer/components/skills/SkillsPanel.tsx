@@ -7,6 +7,7 @@ import { useAppState } from '../../lib/store'
 import { useStore } from '../../lib/store/core'
 import { pluginStore } from '../../lib/stores'
 import { AsyncButton, Badge, Confirm, Empty, PanelHeader, Spinner } from '../common'
+import { IntegrationsPanel } from '../integrations/IntegrationsPanel'
 
 interface Skill {
   key: string
@@ -39,6 +40,7 @@ export const ROLES: Array<{ id: string; label: string }> = [
   { id: 'planner', label: 'Planer (Premium)' },
   { id: 'coder', label: 'Lokale Coder-Agenten' },
   { id: 'chat', label: 'Chat-Fragen' },
+  { id: 'designer', label: 'Designer (Premium)' },
 ]
 
 /** Role checkboxes ("*" = all roles); updates immediately, the saved value follows. */
@@ -75,6 +77,7 @@ export function SkillsPanel() {
   const revision = useStore(pluginStore, (state) => state.revision)
   const skills = useVisibleLoader(() => api.get<Skill[]>(`/skills${projectId ? `?projectId=${enc(projectId)}` : ''}`), [projectId])
   const [query, setQuery] = useState('')
+  const [catalog, setCatalog] = useState(false)
   const [source, setSource] = useState('')
   const [selected, setSelected] = useState<string>()
   const [builder, setBuilder] = useState<{ initial?: SkillDetails } | null>(null)
@@ -88,11 +91,13 @@ export function SkillsPanel() {
 
   if (builder) return <SkillBuilder initial={builder.initial} projectId={projectId} onDone={(key) => { setBuilder(null); void skills.reload(); if (key) setSelected(key) }} />
   if (selected) return <SkillDetail skillKey={selected} onBack={() => { setSelected(undefined); void skills.reload() }} onEdit={(initial) => setBuilder({ initial })} />
+  if (catalog) return <IntegrationsPanel initialTab="skills" onBack={() => { setCatalog(false); void skills.reload() }} />
 
   const visible = (skills.data ?? []).filter((skill) => (!source || skill.source === source) && (!query || `${skill.name} ${skill.description} ${skill.triggers.join(' ')}`.toLowerCase().includes(query.toLowerCase())))
   return (
     <>
       <PanelHeader title="Skills">
+        <button className="btn small primary" onClick={() => setCatalog(true)}>Integrationskatalog</button>
         <button className="icon-btn" title="Aktualisieren" onClick={() => void skills.reload()}>
           <RefreshCw size={14} />
         </button>

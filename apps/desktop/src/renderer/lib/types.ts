@@ -3,6 +3,10 @@
 export type CostMode = 'cheapest' | 'balanced' | 'quality'
 export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree' | 'auto_commit'
 export type OrchestratorId = 'claude-code' | 'codex'
+/** single = one premium orchestrator; duo = Claude Code and Codex in parallel with reconciliation. */
+export type OrchestratorMode = 'single' | 'duo'
+/** Composer choice per request: one CLI or both (duo). */
+export type OrchestratorChoice = OrchestratorId | 'duo'
 export type LocalRole = 'fast' | 'balanced' | 'advanced'
 
 export interface ModelSelfTest {
@@ -19,6 +23,8 @@ export interface ModelSelfTest {
 
 export interface Settings {
   orchestrator: OrchestratorId | null
+  orchestratorMode: OrchestratorMode
+  duoLead: OrchestratorId
   claudeModel: string
   codexModel: string
   orchestratorAuthMode: 'subscription' | 'api_key'
@@ -32,13 +38,16 @@ export interface Settings {
   maxLocalRepairs: number
   maxEscalationSteps: number
   reviewFixRounds: number
+  premiumHints: boolean
   localParallelism: number | 'auto'
   premiumParallelism: number
   ollamaBaseUrl: string
+  extraOllamaUrls: string[]
   ollamaModelsDir: string | null
   numCtx: number
   modelWarmup: boolean
   keepAliveMinutes: number
+  unloadAfterRun: boolean
   fastPath: boolean
   formatOnSave: boolean
   taskTimeoutMinutes: number
@@ -191,10 +200,31 @@ export interface Task {
   currentStep: string
   createdAt: string
   planning?: { startedAt: string; phase: 'queued' | 'preparing' }
+  /** Design phase before planning (auto = only for UI requests). */
+  designMode?: DesignMode
   subtasks: Subtask[]
   chatMessages?: ChatMessage[]
   plans?: TaskPlan[]
   executions?: ExecutionRun[]
+}
+
+export type DesignMode = 'auto' | 'force' | 'skip'
+
+/** A design draft of a task (GET /tasks/:id/design). `spec` is stored JSON: read it through designView(). */
+export interface DesignDraft {
+  id: string
+  taskId: string
+  version: number
+  status: 'generating' | 'draft' | 'approved' | 'rejected' | 'failed'
+  provider?: string | null
+  designType?: string | null
+  summary: string
+  spec?: unknown
+  /** Sanitized server-side (no scripts, no event handlers, no external URLs); '' = no preview. */
+  mockupHtml?: string | null
+  feedback?: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export interface CheckResult {
@@ -334,6 +364,8 @@ export interface UsageSummary {
     unmeasuredCalls: number
     apiEquivalentUsd: { value: number; basis: 'reported' | 'mixed' | 'none'; reportedCalls: number }
     durationMs: number
+    /** Premium calls per provider (duo: Claude Code and Codex separately). */
+    byProvider?: Record<string, { calls: number; failedCalls: number; inputTokens: number; outputTokens: number; cachedInputTokens: number }>
   }
   local: {
     calls: number
@@ -367,6 +399,11 @@ export interface ConnectionStatus {
 export interface OrchestratorOverview {
   selected: OrchestratorId | null
   authMode: string
+  mode?: OrchestratorMode
+  duoLead?: OrchestratorId
+  /** CLIs a request can use right now. */
+  usable?: OrchestratorId[]
+  duo?: { available: boolean; reason?: string }
   orchestrators: Array<{
     id: OrchestratorId
     displayName: string
@@ -469,15 +506,35 @@ export interface ResourceWarning {
   model?: string
 }
 
+export interface ResourceModel {
+  name: string
+  sizeBytes: number
+  vramBytes: number
+  gpuShare: number
+  contextLength?: number
+  expiresAt?: string
+  agents: string[]
+  /** app = the instance Multi-AI Coder works with; external = another local Ollama instance. */
+  instance: 'app' | 'external'
+  baseUrl: string
+  state: 'generating' | 'idle' | 'external'
+  unloadsInSec: number | null
+}
+
 export interface ResourceSnapshot {
   at: string
+  /** Time of the sample (ms) and the sampling cadence of the runtime. */
+  sampledAt: number
+  intervalMs: number
   cpu: { pct: number; model: string; logicalCores: number; physicalCores?: number }
   ram: { usedBytes: number; totalBytes: number }
   gpu?: { name: string; utilizationPct?: number; vramUsedMb?: number; vramTotalMb?: number; temperatureC?: number; powerW?: number; powerLimitW?: number; source: 'nvidia-smi' | 'ollama' | 'none' }
   disk?: { path: string; freeBytes?: number; totalBytes?: number }
   history: Array<{ at: string; cpuPct: number; ramUsedBytes: number; gpuPct?: number; vramUsedMb?: number }>
   ollama: { reachable: boolean }
-  models: Array<{ name: string; sizeBytes: number; vramBytes: number; gpuShare: number; contextLength?: number; expiresAt?: string; agents: string[] }>
+  models: ResourceModel[]
+  /** VRAM of the app instance's models and of everything else on the card (GB; null without a VRAM figure). */
+  vram: { appModelsGb: number; otherGb: number | null }
   slots: { local: number; premium: number; busyLocal: number; busyPremium: number }
   waiting: Array<{ key: string; title: string; model?: string; reason: string }>
   warnings: ResourceWarning[]

@@ -8,6 +8,7 @@ import { useStore } from '../../lib/store/core'
 import { pluginStore } from '../../lib/stores'
 import { AsyncButton, Badge, Confirm, Empty, PanelHeader, Spinner, StatusDot } from '../common'
 import { RolePicker } from '../skills/SkillsPanel'
+import { IntegrationsPanel } from '../integrations/IntegrationsPanel'
 
 type Policy = 'allow' | 'confirm' | 'off'
 
@@ -62,6 +63,7 @@ export function McpPanel() {
   const discovered = useVisibleLoader(() => (projectId ? api.get<Array<{ file: string; servers: string[]; json: string }>>(`/mcp/discover?projectId=${enc(projectId)}`) : Promise.resolve([])), [projectId], 60_000)
   const [selected, setSelected] = useState<string>()
   const [creating, setCreating] = useState(false)
+  const [catalog, setCatalog] = useState(false)
   const [importing, setImporting] = useState<string>()
 
   useEffect(() => {
@@ -80,9 +82,12 @@ export function McpPanel() {
     await servers.reload()
   }
 
+  if (catalog) return <IntegrationsPanel onBack={() => { setCatalog(false); void servers.reload() }} />
+
   return (
     <>
       <PanelHeader title="MCP-Server">
+        <button className="btn small primary" onClick={() => setCatalog(true)}>Integrationskatalog</button>
         <button className="icon-btn" title="Aktualisieren" onClick={() => void servers.reload()}>
           <RefreshCw size={14} />
         </button>

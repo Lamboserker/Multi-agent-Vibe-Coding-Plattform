@@ -52,6 +52,7 @@ export function SettingsPanel() {
             </select>
           </Field>
           <label className="row"><input type="checkbox" checked={settings.premiumExecutionAllowed} onChange={(event) => set({ premiumExecutionAllowed: event.target.checked })} /> Premium darf Aufgaben selbst implementieren (sonst nur Planung/Review)</label>
+          <label className="row"><input type="checkbox" checked={settings.premiumHints} onChange={(event) => set({ premiumHints: event.target.checked })} /> Premium gibt Reparaturhinweise, das stärkste lokale Modell setzt sie um (vor der Premium-Ausführung oder statt ihr, wenn sie aus ist)</label>
           <Field label="Premium-Review" hint="Risikobasiert: bei sicherheitskritischen Dateien, Risiko ≥ 4, > 400 geänderten Zeilen, fehlgeschlagener Validierung oder ohne bestandene Tests.">
             <select className="select" value={settings.premiumReviewPolicy} onChange={(event) => set({ premiumReviewPolicy: event.target.value as Settings['premiumReviewPolicy'] })}>
               <option value="risk_based">Risikobasiert</option>
@@ -80,7 +81,8 @@ export function SettingsPanel() {
           </div>
           <label className="row"><input type="checkbox" checked={settings.fastPath} onChange={(event) => set({ fastPath: event.target.checked })} /> Fast Path: kleine, eindeutige Aufgaben ohne Premium-Planung (Formatieren, Lint-Fix, Importe, Umbenennen deterministisch ohne Modell)</label>
           <label className="row"><input type="checkbox" checked={settings.formatOnSave} onChange={(event) => set({ formatOnSave: event.target.checked })} /> Beim Speichern formatieren (Prettier des Projekts, falls installiert)</label>
-          <label className="row"><input type="checkbox" checked={settings.modelWarmup} onChange={(event) => set({ modelWarmup: event.target.checked })} /> Lokale Modelle während der Planung vorladen (nur wenn genug Grafikspeicher frei ist)</label>
+          <label className="row"><input type="checkbox" checked={settings.modelWarmup} onChange={(event) => set({ modelWarmup: event.target.checked })} /> Lokale Modelle nach der Planung vorladen (nur wenn genug Grafikspeicher frei ist)</label>
+          <label className="row"><input type="checkbox" checked={settings.unloadAfterRun ?? true} onChange={(event) => set({ unloadAfterRun: event.target.checked })} /> Lokale Modelle nach jedem Lauf entladen (gibt den Grafikspeicher sofort frei, außer ein anderer Lauf nutzt das Modell)</label>
         </div>
 
         <div className="card stack">

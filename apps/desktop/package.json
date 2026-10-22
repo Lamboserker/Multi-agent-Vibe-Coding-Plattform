@@ -34,6 +34,7 @@
     "@multi-ai-coder/api": "workspace:*",
     "@multi-ai-coder/engine": "workspace:*",
     "@multi-ai-coder/plugin-sdk": "workspace:*",
+    "@multi-ai-coder/shared": "workspace:*",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

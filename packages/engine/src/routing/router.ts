@@ -57,6 +57,15 @@ export function baseTier(task: RoutableTask): { tier: ExecutorTier; reason: stri
   return { tier: 'fast', reason: `Simple task (complexity ${task.complexity}, risk ${task.risk}).` }
 }
 
+/**
+ * Measured success may lower the tier for low-risk work, and for risk 3 too (the candidate model already needs
+ * "high" confidence). Security-critical files and premium-forced categories never move down.
+ */
+function statsDowngradeAllowed(task: RoutableTask): boolean {
+  if (task.securityCritical || SECURITY_CATEGORIES.has(task.category)) return false
+  return task.risk <= 3
+}
+
 function shift(tier: ExecutorTier, delta: number): ExecutorTier {
   const index = Math.min(TIER_ORDER.length - 1, Math.max(0, TIER_ORDER.indexOf(tier) + delta))
   return TIER_ORDER[index]!
@@ -104,7 +113,10 @@ export function routeTask(task: RoutableTask, models: LocalModelProfile[], polic
 
   if (task.suggestedExecutor === 'premium' && tier !== 'premium') {
     if (policy.costMode === 'cheapest') reasons.push('Orchestrator suggested premium; cost mode "cheapest" keeps it local.')
-    else {
+    else if (policy.costMode === 'balanced' && task.complexity < 4 && task.risk < 3) {
+      // Planners over-suggest premium; in balanced mode the hint only counts for genuinely hard or risky work.
+      reasons.push(`Orchestrator suggested premium; balanced mode keeps complexity ${task.complexity}/risk ${task.risk} local.`)
+    } else {
       tier = policy.costMode === 'quality' ? 'premium' : shift(tier, 1)
       reasons.push(`Orchestrator suggested premium execution → ${tier}.`)
     }
@@ -129,7 +141,7 @@ export function routeTask(task: RoutableTask, models: LocalModelProfile[], polic
         const entry = lookupStats(stats, model.model, task.category)
         return entry && entry.attempts >= MIN_SAMPLES && entry.confidence === 'high'
       })
-      if (proven && task.risk <= 2) {
+      if (proven && statsDowngradeAllowed(task)) {
         const entry = lookupStats(stats, proven.model, task.category)!
         reasons.push(`${proven.model} has proven itself on "${task.category}" (${entry.successes}/${entry.attempts}, lower bound ${(entry.lowerBound * 100).toFixed(0)}%) → ${candidateTier}.`)
         tier = candidateTier

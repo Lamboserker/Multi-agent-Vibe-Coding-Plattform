@@ -2,6 +2,7 @@ import { existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import type { RepoIndex } from '../index/repo-index.js'
+import { isSensitivePath, PathViolationError, resolveInside } from '../security/paths.js'
 import { runProcess, sanitizedEnv } from '../util/process.js'
 
 /*
@@ -29,6 +30,8 @@ export type FastPathTool =
   | { kind: 'lint-fix'; files: string[] }
   | { kind: 'organize-imports'; files: string[] }
   | { kind: 'rename'; files: string[]; from: string; to: string }
+  // only created by the API (design task); `files` and `contents` are parallel arrays
+  | { kind: 'write-files'; files: string[]; contents: string[] }
 
 export type FastPathDecision =
   | { mode: 'tool'; tool: FastPathTool; reason: string; title: string }
@@ -112,7 +115,32 @@ export async function runFastPathTool(root: string, tool: FastPathTool, options:
     const ok = !result.spawnError && (result.exitCode === 0 || (tool.kind === 'lint-fix' && result.exitCode === 1))
     return { ok, changed, message: ok ? `${changed.length} file(s) changed` : (result.stderr || result.stdout || String(result.spawnError)).slice(0, 1500) }
   }
+  if (tool.kind === 'write-files') return writeFiles(root, tool)
   return runLanguageServiceTool(root, tool)
+}
+
+/** Writes the given files (UTF-8) inside `root`; validates every path first, so an invalid one writes nothing. */
+async function writeFiles(root: string, tool: Extract<FastPathTool, { kind: 'write-files' }>): Promise<ToolResult> {
+  if (tool.files.length !== tool.contents.length) return { ok: false, changed: [], message: 'files and contents differ in length' }
+  const targets: Array<{ absolute: string; relative: string; content: string }> = []
+  try {
+    tool.files.forEach((file, index) => {
+      const { absolute, relative } = resolveInside(root, file)
+      if (relative.split(/[\\/]/).some((segment) => segment.toLowerCase() === '.git') || isSensitivePath(relative)) throw new PathViolationError('Writing to this path is not allowed.', file)
+      targets.push({ absolute, relative: relative.replaceAll('\\', '/'), content: tool.contents[index]! })
+    })
+  } catch (error) {
+    return { ok: false, changed: [], message: error instanceof Error ? error.message : String(error) }
+  }
+  const changed: string[] = []
+  for (const target of targets) {
+    const before = await fs.readFile(target.absolute, 'utf8').catch(() => undefined)
+    if (before === target.content) continue
+    await fs.mkdir(path.dirname(target.absolute), { recursive: true })
+    await fs.writeFile(target.absolute, target.content, 'utf8')
+    changed.push(target.relative)
+  }
+  return { ok: true, changed, message: changed.length ? `${changed.length} file(s) written` : 'nothing to change' }
 }
 
 /** Language service over the project's TypeScript/JavaScript files (tsconfig when present). */

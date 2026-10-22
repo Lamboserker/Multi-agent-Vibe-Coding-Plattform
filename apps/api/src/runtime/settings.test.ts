@@ -5,7 +5,7 @@ const db = useTempDatabase('mac-settings-')
 const { PrismaService } = await import('../common/prisma.service.js')
 const { applyMigrations } = await import('./migrator.js')
 const { EventBusService } = await import('./event-bus.service.js')
-const { SettingsService, mergeSettings, DEFAULT_SETTINGS } = await import('./settings.service.js')
+const { SettingsService, mergeSettings, DEFAULT_SETTINGS, defaultExtraOllamaUrls } = await import('./settings.service.js')
 
 const prisma = new PrismaService()
 const events = new EventBusService()
@@ -31,6 +31,29 @@ describe('mergeSettings', () => {
     expect(DEFAULT_SETTINGS.maxTasks).toBe(12)
     expect(mergeSettings(DEFAULT_SETTINGS, {}).maxTasks).toBe(12)
     expect(mergeSettings(DEFAULT_SETTINGS, { maxTasks: 8 }).maxTasks).toBe(8)
+  })
+
+  it('pairs the Ollama instances :11434/:11435 and lets the default partner follow the base URL', () => {
+    expect(defaultExtraOllamaUrls('http://127.0.0.1:11434')).toEqual(['http://127.0.0.1:11435'])
+    expect(defaultExtraOllamaUrls('http://localhost:11435/')).toEqual(['http://localhost:11434'])
+    expect(defaultExtraOllamaUrls('http://127.0.0.1:9000')).toEqual([])
+    const base = { ...DEFAULT_SETTINGS, ollamaBaseUrl: 'http://127.0.0.1:11434', extraOllamaUrls: ['http://127.0.0.1:11435'] }
+    expect(mergeSettings(base, { ollamaBaseUrl: 'http://127.0.0.1:11435' }).extraOllamaUrls).toEqual(['http://127.0.0.1:11434'])
+    // an explicitly chosen list stays
+    const custom = { ...base, extraOllamaUrls: ['http://127.0.0.1:11500'] }
+    expect(mergeSettings(custom, { ollamaBaseUrl: 'http://127.0.0.1:11435' }).extraOllamaUrls).toEqual(['http://127.0.0.1:11500'])
+    expect(DEFAULT_SETTINGS.unloadAfterRun).toBe(true)
+  })
+
+  it('defaults to the single orchestrator mode with Claude Code as duo lead and validates both settings', async () => {
+    expect(DEFAULT_SETTINGS.orchestratorMode).toBe('single')
+    expect(DEFAULT_SETTINGS.duoLead).toBe('claude-code')
+    expect(mergeSettings(DEFAULT_SETTINGS, { orchestratorMode: 'duo', duoLead: 'codex' })).toMatchObject({ orchestratorMode: 'duo', duoLead: 'codex' })
+    const { SETTINGS_VALIDATORS } = await import('./system.controller.js')
+    expect(['single', 'duo'].map((value) => SETTINGS_VALIDATORS.orchestratorMode!(value))).toEqual([true, true])
+    expect(['both', null, 1].map((value) => SETTINGS_VALIDATORS.orchestratorMode!(value))).toEqual([false, false, false])
+    expect(['claude-code', 'codex'].map((value) => SETTINGS_VALIDATORS.duoLead!(value))).toEqual([true, true])
+    expect(['duo', null].map((value) => SETTINGS_VALIDATORS.duoLead!(value))).toEqual([false, false])
   })
 
   it('removes a self-test entry with null and ignores unknown keys', () => {

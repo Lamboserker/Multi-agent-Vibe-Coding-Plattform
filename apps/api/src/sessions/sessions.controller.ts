@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
 import { bool, num, oneOf, str } from '../common/validate.js'
+import { ORCHESTRATOR_OVERRIDES } from '../orchestration/orchestrator-choice.js'
 import { SessionsService } from './sessions.service.js'
 
 @Controller()
@@ -49,6 +50,8 @@ export class SessionsController {
       mode: oneOf(body, 'mode', ['task', 'ask'] as const, 'task'),
       autoRun: bool(body, 'autoRun'),
       clientId: str(body, 'clientId', { optional: true, max: 80 }) || undefined,
+      designMode: (body as { designMode?: unknown } | undefined)?.designMode === undefined ? undefined : oneOf(body, 'designMode', ['auto', 'force', 'skip'] as const),
+      orchestrator: (body as { orchestrator?: unknown } | undefined)?.orchestrator == null ? undefined : oneOf(body, 'orchestrator', ORCHESTRATOR_OVERRIDES),
     })
   }
 

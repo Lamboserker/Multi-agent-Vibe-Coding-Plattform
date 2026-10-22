@@ -1,3 +1,4 @@
+import { duoOfLabel, duoPhaseName, orchestratorLabelName, orchestratorName } from './duo'
 import { localizeEngineText } from './engine-text'
 import type { LiveLine } from './stores'
 import type { AgentRun, ChatMessage, ExecutionRun, RunEvent, ScheduleForecast, Subtask, Task, TaskPlan, ValidationReport } from './types'
@@ -43,11 +44,76 @@ export function openQuestions(messages: ChatMessage[], taskId: string | undefine
 
 export function stageInfo(task: Task | undefined, execution: ExecutionRun | undefined): StageInfo {
   const current = workflowState(task, execution)
-  const tone: Record<WorkflowState, Tone> = { draft: 'muted', planning: 'accent', plan_error: 'err', plan_questions: 'tool', ready: 'tool', running: 'accent', paused: 'tool', recoverable: 'err', cancelled: 'faint', approval: 'tool', done: 'ok' }
+  const tone: Record<WorkflowState, Tone> = { draft: 'muted', designing: 'accent', design_review: 'tool', design_error: 'err', planning: 'accent', plan_error: 'err', plan_questions: 'tool', ready: 'tool', running: 'accent', paused: 'tool', recoverable: 'err', cancelled: 'faint', approval: 'tool', done: 'ok' }
   const phase = current.state === 'done' ? 4 : { task: 0, plan: 1, execution: 2, approval: 3 }[current.phase]
   // the workflow label names the next action; the Leitstand header names what happened
   const label = current.state === 'draft' && !task ? 'Neue Sitzung' : current.state === 'recoverable' ? (execution?.status === 'interrupted' ? 'Ausführung unterbrochen' : 'Ausführung fehlgeschlagen') : current.label
   return { state: current.state, label, tone: tone[current.state], phase }
+}
+
+// ---------------------------------------------------------------------------
+// Design phase (UI tasks): the draft the user approves before planning
+// ---------------------------------------------------------------------------
+
+export const DESIGN_TYPE_LABEL: Record<string, string> = {
+  dashboard: 'Dashboard', crm: 'CRM', 'landing-page': 'Landingpage', 'saas-app': 'SaaS-App', 'admin-forms': 'Admin & Formulare', ecommerce: 'E-Commerce', other: 'Sonstiges',
+}
+export const DESIGNER_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'OpenAI Codex' }
+
+export interface DesignTokenView { name: string; value: string; darkValue: string; group: string }
+export interface DesignView {
+  direction: string
+  /** Color tokens with a value that can be painted as a swatch. */
+  colors: DesignTokenView[]
+  /** All other tokens (typography, spacing, radius …). */
+  tokens: DesignTokenView[]
+  components: Array<{ name: string; purpose: string; file: string; spec: string }>
+  screens: Array<{ name: string; route: string; layout: string; components: string[] }>
+  questions: string[]
+}
+
+const COLOR_VALUE = /^(#[0-9a-f]{3,8}|(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^()]*\)|transparent|currentcolor|[a-z]+)$/i
+
+/** A literal CSS color (no url(), var() or gradients), safe to use as a swatch background. */
+export function isColorValue(value: string): boolean {
+  const trimmed = value.trim()
+  return Boolean(trimmed) && trimmed.length <= 80 && COLOR_VALUE.test(trimmed) && !/^(inherit|initial|unset|revert|none)$/i.test(trimmed)
+}
+
+const text = (value: unknown) => (typeof value === 'string' ? value : '')
+const records = (value: unknown) => (Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object') : [])
+const strings = (value: unknown) => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())) : [])
+
+/** The stored `spec` JSON of a draft, tolerant of rows from older versions or malformed fields. */
+export function designView(spec: unknown): DesignView {
+  const raw = spec && typeof spec === 'object' ? (spec as Record<string, unknown>) : {}
+  const tokens = records(raw.tokens)
+    .map((token) => ({ name: text(token.name), value: text(token.value), darkValue: text(token.darkValue), group: text(token.group) || 'other' }))
+    .filter((token) => token.name && token.value)
+  const isColor = (token: DesignTokenView) => token.group === 'color' && isColorValue(token.value) && (!token.darkValue || isColorValue(token.darkValue))
+  return {
+    direction: text(raw.direction),
+    colors: tokens.filter(isColor),
+    tokens: tokens.filter((token) => !isColor(token)),
+    components: records(raw.components).map((component) => ({ name: text(component.name), purpose: text(component.purpose), file: text(component.file), spec: text(component.spec) })).filter((component) => component.name),
+    screens: records(raw.screens).map((screen) => ({ name: text(screen.name), route: text(screen.route), layout: text(screen.layout), components: strings(screen.components) })).filter((screen) => screen.name),
+    questions: strings(raw.questions),
+  }
+}
+
+const DESIGN_KINDS = new Set(['design_requested', 'design_pending', 'design_draft', 'design_error', 'design_approval', 'design_feedback'])
+
+/** Id of the task's latest design chat message: changes whenever a draft is requested, ready or failed (reload key). */
+export function designRevision(messages: ChatMessage[], taskId: string | undefined): string {
+  if (!taskId) return ''
+  return [...messages].reverse().find((entry) => entry.taskId === taskId && DESIGN_KINDS.has(String(entry.metadata?.kind)))?.id ?? ''
+}
+
+/** Whether the task's last design failure was an interruption (app closed) rather than an error of the designer. */
+export function designInterrupted(messages: ChatMessage[], taskId: string | undefined): boolean {
+  if (!taskId) return false
+  const message = [...messages].reverse().find((entry) => entry.taskId === taskId && entry.metadata?.kind === 'design_error')
+  return message?.metadata.interrupted === true
 }
 
 export type AgentKind = 'local' | 'premium' | 'tool' | 'blocked'
@@ -111,6 +177,7 @@ const REASONS: Array<[RegExp, string | ((...groups: string[]) => string)]> = [
   [/^Complexity 4\/5 needs the strongest local model\.?$/, 'Komplexität 4/5 braucht das stärkste lokale Modell'],
   [/^Moderate complexity\/risk \((\d)\/(\d)\)\.?$/, (_, complexity, risk) => `mittlere Komplexität/Risiko (${complexity}/${risk})`],
   [/^Manually assigned/, 'manuell zugewiesen'],
+  [/^Orchestrator suggested premium; balanced mode keeps complexity (\d)\/risk (\d) local\.?$/, (_, complexity, risk) => `Orchestrator empfiehlt Premium; Balanced bleibt bei Komplexität ${complexity}/Risiko ${risk} lokal`],
   [/orchestrator suggested premium/i, 'Orchestrator empfiehlt Premium'],
   [/quality mode/i, 'Quality-Modus'],
 ]
@@ -183,7 +250,10 @@ export function agentCards(input: {
     const ownLive = live.filter((line) => line.subtaskId === subtask.id && !own.some((event) => event.message === line.message))
     const logs = [...own.map((event) => ({ at: event.createdAt, text: localizeEngineText(event.message), tone: logTone(event.type, event.level, event.message) })), ...ownLive.map((line) => ({ at: line.ts, text: line.message, tone: logTone(line.type, line.level, line.message) }))]
       .filter((entry) => entry.text.trim())
+      .map((entry) => ({ ...entry, time: new Date(entry.at).getTime() || 0 }))
+      .sort((a, b) => a.time - b.time)
       .slice(-200)
+      .map(({ time: _time, ...entry }) => entry)
     const worktree = [...own].reverse().find((event) => event.type === 'worktree_created')?.data?.path as string | undefined
     const tier = assignment?.tier
     const role = escalated ? 'Eskaliert an Premium (manuell)' : kind === 'premium' ? `Premium${assignment?.reasons?.[0] ? ` – ${localizeReason(assignment.reasons[0])}` : ''}` : kind === 'tool' ? 'Deterministisches Werkzeug' : kind === 'blocked' ? 'Keine Zuordnung' : `${TIER_LABEL[tier ?? ''] ?? 'Lokal'} (lokal)`
@@ -192,7 +262,9 @@ export function agentCards(input: {
     const tokens = subtaskRuns.reduce((sum, run) => sum + (run.inputTokens ?? 0) + (run.outputTokens ?? 0), 0)
     const status = subtask.status
     const waitDetail = status === 'planned' || status === 'queued' ? forecastEntry?.detail ?? (subtask.dependsOn.length ? `wartet auf ${subtask.dependsOn.join(', ')}` : undefined) : undefined
-    const lastLog = logs.at(-1)?.text ?? (status === 'planned' ? waitDetail ?? `bereit · ${role}` : status === 'queued' ? waitDetail ?? 'wartet …' : subtask.errorMessage ?? '–')
+    const finished = ['completed', 'failed', 'skipped', 'cancelled'].includes(status)
+    const lastOwn = finished ? [...own].reverse().map((event) => localizeEngineText(event.message)).find((text) => text.trim()) : undefined
+    const lastLog = lastOwn ?? logs.at(-1)?.text ?? (status === 'planned' ? waitDetail ?? `bereit · ${role}` : status === 'queued' ? waitDetail ?? 'wartet …' : subtask.errorMessage ?? '–')
     return {
       id: subtask.id,
       key: subtask.key,
@@ -244,6 +316,7 @@ export function decisions(input: { task?: Task; plan?: TaskPlan; subtasks: Subta
   const push = (at: string | undefined, text: string, tone: Tone = 'muted') => out.push({ at: time(at), text, tone, sort: at ? Date.parse(at) : 0 })
   if (plan?.source === 'deterministic-fallback') push(planAt, 'Fallback-Plan: der Orchestrator war nicht verfügbar, die Zerlegung ist heuristisch.', 'tool')
   if (plan?.source === 'fast-path') push(planAt, 'Fast Path: kleine Änderung ohne Premium-Planung.', 'local')
+  if (duoOfLabel(plan?.source)) push(planAt, `Duo-Plan: ${orchestratorLabelName(plan?.source)} haben parallel geplant, der Lead hat beide Pläne abgeglichen.`, 'accent')
   for (const assignment of plan?.modelAssignments ?? []) {
     if (assignment.executor === 'premium') push(planAt, `${assignment.key} an Premium: ${localizeReason(assignment.reasons[0] ?? 'Einstufung des Routers')}.`, 'accent')
     if (assignment.executor === 'blocked') push(planAt, `${assignment.key} ohne ausführbare Zuordnung – Modell wählen oder neu planen.`, 'err')
@@ -262,8 +335,27 @@ export function decisions(input: { task?: Task; plan?: TaskPlan; subtasks: Subta
     else if (event.type === 'integration_conflict') push(event.createdAt, `${key}: Konflikt mit bereits integrierter Arbeit – läuft auf neuem Stand erneut.`, 'tool')
     else if (event.type === 'premium_unavailable' || event.type === 'model_unavailable') push(event.createdAt, localizeEngineText(event.message), 'err')
     else if (event.type === 'review_fix_started') push(event.createdAt, 'Review fand Blocker: eine Korrekturrunde läuft.', 'tool')
+    else if (event.type === 'premium_hint') {
+      const diagnosis = typeof event.data?.diagnosis === 'string' ? event.data.diagnosis : ''
+      push(event.createdAt, `${key ?? 'Teilaufgabe'}: Premium gibt Reparaturhinweise, das lokale Modell setzt sie um${diagnosis ? ` – ${diagnosis}` : ''}`, 'accent')
+    } else if (event.type === 'premium_hint_skipped' || event.type === 'premium_hint_failed') push(event.createdAt, `${key ?? 'Teilaufgabe'}: kein verwertbarer Premium-Hinweis – Premium übernimmt die Ausführung.`, 'accent')
+    else if (event.type === 'duo_reconciled') push(event.createdAt, duoDecision(event, subtasks), event.data?.fallback ? 'tool' : 'accent')
+    else if (event.type === 'duo_partner_unavailable' || event.type === 'duo_sibling_failed') push(event.createdAt, `${key ?? 'Teilaufgabe'}: ein Orchestrator des Duos fiel aus – das Ergebnis des anderen gilt.`, 'tool')
+    else if (event.type === 'duo_apply_failed') push(event.createdAt, `${key ?? 'Teilaufgabe'}: das Ergebnis des Duo-Gewinners ließ sich nicht übernehmen.`, 'err')
+    else if (event.type === 'orchestrator_notice') push(event.createdAt, event.message, 'tool')
   }
   return out.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...decision }) => decision)
+}
+
+/** Decision text of a duo reconciliation in the run (review, repair hint, premium execution). */
+function duoDecision(event: RunEvent, subtasks: Subtask[]): string {
+  const data = event.data ?? {}
+  const key = subtasks.find((entry) => entry.id === event.subtaskId)?.key
+  const prefix = `${key ? `${key} · ` : ''}Duo-Abgleich ${duoPhaseName(data.phase)}`
+  if (typeof data.fallback === 'string' && data.fallback) return `${prefix}: ${data.fallback}`
+  const notes = Array.isArray(data.notes) ? data.notes.filter((note): note is string => typeof note === 'string') : []
+  const result = data.winner === 'merged' ? 'beide Ergebnisse vereint' : data.winner ? `${orchestratorName(data.winner)} gilt` : 'abgeschlossen'
+  return `${prefix}: ${result}${notes.length ? ` – ${notes.join(' ')}` : ''}`
 }
 
 export interface Milestone {
@@ -283,6 +375,8 @@ export function milestones(events: RunEvent[], subtasks: Subtask[]): Milestone[]
   for (const event of events) {
     const key = subtasks.find((entry) => entry.id === event.subtaskId)?.key ?? /^(T?\S+?):/.exec(event.message)?.[1] ?? ''
     const add = (text: string, tone?: Tone) => out.push({ at: event.createdAt, key: key || 'Lauf', text, tone: tone ?? (kindOf(event.subtaskId) as Tone) })
+    // duo events of review/repair hints start with their phase ("review: …"), not with a task key
+    const duoKey = subtasks.find((entry) => entry.id === event.subtaskId)?.key ?? 'Duo'
     switch (event.type) {
       case 'task_integrated': {
         const files = /\((\d+) file/.exec(event.message)?.[1]
@@ -298,6 +392,22 @@ export function milestones(events: RunEvent[], subtasks: Subtask[]): Milestone[]
         break
       case 'integration_conflict':
         add('Integrationskonflikt – läuft erneut', 'tool')
+        break
+      case 'premium_hint':
+        add('Premium-Hinweis · lokales Modell repariert', 'accent')
+        break
+      case 'duo_proposal':
+        out.push({ at: event.createdAt, key: duoKey, text: `Vorschlag von ${orchestratorName(event.data?.provider)} (${duoPhaseName(event.data?.phase)})`, tone: 'accent' })
+        break
+      case 'duo_reconciled': {
+        const fallback = typeof event.data?.fallback === 'string' && event.data.fallback ? event.data.fallback : undefined
+        const winner = event.data?.winner
+        out.push({ at: event.createdAt, key: duoKey, text: fallback ? `Duo-Abgleich ${duoPhaseName(event.data?.phase)}: ${fallback}` : `Duo-Abgleich ${duoPhaseName(event.data?.phase)} · ${winner === 'merged' ? 'vereint' : winner ? `${orchestratorName(winner)} gilt` : 'abgeschlossen'}`, tone: fallback ? 'tool' : 'accent' })
+        break
+      }
+      case 'duo_partner_unavailable':
+      case 'duo_sibling_failed':
+        add('Duo: ein Orchestrator fiel aus, der andere übernimmt', 'tool')
         break
       case 'task_state':
         if (event.data?.state === 'failed') add('fehlgeschlagen', 'err')

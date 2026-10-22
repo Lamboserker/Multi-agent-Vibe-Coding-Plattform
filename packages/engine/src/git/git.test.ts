@@ -41,6 +41,26 @@ describe('worktree pool', () => {
     expect(existsSync(path.join(repo, 'node_modules', 'dep'))).toBe(true)
   }, 20_000)
 
+  it('replaces a cache-only node_modules left in a pooled slot by the dependency link', async () => {
+    const repo = await createTempRepo({ 'a.txt': 'base\n' })
+    const base = (await headCommit(repo))!
+    const manager = new WorktreeManager({ root: tempDir('mac-pool-'), poolSize: 1 })
+
+    // dependencies not installed yet: a build in the worktree leaves a real node_modules/.vite behind
+    const first = await manager.create(repo, { projectKey: 'demo', name: 'run-task-1', branch: 'mac/run/task-1', baseCommit: base })
+    await fs.mkdir(path.join(first.path, 'node_modules', '.vite'), { recursive: true })
+    await manager.remove(repo, first.path, first.branch)
+
+    // the user installs dependencies; the reused slot must now see them
+    await fs.mkdir(path.join(repo, 'node_modules', 'dep'), { recursive: true })
+    const second = await manager.create(repo, { projectKey: 'demo', name: 'run-task-2', branch: 'mac/run/task-2', baseCommit: base })
+    expect(second.path).toBe(first.path)
+    expect((await fs.lstat(path.join(second.path, 'node_modules'))).isSymbolicLink()).toBe(true)
+    expect(existsSync(path.join(second.path, 'node_modules', 'dep'))).toBe(true)
+    await manager.remove(repo, second.path, second.branch)
+    expect(existsSync(path.join(repo, 'node_modules', 'dep'))).toBe(true)
+  }, 20_000)
+
   it('prewarm creates idle slots ahead of a run; create() then reuses them on the right commit', async () => {
     const repo = await createTempRepo({ 'a.txt': 'base\n' })
     const base = (await headCommit(repo))!
@@ -104,6 +124,18 @@ describe('task commits on the integration branch', () => {
     expect(log).toEqual(['task-001: add b'])
     // the single commit carries both changes, so cherry-picking it integrates everything
     expect(await diffBetween(repo, base, squashed)).toContain('+b formatted')
+  })
+
+  it('never stages test runner output (Playwright results, coverage)', async () => {
+    const repo = await createTempRepo({ 'a.txt': 'a\n' })
+    await fs.mkdir(path.join(repo, 'test-results'), { recursive: true })
+    await fs.writeFile(path.join(repo, 'test-results', '.last-run.json'), '{"status":"failed"}')
+    await fs.mkdir(path.join(repo, 'web', 'coverage'), { recursive: true })
+    await fs.writeFile(path.join(repo, 'web', 'coverage', 'lcov.info'), 'TN:')
+    await fs.writeFile(path.join(repo, 'b.txt'), 'b\n')
+    await stageAll(repo)
+    const staged = (await git(repo, ['diff', '--cached', '--name-only'])).stdout.trim().split('\n')
+    expect(staged).toEqual(['b.txt'])
   })
 
   it('recognises integrated tasks by their commit subject (newest commit per task)', async () => {

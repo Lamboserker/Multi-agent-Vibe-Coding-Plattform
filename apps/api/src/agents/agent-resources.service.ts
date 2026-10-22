@@ -98,7 +98,22 @@ export class AgentResourcesService {
 
   /** Text for a premium prompt (planning, chat): skills only; the CLI orchestrators bring their own tools. */
   async promptContext(role: AgentRole, projectId: string | undefined, goal: string, exclude?: string[]) {
-    return this.skills.promptContext(role, projectId, goal, { budgetChars: 8000, canLoad: false, exclude })
+    return this.skills.promptContext(role, projectId, goal, { budgetChars: 12000, canLoad: false, exclude })
+  }
+
+  /**
+   * Skills for the premium designer: `ui-design` plus the matching design skills inline (no tools in the
+   * read-only design call), and the catalog of all design-* skills the designer role may use.
+   */
+  async designerContext(projectId: string | undefined, goal: string) {
+    const [context, skills] = await Promise.all([
+      this.skills.promptContext('designer', projectId, goal, { pinned: ['ui-design'], budgetChars: 9000, canLoad: false }),
+      this.skills.list(projectId),
+    ])
+    const catalog = skills
+      .filter((skill) => !skill.error && skill.enabled && skill.name.startsWith('design-') && (skill.agents.includes('*') || skill.agents.includes('designer')))
+      .map((skill) => ({ name: skill.name, description: skill.description }))
+    return { text: context.text, inlined: context.inlined, catalog }
   }
 
   /** Active skills offered to the planner, which attaches them to tasks; named skills are flagged as requested. */

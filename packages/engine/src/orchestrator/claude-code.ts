@@ -3,8 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { runProcess } from '../util/process.js'
 import { classifyCliFailure, CliOrchestratorBase, type CliAdapterOptions } from './cli-base.js'
-import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, reviewPrompt } from './prompts.js'
-import { ANALYSIS_SCHEMA, CHAT_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizePlan, normalizeReview, PLAN_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
+import { analysisPrompt, chatFollowUpPrompt, chatPrompt, executionPrompt, ORCHESTRATOR_SYSTEM_PROMPT, planningPrompt, repairHintPrompt, reviewPrompt } from './prompts.js'
+import { designPrompt, DESIGN_SYSTEM_PROMPT } from './design-prompt.js'
+import { ANALYSIS_SCHEMA, CHAT_SCHEMA, DESIGN_SCHEMA, EXECUTION_SUMMARY_SCHEMA, extractJson, normalizeAnalysis, normalizeDesignDraft, normalizePlan, normalizeRepairHint, normalizeReview, PLAN_SCHEMA, REPAIR_HINT_SCHEMA, REVIEW_SCHEMA } from './schemas.js'
 import {
   mergeCallMeta,
   normalizeWithMeta,
@@ -16,14 +17,17 @@ import {
   type ChatInput,
   type ConnectionResult,
   type ConnectionStatus,
+  type DesignInput,
   type DiagnosticReport,
   type ExecutionInput,
   type OrchestratorAdapter,
   type OrchestratorCapabilities,
   type PlanningInput,
+  type RepairHintInput,
   type RateLimitInfo,
   type ReviewInput,
   type RuntimeDetection,
+  type StructuredRequest,
   type UsageReport,
 } from './types.js'
 
@@ -227,9 +231,22 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
     return { result: normalizeWithMeta(call.meta, () => normalizePlan(call.structured, input.maxTasks)), meta: call.meta }
   }
 
+  async createDesign(input: DesignInput, ctx: CallContext) {
+    // Read-only tools; the provider is forced so the Codex-only prompt block never reaches Claude.
+    const prompt = designPrompt({ ...input, provider: 'claude-code' }) + repositoryRootNote(ctx.cwd)
+    const call = await this.callStructured(prompt, { schema: DESIGN_SCHEMA, tools: 'Read,Glob,Grep', systemPrompt: DESIGN_SYSTEM_PROMPT, maxTurns: 6 }, ctx)
+    return { result: normalizeWithMeta(call.meta, () => normalizeDesignDraft(call.structured)), meta: call.meta }
+  }
+
   async reviewResult(input: ReviewInput, ctx: CallContext) {
     const call = await this.callStructured(reviewPrompt(input) + repositoryRootNote(ctx.cwd), { schema: REVIEW_SCHEMA, tools: 'Read,Glob,Grep' }, ctx)
     return { result: normalizeWithMeta(call.meta, () => normalizeReview(call.structured)), meta: call.meta }
+  }
+
+  async repairHint(input: RepairHintInput, ctx: CallContext) {
+    // advice only: read-only tools and few turns (copying exact "find" text needs a read or two)
+    const call = await this.callStructured(repairHintPrompt(input) + repositoryRootNote(ctx.cwd), { schema: REPAIR_HINT_SCHEMA, tools: 'Read,Glob,Grep', maxTurns: 4 }, ctx)
+    return { result: normalizeWithMeta(call.meta, () => normalizeRepairHint(call.structured)), meta: call.meta }
   }
 
   async chat(input: ChatInput, ctx: CallContext) {
@@ -254,6 +271,12 @@ export class ClaudeCodeAdapter extends CliOrchestratorBase implements Orchestrat
     }
     const answer = (call.structured as { answer?: unknown })?.answer
     return { result: { answer: typeof answer === 'string' ? answer : call.text }, meta: call.meta }
+  }
+
+  async structuredCall(request: StructuredRequest, ctx: CallContext) {
+    // everything the answer needs is in the prompt: no tools, one structured answer
+    const call = await this.callStructured(request.prompt, { schema: request.schema, tools: '', systemPrompt: request.systemPrompt }, ctx)
+    return { result: call.structured, meta: call.meta }
   }
 
   async executeComplexTask(input: ExecutionInput, ctx: CallContext) {

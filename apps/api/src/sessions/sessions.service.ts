@@ -1,20 +1,57 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common'
 import { AgentResourcesService } from '../agents/agent-resources.service.js'
-import { Prisma, type ChatMessage, type ChatSession, type ExecutionStatus, type Job } from '@prisma/client'
+import type { ChatMessage, ChatSession, ExecutionStatus, Job } from '@prisma/client'
 import type { Subscription } from 'rxjs'
 import { PrismaService } from '../common/prisma.service.js'
 import { asJson, jsonObject } from '../common/json.js'
 import { ExecutionService } from '../execution/execution.service.js'
 import { RepoContextService } from '../execution/repo-context.service.js'
 import { OrchestratorService } from '../orchestration/orchestrator.service.js'
-import { failedCallFields } from '../orchestration/model-call.js'
+import { failedCallRows, modelCallRows } from '../orchestration/model-call.js'
+import { isOrchestratorOverride, type OrchestratorOverride } from '../orchestration/orchestrator-choice.js'
+import { isDuo, type CallMeta, type ChatResult, type OrchestratorAdapter } from '@multi-ai-coder/engine'
 import { EventBusService, type AppEvent } from '../runtime/event-bus.service.js'
 import { KeyedMutex } from '../common/locks.js'
 import { JobQueueService } from '../runtime/job-queue.service.js'
 import { SettingsService } from '../runtime/settings.service.js'
-import { DEFAULT_TITLE, deriveSessionStatus, RUN_CONFIRMATION, RUNNING_EXECUTION, titleFrom, type SessionStatus } from './session-model.js'
+import { DESIGN_APPROVED_TEXT, DESIGN_REVISION_TEXT, DesignService } from '../design/design.service.js'
+import { DEFAULT_TITLE, deriveSessionStatus, designAnswer, RUN_CONFIRMATION, RUNNING_EXECUTION, titleFrom, type SessionStatus } from './session-model.js'
 
 export { deriveSessionStatus, SESSION_STATUSES, titleFrom, type SessionStatus } from './session-model.js'
+
+/**
+ * Metadata of an orchestrator answer. Duo: the lead's answer is the content, the partner's answer and its CLI
+ * session (for the next resume) are in `duo`; when only one side answered, `orchestrator` names it and
+ * `duo.fallback` says why.
+ */
+export function answerMetadata(adapter: OrchestratorAdapter, result: ChatResult, meta: CallMeta, extra: { questionId?: string; resumedSession?: boolean; partnerResumeSessionId?: string } = {}): Record<string, unknown> {
+  const { partnerResumeSessionId, ...rest } = extra
+  if (!isDuo(adapter)) return { kind: 'answer', orchestrator: adapter.id, ...rest }
+  const { lead, partner } = adapter.duo
+  const winner = meta.duo?.winner
+  const partnerPart = meta.parts?.find((part) => part.role === 'partner' && part.status === 'ok')
+  return {
+    kind: 'answer',
+    orchestrator: winner && winner !== 'merged' ? winner : lead,
+    ...rest,
+    duo: {
+      lead,
+      partner,
+      ...(result.duo ? { partnerAnswer: result.duo.partnerAnswer } : {}),
+      // the partner's thread continues only when it answered (a failed partner keeps the previous one)
+      ...(partnerPart?.sessionId ? { partnerSessionId: partnerPart.sessionId } : partnerResumeSessionId ? { partnerSessionId: partnerResumeSessionId } : {}),
+      ...(partnerResumeSessionId && partnerPart?.sessionId === partnerResumeSessionId ? { partnerResumed: true } : {}),
+      ...(meta.duo?.fallback ? { fallback: meta.duo.fallback } : {}),
+    },
+  }
+}
+
+/** Chat notes for the start of planning or of the design phase that precedes it. */
+export const PLANNING_TEXT = 'Analysiere das Repository und erstelle einen Plan …'
+export const DESIGN_START_TEXT = 'Erstelle zuerst einen Design-Entwurf (Tokens, Komponenten, Vorschau) – der Plan folgt nach deiner Freigabe …'
+/** Answer to a short reply that is neither an approval nor a change request (no paid redesign on a guess). */
+export const DESIGN_UNCLEAR_TEXT = 'Soll ich das Design freigeben? Antworte mit „passt“ – oder beschreibe, was sich ändern soll.'
+export const DESIGN_PENDING_TEXT = 'Der Design-Entwurf wird gerade erstellt … Sobald er fertig ist, kannst du ihn freigeben („passt“) oder mit deinem Feedback überarbeiten lassen.'
 
 export interface SendInput {
   content: string
@@ -22,6 +59,10 @@ export interface SendInput {
   autoRun?: boolean
   /** Client-generated idempotency key. */
   clientId?: string
+  /** Design phase before planning (auto = only for UI requests); kept on the task. */
+  designMode?: 'auto' | 'force' | 'skip'
+  /** Composer choice "Claude | Codex | Beide"; stored in the user message metadata (the task's choice, see taskOverride). */
+  orchestrator?: OrchestratorOverride
 }
 
 /**
@@ -47,6 +88,7 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     private readonly repoContext: RepoContextService,
     private readonly executions: ExecutionService,
     @Optional() private readonly agentResources?: AgentResourcesService,
+    @Optional() private readonly design?: DesignService,
   ) {}
 
   onModuleInit() {
@@ -151,14 +193,17 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
 
   /** Running work across all projects (status bar, background job indicator). */
   async activity() {
-    const [executions, plans, asks] = await Promise.all([
+    const [executions, planJobs, designJobs, asks] = await Promise.all([
       this.prisma.executionRun.findMany({
         where: { status: { in: [...RUNNING_EXECUTION, 'paused'] as ExecutionStatus[] } },
         select: { id: true, status: true, projectId: true, taskId: true, startedAt: true, task: { select: { userPrompt: true, sessionId: true } } },
       }),
       this.jobs.activeFor('execution.plan', () => true),
+      // the design phase is part of planning (background work before the plan)
+      this.jobs.activeFor('design.create', () => true),
       this.jobs.activeFor('chat.ask', () => true),
     ])
+    const plans = [...planJobs, ...designJobs]
     const planTasks = await this.prisma.task.findMany({ where: { id: { in: plans.map((job) => String((job.payload as Record<string, unknown>).taskId)) } }, select: { id: true, projectId: true, sessionId: true, userPrompt: true } })
     return {
       executions: executions.map((run) => ({ id: run.id, status: run.status, projectId: run.projectId, taskId: run.taskId, sessionId: run.task.sessionId, title: titleFrom(run.task.userPrompt), startedAt: run.startedAt })),
@@ -227,7 +272,8 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
       const session = await this.prisma.chatSession.findUnique({ where: { id: sessionId } })
       if (!session) throw new NotFoundException('Session not found.')
       if (session.archivedAt) await this.prisma.chatSession.update({ where: { id: sessionId }, data: { archivedAt: null } })
-      const message = input.mode === 'ask' ? await this.sendQuestion(session, content, input.clientId) : await this.sendTask(session, content, Boolean(input.autoRun), input.clientId)
+      const choice = input.orchestrator ? { orchestrator: input.orchestrator } : {}
+      const message = input.mode === 'ask' ? await this.sendQuestion(session, content, input.clientId, choice) : await this.sendTask(session, content, Boolean(input.autoRun), input.clientId, input.designMode, choice)
       await this.touch(session, content)
       return { session: this.summary((await this.refresh(sessionId))!), message, duplicate: false }
     })
@@ -240,13 +286,13 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     })
   }
 
-  private async sendTask(session: ChatSession, content: string, autoRun: boolean, clientId?: string): Promise<ChatMessage> {
+  private async sendTask(session: ChatSession, content: string, autoRun: boolean, clientId?: string, designMode?: SendInput['designMode'], choice: { orchestrator?: OrchestratorOverride } = {}): Promise<ChatMessage> {
     const active = session.activeTaskId ? await this.prisma.task.findUnique({ where: { id: session.activeTaskId }, include: { executions: { orderBy: { createdAt: 'desc' }, take: 1 }, subtasks: { select: { id: true }, take: 1 } } }) : null
     const execution = active?.executions[0]
 
     // "ja/start" while a plan waits for approval starts the run.
     if (active && active.subtasks.length && !execution && RUN_CONFIRMATION.test(content) && ['awaiting_plan_approval', 'planned'].includes(active.currentStep)) {
-      const message = await this.prisma.chatMessage.create({ data: { projectId: session.projectId, sessionId: session.id, taskId: active.id, clientId, role: 'user', content, metadata: asJson({ source: 'session_chat', kind: 'run_confirmation' }) } })
+      const message = await this.prisma.chatMessage.create({ data: { projectId: session.projectId, sessionId: session.id, taskId: active.id, clientId, role: 'user', content, metadata: asJson({ source: 'session_chat', kind: 'run_confirmation', ...choice }) } })
       this.published(message)
       try {
         const run = await this.executions.start(active.id)
@@ -258,14 +304,19 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
       return message
     }
 
+    // The design phase is answered in the chat: approval, feedback for the next draft, or a note while it is drafted.
+    if (active && this.design && ['designing', 'awaiting_design_approval'].includes(active.currentStep)) return this.answerDesign(session, active, content, autoRun, clientId, choice)
+
     // A task that has not been executed yet is refined; otherwise a new task starts in this session.
     // An answer to the planner's questions refines the same task, even if an older execution exists.
+    // After a failed design draft the message is a follow-up (like after a failed plan) and the feedback of the new draft.
     const clarifying = active?.currentStep === 'plan_clarification'
+    const retryDesign = active?.currentStep === 'design_failed'
     const continueTask = active && (!execution || clarifying) && !['completed', 'cancelled'].includes(active.status) && active.currentStep !== 'planning'
     const followUp = continueTask ? ((clarifying ? await this.executions.clarificationAnswer(active.id, content) : undefined) ?? `Follow-up: ${content}`) : ''
     const { task, message } = await this.prisma.$transaction(async (tx) => {
       const task = continueTask
-        ? await tx.task.update({ where: { id: active.id }, data: { userPrompt: `${active.userPrompt}\n\n${followUp}`, status: 'created', currentStep: 'draft' } })
+        ? await tx.task.update({ where: { id: active.id }, data: { userPrompt: `${active.userPrompt}\n\n${followUp}`, status: 'created', currentStep: 'draft', ...(designMode ? { designMode } : {}) } })
         : await tx.task.create({
             data: {
               projectId: session.projectId,
@@ -274,22 +325,71 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
               mode: (await this.settings.get()).costMode,
               premiumAllowed: (await this.settings.get()).premiumExecutionAllowed,
               currentStep: 'draft',
+              ...(designMode ? { designMode } : {}),
             },
           })
-      const message = await tx.chatMessage.create({ data: { projectId: session.projectId, sessionId: session.id, taskId: task.id, clientId, role: 'user', content, metadata: asJson({ source: 'session_chat', autoRun }) } })
+      const message = await tx.chatMessage.create({ data: { projectId: session.projectId, sessionId: session.id, taskId: task.id, clientId, role: 'user', content, metadata: asJson({ source: 'session_chat', autoRun, ...choice }) } })
       await tx.chatSession.update({ where: { id: session.id }, data: { activeTaskId: task.id, recovery: asJson({ ...jsonObject(session.recovery), interruptedAsk: undefined }) } })
       return { task, message }
     })
     this.sessionByTask.set(task.id, session.id)
     this.published(message)
-    await this.executions.requestPlan(task.id, undefined, autoRun)
-    await this.systemMessage(session, task.id, 'system', 'Analysiere das Repository und erstelle einen Plan …', { kind: 'planning' })
+    const requested = await this.executions.requestPlan(task.id, continueTask && retryDesign ? content : undefined, autoRun)
+    await this.planningMessage(session, task.id, requested, PLANNING_TEXT)
     return message
   }
 
-  private async sendQuestion(session: ChatSession, content: string, clientId?: string): Promise<ChatMessage> {
+  /** "Planning started" or, when the design gate took over, "design draft started". */
+  private async planningMessage(session: Pick<ChatSession, 'id' | 'projectId'>, taskId: string, requested: { design?: true } | undefined, planningText: string) {
+    if (requested?.design) await this.systemMessage(session, taskId, 'system', DESIGN_START_TEXT, { kind: 'design_requested' })
+    else await this.systemMessage(session, taskId, 'system', planningText, { kind: 'planning' })
+  }
+
+  /**
+   * A chat message while the task is in the design phase. "passt"/"ok" approves the draft and starts planning,
+   * a change request is feedback for the next version; a short reply without either is answered with a
+   * question (a guessed redesign would cost a premium call). While a draft is being generated nothing is started:
+   * the message only gets a note (queueing it as feedback would trigger a second premium call on its own).
+   */
+  private async answerDesign(session: ChatSession, task: { id: string; currentStep: string }, content: string, autoRun: boolean, clientId?: string, choice: { orchestrator?: OrchestratorOverride } = {}): Promise<ChatMessage> {
+    const design = this.design!
+    const generating = task.currentStep === 'designing'
+    const answer = generating ? undefined : designAnswer(content)
+    const approval = answer === 'approval'
+    const kind = !answer ? 'design_pending' : answer === 'approval' ? 'design_approval' : answer === 'unclear' ? 'design_unclear' : 'design_feedback'
+    const message = await this.prisma.chatMessage.create({ data: { projectId: session.projectId, sessionId: session.id, taskId: task.id, clientId, role: 'user', content, metadata: asJson({ source: 'session_chat', kind, autoRun, ...choice }) } })
+    this.published(message)
+    if (generating) {
+      await this.systemMessage(session, task.id, 'system', DESIGN_PENDING_TEXT, { kind: 'design_pending' })
+      return message
+    }
+    if (answer === 'unclear') {
+      await this.systemMessage(session, task.id, 'assistant', DESIGN_UNCLEAR_TEXT, { kind: 'design_unclear' })
+      return message
+    }
+    try {
+      if (approval) {
+        await design.approve(task.id)
+        const requested = await this.executions.requestPlan(task.id, undefined, autoRun)
+        await this.planningMessage(session, task.id, requested, DESIGN_APPROVED_TEXT)
+      } else {
+        await design.reject(task.id, content, autoRun)
+        await this.systemMessage(session, task.id, 'system', DESIGN_REVISION_TEXT, { kind: 'design_requested' })
+      }
+    } catch (error) {
+      // the message is already durable; the failure is reported in the conversation instead of failing the send
+      await this.systemMessage(session, task.id, 'system', `Der Design-Entwurf konnte nicht ${approval ? 'freigegeben' : 'überarbeitet'} werden: ${error instanceof Error ? error.message : String(error)}`, { kind: 'design_error' })
+    }
+    return message
+  }
+
+  /**
+   * A plain question is answered by the composer's choice, but does not change the task's orchestrator: the
+   * choice is stored as `askOrchestrator`, not `orchestrator` (see taskOverride).
+   */
+  private async sendQuestion(session: ChatSession, content: string, clientId?: string, choice: { orchestrator?: OrchestratorOverride } = {}): Promise<ChatMessage> {
     const message = await this.prisma.chatMessage.create({
-      data: { projectId: session.projectId, sessionId: session.id, taskId: session.activeTaskId, clientId, role: 'user', content, metadata: asJson({ kind: 'question' }) },
+      data: { projectId: session.projectId, sessionId: session.id, taskId: session.activeTaskId, clientId, role: 'user', content, metadata: asJson({ kind: 'question', ...(choice.orchestrator ? { askOrchestrator: choice.orchestrator } : {}) }) },
     })
     this.published(message)
     const job = await this.jobs.enqueue('chat.ask', { sessionId: session.id, messageId: message.id })
@@ -305,8 +405,8 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     if (!target) throw new BadRequestException('This session has no task to plan.')
     const task = await this.prisma.task.findUniqueOrThrow({ where: { id: target } })
     if (task.sessionId !== sessionId) throw new BadRequestException('Task does not belong to this session.')
-    await this.executions.requestPlan(target)
-    await this.systemMessage(session, target, 'system', 'Plan wird erneut erstellt …', { kind: 'planning' })
+    const requested = await this.executions.requestPlan(target)
+    await this.planningMessage(session, target, requested, 'Plan wird erneut erstellt …')
     return this.summary((await this.refresh(sessionId))!)
   }
 
@@ -315,7 +415,14 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     const question = await this.prisma.chatMessage.findUnique({ where: { id: messageId } })
     if (!session || !question) return
     try {
-      const adapter = await this.orchestrators.active()
+      // askOrchestrator: the choice for this question only (older questions stored it as orchestrator)
+      const metadata = question.metadata as { askOrchestrator?: unknown; orchestrator?: unknown } | null
+      const override = metadata?.askOrchestrator ?? metadata?.orchestrator
+      const resolved = await this.orchestrators.activeWithNotice(isOrchestratorOverride(override) ? override : undefined)
+      const adapter = resolved.adapter
+      // the hint once per conversation streak: not again while it is still among the latest messages
+      const recent = resolved.notice ? await this.prisma.chatMessage.findMany({ where: { sessionId, role: 'system' }, orderBy: { createdAt: 'desc' }, take: 5, select: { content: true } }) : []
+      if (resolved.notice && !recent.some((message) => message.content === resolved.notice)) await this.systemMessage(session, question.taskId, 'system', resolved.notice, { kind: 'orchestrator_notice', questionId: messageId })
       if (!adapter) {
         await this.systemMessage(session, question.taskId, 'system', 'Kein Orchestrator verbunden. Bitte Claude Code oder Codex in den Einstellungen verbinden.', { kind: 'answer_error' })
         return
@@ -329,19 +436,19 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
       const started = Date.now()
       try {
         // A follow-up resumes the orchestrator's own session (context + history are already there).
+        // Duo: the id is the lead's, so the lead resumes as before; the partner resumes its own session.
         const resumeSessionId = session.provider === adapter.id && session.externalSessionId ? session.externalSessionId : undefined
-        const { result, meta } = await adapter.chat({ question: question.content, context: digest, history, resumeSessionId }, { runId: `chat-${sessionId}-${messageId}`, cwd: session.project.repoPath, timeoutMs: 5 * 60_000, effort: 'low' })
-        await this.prisma.modelCall.create({
-          data: {
-            kind: 'orchestrator', provider: adapter.id, model: meta.model ?? adapter.id, purpose: 'chat', status: 'ok', sessionId: meta.sessionId, durationMs: meta.durationMs,
-            inputTokens: meta.usage.inputTokens, outputTokens: meta.usage.outputTokens, cachedInputTokens: meta.usage.cachedInputTokens, tokensMeasured: meta.usage.measured,
-            apiEquivalentUsd: meta.usage.apiEquivalentUsd === undefined ? undefined : new Prisma.Decimal(meta.usage.apiEquivalentUsd), billing: meta.usage.billing,
-          },
-        })
+        const partnerResumeSessionId = isDuo(adapter) ? await this.partnerSession(sessionId, adapter.duo.partner) : undefined
+        const { result, meta } = await adapter.chat({ question: question.content, context: digest, history, resumeSessionId, ...(partnerResumeSessionId ? { partnerResumeSessionId } : {}) }, { runId: `chat-${sessionId}-${messageId}`, cwd: session.project.repoPath, timeoutMs: 5 * 60_000, effort: 'low' })
+        for (const data of modelCallRows(adapter.id, meta, { kind: 'orchestrator', purpose: 'chat', status: 'ok', durationMs: meta.durationMs })) {
+          await this.prisma.modelCall.create({ data })
+        }
         await this.prisma.chatSession.update({ where: { id: sessionId }, data: { provider: adapter.id, ...(meta.sessionId ? { externalSessionId: meta.sessionId } : {}) } })
-        await this.systemMessage(session, question.taskId, 'assistant', result.answer, { kind: 'answer', orchestrator: adapter.id, questionId: messageId, resumedSession: Boolean(resumeSessionId && meta.sessionId === resumeSessionId) })
+        await this.systemMessage(session, question.taskId, 'assistant', result.answer, answerMetadata(adapter, result, meta, { questionId: messageId, resumedSession: Boolean(resumeSessionId && meta.sessionId === resumeSessionId), partnerResumeSessionId }))
       } catch (error) {
-        await this.prisma.modelCall.create({ data: { kind: 'orchestrator', provider: adapter.id, purpose: 'chat', status: 'error', errorClass: (error as { kind?: string }).kind, durationMs: Date.now() - started, ...failedCallFields(error, adapter.id) } })
+        for (const data of failedCallRows(adapter.id, error, { kind: 'orchestrator', purpose: 'chat', durationMs: Date.now() - started })) {
+          await this.prisma.modelCall.create({ data })
+        }
         await this.systemMessage(session, question.taskId, 'system', `Fehler bei der Antwort: ${error instanceof Error ? error.message : String(error)}`, { kind: 'answer_error', questionId: messageId })
       }
     } finally {
@@ -358,6 +465,22 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
       })
       this.scheduleRefresh(sessionId, 0)
     }
+  }
+
+  /**
+   * The partner's CLI session of a duo conversation: kept in the metadata of the last duo answer (ChatSession
+   * only has room for the lead's session). Undefined after a partner switch or before the first duo answer.
+   */
+  private async partnerSession(sessionId: string, partner: string): Promise<string | undefined> {
+    const answers = await this.prisma.chatMessage.findMany({ where: { sessionId, role: 'assistant' }, orderBy: { createdAt: 'desc' }, take: 30, select: { metadata: true } })
+    for (const answer of answers) {
+      const metadata = answer.metadata as { kind?: string; duo?: { partner?: unknown; partnerSessionId?: unknown } } | null
+      if (metadata?.kind !== 'answer') continue
+      // the latest answer decides: a single-mode answer in between ends the partner's thread
+      if (metadata.duo?.partner !== partner) return undefined
+      return typeof metadata.duo.partnerSessionId === 'string' ? metadata.duo.partnerSessionId : undefined
+    }
+    return undefined
   }
 
   private async systemMessage(session: Pick<ChatSession, 'id' | 'projectId'>, taskId: string | null, role: 'assistant' | 'agent' | 'system', content: string, metadata: Record<string, unknown>) {
@@ -385,14 +508,15 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, status: true, currentStep: true, executions: { orderBy: { createdAt: 'desc' }, take: 1, select: { status: true } } },
     })
     const taskIds = new Set(tasks.map((task) => task.id))
-    const [planJobs, askJobs] = await Promise.all([
+    const [planJobs, designJobs, askJobs] = await Promise.all([
       this.jobs.activeFor('execution.plan', (payload) => taskIds.has(String(payload.taskId))),
+      this.jobs.activeFor('design.create', (payload) => taskIds.has(String(payload.taskId))),
       this.jobs.activeFor('chat.ask', (payload) => payload.sessionId === sessionId),
     ])
     const status = deriveSessionStatus({
       session,
       tasks,
-      activePlanTaskIds: new Set(planJobs.map((job) => String((job.payload as Record<string, unknown>).taskId))),
+      activePlanTaskIds: new Set([...planJobs, ...designJobs].map((job) => String((job.payload as Record<string, unknown>).taskId))),
       askRunning: askJobs.length > 0,
       now: Date.now(),
     })
@@ -419,13 +543,13 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private static readonly STATE_EVENTS = new Set([
-    'planning_started', 'planned', 'execution_created', 'execution_finished', 'run_updated', 'applied', 'discarded', 'undone', 'run_paused', 'run_resumed', 'run_cancelled', 'run_error',
+    'planning_started', 'planned', 'design_requested', 'design_ready', 'design_approved', 'execution_created', 'execution_finished', 'run_updated', 'applied', 'discarded', 'undone', 'run_paused', 'run_resumed', 'run_cancelled', 'run_error',
   ])
 
   private onEvent(event: AppEvent) {
     const data = event.data as Record<string, unknown>
     if (event.channel === 'project' && event.type === 'chat_message' && typeof data.sessionId === 'string') return this.scheduleRefresh(data.sessionId)
-    if (event.channel === 'jobs' && ['finished', 'failed', 'started'].includes(event.type) && ['execution.plan', 'chat.ask'].includes(String(data.type))) {
+    if (event.channel === 'jobs' && ['finished', 'failed', 'started'].includes(event.type) && ['execution.plan', 'design.create', 'chat.ask'].includes(String(data.type))) {
       void this.prisma.job.findUnique({ where: { id: String(data.jobId) } }).then((job) => {
         const payload = (job?.payload ?? {}) as Record<string, unknown>
         if (typeof payload.sessionId === 'string') this.scheduleRefresh(payload.sessionId)
@@ -471,6 +595,8 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
 
   private async markPlanInterrupted(taskId: string) {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } })
+    // an interrupted design draft ends in design_failed (DesignService posts the note, like the plan variant below)
+    if (task?.currentStep === 'designing') return this.design?.markInterrupted(taskId)
     if (!task || task.currentStep !== 'planning') return
     await this.prisma.task.update({ where: { id: taskId }, data: { currentStep: 'plan_interrupted', status: 'failed' } })
     const sessionId = task.sessionId
@@ -479,13 +605,13 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Startup recovery (after ExecutionService.recover and the job queue recovery):
-   * tasks still marked "planning" without a plan job, asks without a job, then every status is
+   * tasks still marked "planning" or "designing" without their job, asks without a job, then every status is
    * recomputed from the actual runtime state.
    */
   async recover() {
-    const planning = await this.prisma.task.findMany({ where: { currentStep: 'planning' }, select: { id: true } })
+    const planning = await this.prisma.task.findMany({ where: { currentStep: { in: ['planning', 'designing'] } }, select: { id: true, currentStep: true } })
     for (const task of planning) {
-      const jobs = await this.jobs.activeFor('execution.plan', (payload) => payload.taskId === task.id)
+      const jobs = await this.jobs.activeFor(task.currentStep === 'designing' ? 'design.create' : 'execution.plan', (payload) => payload.taskId === task.id)
       if (!jobs.length) await this.markPlanInterrupted(task.id)
     }
     const sessions = await this.prisma.chatSession.findMany({ select: { id: true, recovery: true, projectId: true } })
@@ -501,6 +627,6 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
       }
       await this.refresh(session.id)
     }
-    this.logger.log(`Recovered ${sessions.length} session(s); ${planning.length} task(s) were in planning.`)
+    this.logger.log(`Recovered ${sessions.length} session(s); ${planning.length} task(s) were in planning or design.`)
   }
 }

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { tempDir } from '../test-utils.js'
 import { ClaudeCodeAdapter } from './claude-code.js'
 import { CodexAdapter } from './codex.js'
+import { CHOOSE_SCHEMA } from './schemas.js'
 import { OrchestratorError, type RepoContextDigest } from './types.js'
 
 // Fake CLIs replay the JSONL formats recorded from claude 2.1.86 / codex-cli 0.153.4.
@@ -20,6 +21,7 @@ if (args[0] === 'auth' && args[1] === 'status') {
 }
 let input = ''
 process.stdin.on('data', (c) => (input += c)).on('end', () => {
+  fs.writeFileSync(process.env.FAKE_LOG, JSON.stringify({ args, apiKey: process.env.ANTHROPIC_API_KEY ?? null, input }))
   if (mode === 'hang') { setTimeout(() => {}, 60000); return }
   if (mode === 'no_session' && args.includes('--resume')) { process.stderr.write('No conversation found with session ID'); process.exit(1) }
   // the retry (no --resume) of the resume modes runs in a new CLI session
@@ -75,7 +77,14 @@ if (args[0] === 'debug' && args[1] === 'models') {
 }
 let input = ''
 process.stdin.on('data', (c) => (input += c)).on('end', () => {
+  const schemaIndex = args.indexOf('--output-schema')
+  log[log.length - 1].input = input
+  if (schemaIndex >= 0) log[log.length - 1].schema = fs.readFileSync(args[schemaIndex + 1], 'utf8')
+  fs.writeFileSync(process.env.FAKE_LOG, JSON.stringify(log))
   const isResume = args[0] === 'exec' && args[1] === 'resume'
+  // like the real CLI (clap): exec resume rejects the exec-only flags before any model call
+  const rejected = isResume && ['--sandbox', '-s', '-C', '--cd'].find((flag) => args.includes(flag))
+  if (rejected) { process.stderr.write("error: unexpected argument '" + rejected + "' found\n"); process.exit(2) }
   const plain = mode === 'always_invalid' || (mode === 'resume_invalid' && isResume)
   // the retry (no exec resume) of the resume modes runs in a new thread
   out({ type: 'thread.started', thread_id: (mode === 'resume_invalid' || mode === 'always_invalid') && !isResume ? 'thread-2' : 'thread-1' })
@@ -127,6 +136,24 @@ const questionPlan = {
   tasks: [],
 }
 
+const designDraft = {
+  summary: 'Dashboard',
+  designType: 'dashboard',
+  direction: 'Calm and dense',
+  tokens: [{ name: '--accent', value: '#5b5bd6', darkValue: '', group: 'color' }],
+  components: [{ name: 'StatCard', purpose: 'KPI', file: 'src/StatCard.tsx', spec: 'Card with value', tokens: ['--accent'] }],
+  screens: [{ name: 'Overview', route: '/', layout: 'grid', components: ['StatCard'] }],
+  mockupHtml: '<div data-component="StatCard">42</div><script>alert(1)</script>',
+  questions: [],
+}
+const emptyDesign = { ...designDraft, components: [], questions: [] }
+const designInput = { goal: 'Build a dashboard', context, provider: 'codex' as const }
+const repairHint = { diagnosis: 'Der Gruß lautet „Hi".', edits: [{ file: 'src/greet.js', find: '`Hi ${name}`', replace: '`Hello ${name}`', note: 'Test erwartet Hello' }], confidence: 'high' }
+const hintInput = {
+  taskId: 'task-001', title: 'Add greet', instructions: 'Create src/greet.js', acceptanceCriteria: [], files: ['src/greet.js'],
+  diff: '+export const greet = (name) => `Hi ${name}`', failures: '## test failed: node --test\nexpected Hello',
+}
+
 const saved = { ...process.env }
 afterEach(() => {
   process.env = { ...saved }
@@ -167,6 +194,37 @@ describe('ClaudeCodeAdapter', () => {
     expect(log.args[log.args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep')
   })
 
+  it('creates a design read-only with the design schema and without the Codex-only prompt block', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(designDraft)
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.createDesign(designInput, { runId: 'r-d', cwd: fake.dir })
+    expect(result.components.map((component) => component.name)).toEqual(['StatCard'])
+    expect(result.tokens.find((token) => token.name === '--accent')?.value).toBe('#5b5bd6')
+    expect(result.tokens.some((token) => token.name === '--bg')).toBe(true)
+    expect(result.mockupHtml).not.toContain('<script')
+    expect(meta.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, measured: true })
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[]; input: string }
+    expect(log.args[log.args.indexOf('--json-schema') + 1]).toContain('mockupHtml')
+    expect(log.args[log.args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep')
+    expect(log.args[log.args.indexOf('--max-turns') + 1]).toBe('6')
+    expect(log.args).toContain('--no-session-persistence')
+    expect(log.input).toContain('Design rules')
+    expect(log.input).not.toContain('Avoid dated output')
+  })
+
+  it('keeps the measured usage on an invalid_output error when the design has no components and no questions', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(emptyDesign)
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createDesign(designInput, { runId: 'r-de', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
+  })
+
   it('keeps the measured usage on a needs_clarification error when the plan has no tasks', async () => {
     const fake = await makeFakeCli('claude', FAKE_CLAUDE)
     process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
@@ -199,6 +257,50 @@ describe('ClaudeCodeAdapter', () => {
     expect(error).toBeInstanceOf(OrchestratorError)
     expect(error.kind).toBe('invalid_output')
     expect(error.message).toBe('Review is not an object.')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
+  })
+
+  it('asks for a repair hint with read-only tools, few turns and the strict hint schema', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(repairHint)
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.repairHint(hintInput, { runId: 'r-h', cwd: fake.dir })
+    expect(result).toEqual(repairHint)
+    expect(meta.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, measured: true })
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[]; input: string }
+    expect(log.args[log.args.indexOf('--json-schema') + 1]).toContain('confidence')
+    expect(log.args[log.args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep')
+    expect(log.args[log.args.indexOf('--max-turns') + 1]).toBe('4')
+    expect(log.args).toContain('--no-session-persistence')
+    expect(log.input).toContain('Do NOT implement the task yourself')
+    expect(log.input).toContain('## test failed')
+  })
+
+  it('structuredCall (duo reconcile/choose) answers with the given schema and no tools', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify({ winner: 'B', reason: 'kürzer' })
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.structuredCall({ prompt: 'Pick A or B', schema: CHOOSE_SCHEMA }, { runId: 'r-s', cwd: fake.dir })
+    expect(result).toEqual({ winner: 'B', reason: 'kürzer' })
+    expect(meta.usage.measured).toBe(true)
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as { args: string[]; input: string }
+    expect(log.args[log.args.indexOf('--json-schema') + 1]).toBe(JSON.stringify(CHOOSE_SCHEMA))
+    expect(log.args[log.args.indexOf('--tools') + 1]).toBe('')
+    expect(log.args).toContain('--no-session-persistence')
+    expect(log.input).toContain('Pick A or B')
+  })
+
+  it('keeps the measured usage on an invalid_output error when the repair hint is not an object', async () => {
+    const fake = await makeFakeCli('claude', FAKE_CLAUDE)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = '[]'
+    const adapter = new ClaudeCodeAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.repairHint(hintInput, { runId: 'r-he', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.message).toBe('Repair hint is not an object.')
     expect(error.details.meta?.usage).toMatchObject({ inputTokens: 1200, outputTokens: 150, cachedInputTokens: 200, measured: true })
   })
 
@@ -306,6 +408,37 @@ describe('CodexAdapter', () => {
     expect(exec.args).toEqual(expect.arrayContaining(['--json', '--output-schema', '--sandbox', 'read-only', '--ephemeral', 'model_reasoning_effort="low"']))
   })
 
+  it('creates a design read-only with --output-schema and the full prompt including the anti-pattern block', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(designDraft)
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.createDesign({ ...designInput, provider: 'claude-code' }, { runId: 'c-d', cwd: fake.dir })
+    expect(result.components.map((component) => component.name)).toEqual(['StatCard'])
+    expect(result.tokens.some((token) => token.name === '--bg')).toBe(true)
+    expect(result.mockupHtml).toContain('data-component="StatCard"')
+    expect(result.mockupHtml).not.toContain('<script')
+    expect(meta.usage).toMatchObject({ inputTokens: 13000, outputTokens: 100, measured: true })
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as Array<{ args: string[]; input?: string; schema?: string }>
+    const exec = log.find((entry) => entry.args[0] === 'exec')!
+    expect(exec.schema).toContain('mockupHtml')
+    expect(exec.args[exec.args.indexOf('--sandbox') + 1]).toBe('read-only')
+    expect(exec.args).toContain('--ephemeral')
+    expect(exec.input).toContain('Avoid dated output')
+    expect(exec.input).toContain('Design rules')
+  })
+
+  it('keeps the measured usage on an invalid_output error when the design has no components and no questions', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(emptyDesign)
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.createDesign(designInput, { runId: 'c-de', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
+  })
+
   it('keeps the measured usage on a needs_clarification error when the plan has no tasks', async () => {
     const fake = await makeFakeCli('codex', FAKE_CODEX)
     process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
@@ -338,6 +471,50 @@ describe('CodexAdapter', () => {
     expect(error).toBeInstanceOf(OrchestratorError)
     expect(error.kind).toBe('invalid_output')
     expect(error.message).toBe('Review is not an object.')
+    expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
+  })
+
+  it('asks for a repair hint read-only and ephemeral with the strict hint schema', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify(repairHint)
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const { result, meta } = await adapter.repairHint(hintInput, { runId: 'c-h', cwd: fake.dir })
+    expect(result).toEqual(repairHint)
+    expect(meta.usage).toMatchObject({ inputTokens: 13000, outputTokens: 100, measured: true })
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as Array<{ args: string[]; input?: string; schema?: string }>
+    const exec = log.find((entry) => entry.args[0] === 'exec')!
+    expect(exec.schema).toContain('confidence')
+    expect(exec.args[exec.args.indexOf('--sandbox') + 1]).toBe('read-only')
+    expect(exec.args).toContain('--ephemeral')
+    expect(exec.input).toContain('Do NOT implement the task yourself')
+    expect(exec.input).toContain('Hi ${name}')
+  })
+
+  it('structuredCall (duo reconcile/choose) runs read-only and ephemeral with the given schema and system prompt', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = JSON.stringify({ winner: 'A', reason: 'vollständiger' })
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const { result } = await adapter.structuredCall({ prompt: 'Pick A or B', schema: CHOOSE_SCHEMA, systemPrompt: 'You are a judge.' }, { runId: 'c-s', cwd: fake.dir })
+    expect(result).toEqual({ winner: 'A', reason: 'vollständiger' })
+    const log = JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as Array<{ args: string[]; input?: string; schema?: string }>
+    const exec = log.find((entry) => entry.args[0] === 'exec')!
+    expect(exec.schema).toContain('winner')
+    expect(exec.args[exec.args.indexOf('--sandbox') + 1]).toBe('read-only')
+    expect(exec.args).toContain('--ephemeral')
+    expect(exec.input?.startsWith('You are a judge.\n\nPick A or B')).toBe(true)
+  })
+
+  it('keeps the measured usage on an invalid_output error when the repair hint is not an object', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_STRUCTURED = '[]'
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const error = (await adapter.repairHint(hintInput, { runId: 'c-he', cwd: fake.dir }).catch((caught: unknown) => caught)) as OrchestratorError
+    expect(error).toBeInstanceOf(OrchestratorError)
+    expect(error.kind).toBe('invalid_output')
+    expect(error.message).toBe('Repair hint is not an object.')
     expect(error.details.meta?.usage).toMatchObject({ inputTokens: 13000, cachedInputTokens: 4000, outputTokens: 100, measured: true })
   })
 
@@ -461,5 +638,21 @@ describe('chat session reuse', () => {
     expect(exec.args.slice(0, 2)).toEqual(['exec', 'resume'])
     expect(exec.args).toContain('thread-1')
     expect(exec.args).not.toContain('--ephemeral')
+    expect(exec.args).toContain('sandbox_mode="read-only"')
+  })
+
+  it('codex: a repair round resumes the execution thread with a writable sandbox via config', async () => {
+    const fake = await makeFakeCli('codex', FAKE_CODEX)
+    process.env.FAKE_LOG = path.join(fake.dir, 'log.json')
+    process.env.FAKE_MODE = 'ok'
+    process.env.FAKE_STRUCTURED = JSON.stringify({ summary: 'Fixed', filesChanged: ['src/b.ts'] })
+    const adapter = new CodexAdapter({ binaryPath: fake.binary })
+    const { result } = await adapter.executeComplexTask({ taskId: 'task-001', title: 'T', instructions: 'Fix it', acceptanceCriteria: [], relevantFiles: [], resumeSessionId: 'thread-1' }, { runId: 'c-rs', cwd: fake.dir })
+    expect(result).toMatchObject({ summary: 'Fixed', filesChanged: ['src/b.ts'], sessionId: 'thread-1' })
+    const exec = (JSON.parse(readFileSync(process.env.FAKE_LOG, 'utf8')) as Array<{ args: string[] }>).filter((entry) => entry.args[0] === 'exec').at(-1)!
+    expect(exec.args.slice(0, 2)).toEqual(['exec', 'resume'])
+    expect(exec.args).toContain('sandbox_mode="workspace-write"')
+    expect(exec.args).not.toContain('--sandbox')
+    expect(exec.args).not.toContain('-C')
   })
 })

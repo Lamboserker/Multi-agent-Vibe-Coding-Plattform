@@ -6,6 +6,8 @@ import { AsyncMutex } from '../common/locks.js'
 import { EventBusService } from './event-bus.service.js'
 
 export type OrchestratorChoice = 'claude-code' | 'codex'
+/** single = one premium orchestrator; duo = Claude Code and Codex in parallel with reconciliation (ADR-004). */
+export type OrchestratorMode = 'single' | 'duo'
 /** auto_commit: a validated result is committed onto the checked-out branch (e.g. main) without asking. */
 export type ApprovalMode = 'manual' | 'auto_branch' | 'auto_working_tree' | 'auto_commit'
 
@@ -13,6 +15,10 @@ export interface AppSettings {
   languageServers: Array<{ command: string; args: string[]; extensions: string[]; languageId: string }>
   pluginExtensions: Record<string, { plugin: string; id: string } | null>
   orchestrator: OrchestratorChoice | null
+  /** duo: both CLIs work on every phase (needs both installed and signed in; else single with a chat hint). */
+  orchestratorMode: OrchestratorMode
+  /** Duo mode: who reconciles both results and owns the chat session. */
+  duoLead: OrchestratorChoice
   claudeModel: string
   codexModel: string
   /** Prompt prefix authentication: never switch to API billing unless explicitly chosen. */
@@ -30,9 +36,13 @@ export interface AppSettings {
   maxLocalRepairs: number
   maxEscalationSteps: number
   reviewFixRounds: number
+  /** Premium returns repair edits for a failed local attempt before executing the task itself. */
+  premiumHints: boolean
   localParallelism: number | 'auto'
   premiumParallelism: number
   ollamaBaseUrl: string
+  /** Further local Ollama instances whose loaded models the resource monitor shows (read-only). */
+  extraOllamaUrls: string[]
   /** Model storage used when Multi-AI Coder starts Ollama itself (OLLAMA_MODELS). null = Ollama default. */
   ollamaModelsDir: string | null
   numCtx: number
@@ -44,6 +54,8 @@ export interface AppSettings {
   formatOnSave: boolean
   /** How long Ollama keeps a local model loaded after its last use. */
   keepAliveMinutes: number
+  /** Unload the local models of a run when it ends (unless another active run still uses them). */
+  unloadAfterRun: boolean
   taskTimeoutMinutes: number
   modelRoles: { fast: string | null; balanced: string | null; advanced: string | null }
   allowProjectCode: boolean
@@ -71,10 +83,28 @@ export interface ModelSelfTest {
   error?: string
 }
 
+const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434'
+
+/**
+ * The other well-known local instance: the system Ollama listens on :11434, the instance Multi-AI Coder
+ * starts with its own model folder usually on :11435. Other ports have no known partner.
+ */
+export function defaultExtraOllamaUrls(baseUrl: string): string[] {
+  try {
+    const url = new URL(baseUrl)
+    const other = url.port === '11434' ? '11435' : url.port === '11435' ? '11434' : undefined
+    return other ? [`${url.protocol}//${url.hostname}:${other}`] : []
+  } catch {
+    return []
+  }
+}
+
 export const DEFAULT_SETTINGS: AppSettings = {
   languageServers: [],
   pluginExtensions: {},
   orchestrator: null,
+  orchestratorMode: 'single',
+  duoLead: 'claude-code',
   claudeModel: '',
   codexModel: '',
   orchestratorAuthMode: 'subscription',
@@ -88,15 +118,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
   maxLocalRepairs: 2,
   maxEscalationSteps: 2,
   reviewFixRounds: 1,
+  premiumHints: true,
   localParallelism: 'auto',
   premiumParallelism: 1,
-  ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
+  ollamaBaseUrl: DEFAULT_OLLAMA_URL,
+  extraOllamaUrls: defaultExtraOllamaUrls(DEFAULT_OLLAMA_URL),
   ollamaModelsDir: null,
   numCtx: 16_384,
   modelWarmup: true,
   fastPath: true,
   formatOnSave: false,
   keepAliveMinutes: 15,
+  unloadAfterRun: true,
   taskTimeoutMinutes: 20,
   modelRoles: { fast: null, balanced: null, advanced: null },
   allowProjectCode: true,
@@ -144,6 +177,10 @@ export function mergeSettings(current: AppSettings, patch: Partial<AppSettings>)
     } else {
       ;(next as unknown as Record<string, unknown>)[key] = value
     }
+  }
+  // the default partner instance follows a changed base URL; an explicitly chosen list stays
+  if (patch.ollamaBaseUrl !== undefined && patch.extraOllamaUrls === undefined && JSON.stringify(current.extraOllamaUrls) === JSON.stringify(defaultExtraOllamaUrls(current.ollamaBaseUrl))) {
+    next.extraOllamaUrls = defaultExtraOllamaUrls(next.ollamaBaseUrl)
   }
   return next
 }
@@ -221,7 +258,7 @@ export class SettingsService {
     return this.mutex.run(async () => {
       const current = this.cache!
       const next = mergeSettings(current, patch)
-      const changed = Object.keys(patch).filter((key) => ALLOWED_KEYS.has(key) && JSON.stringify((next as unknown as Record<string, unknown>)[key]) !== JSON.stringify((current as unknown as Record<string, unknown>)[key]))
+      const changed = [...new Set([...Object.keys(patch), 'extraOllamaUrls'])].filter((key) => ALLOWED_KEYS.has(key) && JSON.stringify((next as unknown as Record<string, unknown>)[key]) !== JSON.stringify((current as unknown as Record<string, unknown>)[key]))
       if (!changed.length) return { settings: current, version: this.version, changed }
       const version = this.version + 1
       await this.prisma.$transaction([

@@ -14,7 +14,7 @@ const CONFIDENCE: Record<SuitabilityStats['confidence'], { label: string; tone: 
   medium: { label: 'mittel', tone: 'tool' },
   high: { label: 'hoch', tone: 'ok' },
 }
-const PURPOSE: Record<string, string> = { plan: 'Plan', review: 'Review', execute: 'Ausführung', repair: 'Reparatur', analyze: 'Analyse', chat: 'Frage', review_fix: 'Review-Fix' }
+const PURPOSE: Record<string, string> = { plan: 'Plan', review: 'Review', execute: 'Ausführung', repair: 'Reparatur', analyze: 'Analyse', chat: 'Frage', review_fix: 'Review-Fix', repair_hint: 'Premium-Hinweis' }
 const fmtCompact = (value: number) => (value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1).replace('.', ',')}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : String(value))
 
 export function UsageScreen() {

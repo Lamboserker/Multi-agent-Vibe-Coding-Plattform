@@ -26,3 +26,13 @@ export function useTempDatabase(prefix = 'mac-api-test-') {
     },
   }
 }
+
+/**
+ * Adds activeWithNotice()/designerWithNotice() to an orchestrator stub that only fakes active()/designer()
+ * (the services resolve through the *WithNotice variants; the stubs never have a notice).
+ */
+export function withNotices<T extends object>(stub: T): T {
+  const call = (name: string) => async (override?: unknown) => ({ adapter: await (stub as Record<string, ((value?: unknown) => unknown) | undefined>)[name]?.(override) })
+  const own = stub as Record<string, unknown>
+  return Object.assign(stub, { activeWithNotice: own.activeWithNotice ?? call('active'), designerWithNotice: own.designerWithNotice ?? call('designer') })
+}

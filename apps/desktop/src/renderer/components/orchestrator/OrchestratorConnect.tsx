@@ -4,8 +4,9 @@ import { api, bridge, errorMessage } from '../../lib/api'
 import { useLoader } from '../../lib/hooks'
 import { loadSettings } from '../../lib/actions'
 import { useApp } from '../../lib/store'
-import type { DiagnosticReport, OrchestratorId, OrchestratorOverview } from '../../lib/types'
+import type { DiagnosticReport, OrchestratorId, OrchestratorMode, OrchestratorOverview } from '../../lib/types'
 import { AsyncButton, Badge, Spinner, StatusDot } from '../common'
+import { Seg } from '../ui'
 
 const DESCRIPTIONS: Record<OrchestratorId, string> = {
   'claude-code': 'Anthropic Claude Code CLI – Anmeldung mit deinem Claude-Abonnement (Pro/Max) über das offizielle „claude auth login“.',
@@ -71,6 +72,8 @@ export function OrchestratorConnect({ onRunCommand, onChanged }: { onRunCommand:
           )
         })}
       </div>
+
+      <DuoSettings overview={overview} mode={settings?.orchestratorMode ?? 'single'} lead={settings?.duoLead ?? 'claude-code'} onChange={(patch) => void updateSettings(patch)} />
 
       {overview.orchestrators.map((entry) => {
         if (settings?.orchestrator !== entry.id) return null
@@ -174,6 +177,42 @@ export function OrchestratorConnect({ onRunCommand, onChanged }: { onRunCommand:
         )
       })}
       <div className="faint" style={{ fontSize: 12 }}>{overview.policy.note}</div>
+    </div>
+  )
+}
+
+/** Single or duo mode (ADR-004): both CLIs plan, design, review and execute in parallel, the lead reconciles. */
+function DuoSettings({ overview, mode, lead, onChange }: { overview: OrchestratorOverview; mode: OrchestratorMode; lead: OrchestratorId; onChange: (patch: { orchestratorMode?: OrchestratorMode; duoLead?: OrchestratorId }) => void }) {
+  const available = overview.duo?.available ?? false
+  return (
+    <div className="card stack" data-testid="duo-settings">
+      <div className="row wrap">
+        <strong>Arbeitsweise</strong>
+        <span className="spacer" />
+        <Seg
+          label="Arbeitsweise"
+          value={mode}
+          onChange={(value: OrchestratorMode) => onChange({ orchestratorMode: value })}
+          options={[
+            { id: 'single', label: 'Einzeln', title: 'Ein Premium-Orchestrator (die Auswahl oben) bearbeitet alle Phasen' },
+            { id: 'duo', label: 'Duo (Claude + Codex)', title: 'Claude Code und Codex arbeiten parallel und gleichen ihre Ergebnisse ab', disabled: !available && mode !== 'duo' },
+          ]}
+        />
+      </div>
+      {mode === 'duo' ? (
+        <div className="row wrap">
+          <span className="muted" title="Der Lead führt beide Vorschläge zusammen und entscheidet bei Gleichstand">Lead</span>
+          <span className="spacer" />
+          <Seg label="Duo-Lead" value={lead} onChange={(value: OrchestratorId) => onChange({ duoLead: value })} options={[{ id: 'claude-code', label: 'Claude Code' }, { id: 'codex', label: 'Codex' }]} />
+        </div>
+      ) : null}
+      <span className="faint" style={{ fontSize: 12 }}>Duo nutzt beide Abos parallel – etwa 2–3× Premium-Kontingent pro Phase. Im Composer wählst du pro Auftrag „Claude“, „Codex“ oder „Beide“.</span>
+      {!available ? (
+        <span className="muted" style={{ fontSize: 12 }}>
+          {overview.duo?.reason ?? 'Duo braucht beide CLIs installiert und angemeldet.'}
+          {mode === 'duo' ? ' Bis dahin arbeitet der verbundene Orchestrator allein (mit Hinweis im Chat).' : ''}
+        </span>
+      ) : null}
     </div>
   )
 }

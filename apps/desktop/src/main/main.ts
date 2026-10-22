@@ -51,6 +51,7 @@ const vault = new SecretVault(dataDir)
 // The runtime reads a secret only through this channel, after checking the plugin's/server's grant.
 runtime.onShellRequest((method, params) => {
   if (method === 'secret:get') return vault.get(String(params.scope), String(params.name))
+  if (method === 'secret:names' && /^mcp:/.test(String(params.scope))) return { names: vault.names(String(params.scope)) }
   // used when importing MCP configurations: credential values go straight into the vault
   if (method === 'secret:set' && /^mcp:/.test(String(params.scope))) {
     vault.set(String(params.scope), String(params.name), String(params.value))

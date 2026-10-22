@@ -30,8 +30,9 @@ export class TasksService {
     private readonly settings: SettingsService,
   ) {}
 
-  async create(body: { projectId: string; userPrompt: string; maxCostEuro?: number; mode?: CostMode; premiumAllowed?: boolean }) {
+  async create(body: { projectId: string; userPrompt: string; maxCostEuro?: number; mode?: CostMode; premiumAllowed?: boolean; designMode?: 'auto' | 'force' | 'skip' }) {
     if (!body?.projectId || !body.userPrompt?.trim()) throw new BadRequestException('projectId and userPrompt are required.')
+    if (body.designMode !== undefined && !['auto', 'force', 'skip'].includes(body.designMode)) throw new BadRequestException('designMode must be one of auto, force, skip.')
     const settings = await this.settings.get()
     // Every task belongs to a session, so it shows up in the session list of the desktop app.
     return this.prisma.$transaction(async (tx) => {
@@ -45,6 +46,7 @@ export class TasksService {
           mode: body.mode ?? settings.costMode,
           premiumAllowed: body.premiumAllowed ?? settings.premiumExecutionAllowed,
           currentStep: 'draft',
+          designMode: body.designMode ?? 'auto',
         },
       })
       await tx.chatSession.update({ where: { id: session.id }, data: { activeTaskId: task.id } })

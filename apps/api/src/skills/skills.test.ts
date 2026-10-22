@@ -321,7 +321,50 @@ describe('built-in UI design skills', () => {
   })
 
   it('reach the planner, so the plan names tokens and classes for the local tasks', async () => {
-    const context = await service.promptContext('planner', projectId, 'Erstelle mit Vite ein React-Projekt mit einem modernen Dashboard, nutze Bootstrap als Styling', { canLoad: false, budgetChars: 8000 })
+    const context = await service.promptContext('planner', projectId, 'Erstelle mit Vite ein React-Projekt mit einem modernen Dashboard, nutze Bootstrap als Styling', { canLoad: false, budgetChars: 12000 })
     expect(context.inlined).toEqual(expect.arrayContaining(['ui-design', 'ui-bootstrap']))
+  })
+})
+
+describe('built-in design skills', () => {
+  const skillsDir = path.resolve(here, '../../../../skills')
+  const designSkills = ['design-dashboard', 'design-crm', 'design-landing-page', 'design-saas-app', 'design-admin-forms', 'design-ecommerce']
+  const germanWord = /[äöüß]|kunden|kontakt|übersicht|startseite|warenkorb|einstellungen|verwaltung|kennzahlen|vertrieb|produkt/
+  const englishWord = /^(crm|dashboard|kpi|landing page|landingpage|hero|saas|settings|admin|form|shop|checkout|sales|leads|customers|pricing|product|cart|workspace)$/
+
+  it.each(designSkills)('%s parses and stays small', (name) => {
+    const text = readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf8')
+    expect(text.length).toBeLessThanOrEqual(3500)
+    const { meta } = parseSkill(text)
+    expect(meta.name).toBe(name)
+    expect(meta.description).toContain('ui-design')
+    expect(meta.testTask).toBeTruthy()
+    expect(meta.triggers.some((trigger) => germanWord.test(trigger))).toBe(true)
+    expect(meta.triggers.some((trigger) => englishWord.test(trigger))).toBe(true)
+  })
+
+  it('are selected for their own test task', async () => {
+    const resources = new AgentResourcesService(service, { agentTools: async () => [] } as never, { agentTools: async () => [] } as never)
+    for (const name of designSkills) {
+      const result = await resources.testSkill(`builtin:${name}`, projectId)
+      expect(result.selection, name).not.toBe('not_selected')
+    }
+  })
+
+  it('give the designer ui-design plus the matching design skill inline', async () => {
+    const options = { pinned: ['ui-design'], budgetChars: 9000, canLoad: false }
+    const crm = await service.promptContext('designer', projectId, 'Erstelle ein CRM mit Kontaktliste und Deal-Pipeline', options)
+    expect(crm.inlined).toEqual(expect.arrayContaining(['ui-design', 'design-crm']))
+    expect(crm.inlined).not.toContain('design-ecommerce')
+    const landing = await service.promptContext('designer', projectId, 'Baue eine Landingpage für mein Café', options)
+    expect(landing.inlined).toEqual(expect.arrayContaining(['ui-design', 'design-landing-page']))
+    expect(landing.inlined).not.toContain('design-crm')
+  })
+
+  it('accept the designer role in the agent assignment', async () => {
+    await service.updateState('builtin:design-crm', { agents: ['designer'] })
+    expect((await service.promptContext('designer', projectId, 'CRM mit Kontakten', { canLoad: false })).inlined).toContain('design-crm')
+    expect((await service.promptContext('coder', projectId, 'CRM mit Kontakten', { canLoad: false })).inlined).not.toContain('design-crm')
+    await service.updateState('builtin:design-crm', { agents: ['*'] })
   })
 })

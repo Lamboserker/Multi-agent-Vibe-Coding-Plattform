@@ -4,6 +4,25 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { openMcpGateway } from './mcp-gateway.js'
 
 describe('session MCP gateway (real SDK HTTP connection)', () => {
+  it('returns actual image blocks, preserves error status and pages rich text', async () => {
+    let allowed = true
+    const image = { type: 'image' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', mimeType: 'image/png' }
+    const gateway = await openMcpGateway(async () => allowed ? [{ name: 'render', description: 'render', parameters: { type: 'object' }, execute: async () => 'text fallback', executeContent: async () => ({ isError: true, content: [{ type: 'text' as const, text: 'x'.repeat(13_000) }, image] }) }] : [])
+    const client = new Client({ name: 'vision-test', version: '1' })
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(gateway.url)))
+      const result = await client.callTool({ name: 'call_tool', arguments: { name: 'render', arguments: {} } })
+      expect(result.isError).toBe(true)
+      const blocks = result.content as Array<Record<string, unknown>>
+      expect(blocks[1]).toEqual(image)
+      const page = JSON.parse(String(blocks[0]!.text))
+      expect(page.text).toHaveLength(12_000)
+      const tail = await client.callTool({ name: 'read_result', arguments: { reference: page.reference, offset: page.nextOffset } })
+      expect(JSON.parse((tail.content as Array<{ text: string }>)[0]!.text).text).toHaveLength(1000)
+      allowed = false
+      expect((await client.callTool({ name: 'call_tool', arguments: { name: 'render', arguments: {} } })).isError).toBe(true)
+    } finally { await client.close(); await gateway.close() }
+  })
   it('defers schemas, filters calls, retrieves complete output and isolates sessions', async () => {
     let allowed = true
     let loads = 0

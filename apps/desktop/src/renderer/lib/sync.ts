@@ -192,8 +192,9 @@ const refreshTask = throttle(() => actions.reloadTask(), 500)
 const refreshExecution = throttle(() => actions.reloadExecution(), 800)
 const refreshActivity = throttle(() => actions.loadActivity(), 500)
 
-const TASK_EVENTS = new Set(['subtask_hint', 'plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'applied', 'apply_rejected', 'discarded', 'undone', 'auto_applied'])
-const ACTIVITY_EVENTS = new Set(['plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'run_paused', 'run_resumed', 'discarded', 'applied'])
+// design_*: the design phase before planning (draft requested, ready for review, approved)
+const TASK_EVENTS = new Set(['subtask_hint', 'design_requested', 'design_ready', 'design_approved', 'plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'applied', 'apply_rejected', 'discarded', 'undone', 'auto_applied'])
+const ACTIVITY_EVENTS = new Set(['design_requested', 'design_ready', 'plan_requested', 'planning_started', 'planned', 'execution_created', 'execution_finished', 'run_paused', 'run_resumed', 'discarded', 'applied'])
 const MAX_LIVE_LINES = 2000
 
 // Live lines are appended once per delivered event batch (the main process sends batches of up to
@@ -255,7 +256,7 @@ function handleEvent(event: AppEvent) {
       return
     }
     case 'jobs':
-      if (['started', 'finished', 'failed'].includes(event.type) && ['execution.plan', 'chat.ask', 'execution.run'].includes(String(data.type))) refreshActivity()
+      if (['started', 'finished', 'failed'].includes(event.type) && ['execution.plan', 'design.create', 'chat.ask', 'execution.run'].includes(String(data.type))) refreshActivity()
       if (event.type === 'failed' && data.type === 'model.pull') actions.notify(`Download fehlgeschlagen: ${String(data.error)}`, 'error')
       return
     case 'models':

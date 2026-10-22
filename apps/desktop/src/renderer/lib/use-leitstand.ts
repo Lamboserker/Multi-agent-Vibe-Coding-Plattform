@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
 import { agentCards, decisions, stageInfo } from './leitstand'
+import { isWorking } from './workflow'
 import { shallowEqual } from './store/core'
 import { useLiveState, useSessionState } from './store'
 import type { ScheduleForecast, Subtask } from './types'
@@ -54,7 +55,7 @@ export function useLeitstand() {
   const execution = selected && selected.taskId === task?.id ? selected : undefined
   const live = useLiveState((state) => (execution && state.executionId === execution.id ? state.lines : []), (a, b) => a.length === b.length && a.at(-1) === b.at(-1))
   const stage = stageInfo(task, execution)
-  const running = stage.state === 'running' || stage.state === 'planning'
+  const running = isWorking(stage.state)
   const now = useNow(running)
   const plan = execution?.task?.plans?.[0] ?? task?.plans?.[0]
   const subtasks = useMemo(() => {
