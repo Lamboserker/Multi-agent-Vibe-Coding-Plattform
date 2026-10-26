@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.svg" alt="Baton – Your premium AI conducts. Local models play." width="100%">
+<img src="docs/assets/banner.jpg" alt="Baton – Multi Agent Vibe Coding Platform" width="100%">
 
 <br>
 
