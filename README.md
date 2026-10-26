@@ -294,7 +294,7 @@ New here? Start with [docs/desktop-architecture.md](docs/desktop-architecture.md
 
 <br>
 
-<img src="docs/assets/logo.svg" alt="Baton logo" width="72">
+<img src="docs/assets/image.png" alt="Baton logo" width="180">
 
 **If Baton saves you quota or time, a ⭐ helps others find it.**
 
