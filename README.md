@@ -4,7 +4,7 @@
 
 <br>
 
-**A desktop coding IDE where Claude Code or Codex plans the work,<br>small local models on your GPU write the code, and nothing lands without your approval.**
+**A desktop coding IDE where Claude Code or Codex plans the work,<br>small local models on your GPU take over as much of the implementation as they can,<br>and nothing lands without your approval.**
 
 <br>
 
@@ -21,12 +21,28 @@
 ---
 
 ```text
-    ____        __                ┌──────────────────────────────────────────┐
-   / __ )____ _/ /_____  ____     │  1 premium brain  →  plans & reviews     │
-  / __  / __ `/ __/ __ \/ __ \    │  N local hands    →  write the code      │
- / /_/ / /_/ / /_/ /_/ / / / /    │  1 git worktree   →  per task, isolated  │
-/_____/\__,_/\__/\____/_/ /_/     │  1 human          →  approves. always.   │
-                                  └──────────────────────────────────────────┘
+       .                     .    .                         _..._
+                                         .                .'   ,-'     .
+                                       +      /\          |   (            ·
+          /\                            *    /''\         '.   `-.   +
+         /''\              .                /'.''\          `'''` /\
+        /' ''\          /\                 /''   '\.   *         /''\     .
+       /''   '\        /''\      /\       /'  .  ''\     *      /' ''\    /\
+      /'     ''\  /\  /' ''\    /' \     /''       '\  /\      /''   '\  / '\
+    /\          \/ '\/      \  /   '\   /            \/' \    /        \/'   \
+   / '\         /'   \       \/'     \ /             /   '\  /         /     '\
+  /    \       /      \      /     :  \   /\        /    : \/         /        \
+ /      \   /\/       :\    /    :     \ /  \      /   :    \ /\     /       :
+/        \ / .\     :   \  /  /\        /.   \    /  :       /. \   /      :  /\
+  ^ ^  ^  ^    ^ ^  ^     ^ ^   ^    ^ ^     ^  ^  ^      ^  ^  ^     ^  ^  ^
+ /|/|\/|\/|\  /|/|\/|\   /|/|\ /|\  /|/|\   /|\/|\/|\    /|\/|\/|\   /|\/|\/|\
+________________________________________________________________________________
+   ~~      ~       ~~~        ~      ~~        ~     ~    .-=-.      ~~    ~
+       ~        ~~         ~~       ~         ~~        ~  -=~=~=-   ~       ~~
+  ~       ~~         ~         ~~        ~        ~         ~=~=~      ~~
+      ~~        ~        ~~         ~         ~~      ~      -~-    ~        ~
+
+              ~  your premium AI conducts  ·  local models play  ~
 ```
 
 ## ✨ Why Baton?
@@ -38,7 +54,7 @@ Premium coding agents are brilliant, but every token they write comes out of you
 | | Premium agent alone | Local model alone | **Baton** |
 |---|:---:|:---:|:---:|
 | Understands large repos | ✅ | ⚠️ | ✅ |
-| Saves subscription quota | ❌ | ✅ | ✅ |
+| Offloads work to free local models | ❌ | ✅ | ✅ |
 | Code stays on your machine during implementation | ❌ | ✅ | ✅ |
 | Isolated worktree + tests before every change | ⚠️ | ❌ | ✅ |
 | You approve every diff | ⚠️ | ⚠️ | ✅ |
@@ -48,8 +64,8 @@ Premium coding agents are brilliant, but every token they write comes out of you
 <br>
 
 <div align="center">
-  <img src="docs/assets/demo.gif" alt="Baton demo: describe a task, review the plan, inspect the validated diff, apply it" width="92%">
-  <br><sub>A real run: a bug fix planned by Codex, implemented by <code>qwen3:4b</code> locally, validated and applied.</sub>
+  <img src="docs/assets/leitstand.png" alt="Baton control center: a finished run with orchestrator, planning, sub-tasks, integration, final review and approval" width="100%">
+  <br><sub>The <b>Leitstand</b> (control center): Codex and Claude Code planned 12 sub-tasks, agents executed them, the final review approved, and the result was committed.</sub>
 </div>
 
 ## 🎼 How it works
@@ -101,6 +117,7 @@ Premium coding agents are brilliant, but every token they write comes out of you
 - **Claude Code** or **OpenAI Codex** as planner and reviewer, via their official CLIs
 - **Duo mode:** both orchestrators plan in parallel and reconcile
 - Structured plans with strict JSON schemas
+- Cost modes: Cheapest · Balanced · Quality
 - Adaptive routing based on measured success rates
 - Deterministic fallback planner when no orchestrator is available
 
@@ -112,7 +129,7 @@ Premium coding agents are brilliant, but every token they write comes out of you
 - Model catalog: Qwen Coder, Qwen 3, Devstral, gpt-oss, DeepSeek Coder …
 - Real tool-call self-test before a model is marked verified
 - Hardware detection and VRAM-aware parallelism
-- Role assignment per model (planner, coder, reviewer …)
+- Model tiers: Fast · Balanced · Advanced
 
 </td>
 </tr>
@@ -153,7 +170,7 @@ Premium coding agents are brilliant, but every token they write comes out of you
 ### 📊 Transparency
 - Every model call is logged: premium vs. local, tokens, inference time, peak memory
 - Real spend vs. API list-price equivalent
-- Energy estimate for local inference
+- Electricity usage and cost per day, measured via `nvidia-smi`
 - Diagnostics dashboard: CPU, RAM, GPU/VRAM, tokens/s, p50/p95 latencies
 
 </td>
@@ -164,14 +181,16 @@ Premium coding agents are brilliant, but every token they write comes out of you
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/screenshot-plan.png" alt="Plan review"><br><p align="center"><b>Plan review</b><br><sub>The orchestrator breaks the request into tasks and assigns a local model.</sub></p></td>
-<td width="50%"><img src="docs/assets/screenshot-diff.png" alt="Validated diff"><br><p align="center"><b>Validated diff</b><br><sub>Typecheck and tests passed in an isolated worktree, ready for approval.</sub></p></td>
+<td width="50%" valign="top"><img src="docs/assets/editor.png" alt="Code editor"><br><p align="center"><b>Code</b><br><sub>Explorer, Monaco editor, terminal, logs, tests and git diff in one window.</sub></p></td>
+<td width="50%" valign="top"><img src="docs/assets/models.png" alt="Local model manager"><br><p align="center"><b>Local models</b><br><sub>Fast, Balanced and Advanced tiers, installed models and recommendations that fit your VRAM.</sub></p></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/assets/screenshot-before-submit.png" alt="Workspace"><br><p align="center"><b>Workspace</b><br><sub>Explorer, editor, terminal and workflow panel in one window.</sub></p></td>
-<td width="50%"><img src="docs/assets/screenshot-applied.png" alt="Applied"><br><p align="center"><b>Applied</b><br><sub>Changes land in your working copy, uncommitted, with undo.</sub></p></td>
+<td width="50%" valign="top"><img src="docs/assets/usage.png" alt="Usage and costs"><br><p align="center"><b>Usage &amp; costs</b><br><sub>Measured token split, real API spend vs. list-price equivalent, and electricity cost from <code>nvidia-smi</code>.</sub></p></td>
+<td width="50%" valign="top"><img src="docs/assets/routing.png" alt="Learning routing"><br><p align="center"><b>Learning routing</b><br><sub>Success rate per model and task category with a Wilson lower bound, decides what goes local.</sub></p></td>
 </tr>
 </table>
+
+<p align="center"><img src="docs/assets/hardware.png" alt="Live hardware monitor" width="360"><br><sub><b>Live hardware monitor:</b> GPU, VRAM, CPU, RAM, temperature, power draw and loaded models.</sub></p>
 
 > The UI is currently in German. English localization is on the roadmap.
 
