@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Baton logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1f3a"/><stop offset="1" stop-color="#0d1020"/>
+    </linearGradient>
+    <linearGradient id="baton" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#f2a541"/><stop offset="1" stop-color="#b98cff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#b98cff" stop-opacity=".55"/><stop offset="1" stop-color="#b98cff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16.5" y="16.5" width="479" height="479" rx="111.5" fill="none" stroke="#ffffff" stroke-opacity=".08"/>
+  <circle cx="256" cy="176" r="120" fill="url(#glow)"/>
+  <!-- connections -->
+  <g stroke="#5b6b8c" stroke-width="14" stroke-linecap="round">
+    <line x1="256" y1="176" x2="136" y2="372"/>
+    <line x1="256" y1="176" x2="256" y2="392"/>
+    <line x1="256" y1="176" x2="376" y2="372"/>
+  </g>
+  <!-- baton -->
+  <line x1="150" y1="282" x2="372" y2="96" stroke="url(#baton)" stroke-width="16" stroke-linecap="round"/>
+  <!-- orchestrator -->
+  <circle cx="256" cy="176" r="62" fill="#b98cff"/>
+  <circle cx="256" cy="176" r="38" fill="#0d1020"/>
+  <circle cx="256" cy="176" r="22" fill="#f2a541"/>
+  <!-- local agents -->
+  <circle cx="136" cy="372" r="36" fill="#4fd1b0"/>
+  <circle cx="256" cy="392" r="36" fill="#f2a541"/>
+  <circle cx="376" cy="372" r="36" fill="#4fd1b0"/>
+</svg>
